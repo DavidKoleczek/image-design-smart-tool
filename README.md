@@ -1,2 +1,59 @@
-# image-design-smart-tool
-Image Design Smart Tool
+# Image Design Smart Tool
+
+Image creation and editing workspace.
+
+This is a [Smart Tool](https://github.com/microsoft/amplifier-smart-tools) which is a library with a thin CLI over it and agentic capabilities sit behind an interface so many providers can be used.
+We support the [OpenAI Codex SDK](https://github.com/openai/codex/tree/main/sdk/python) and the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python).
+
+## Installation
+
+Prerequisites:
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+- For the agentic capabilities, one of:
+  - `codex` agent provider: the [Codex CLI](https://github.com/openai/codex) signed in with ChatGPT or an API key. See [authentication](https://developers.openai.com/codex/auth).
+  - `claude` agent provider: `ANTHROPIC_API_KEY`, or any of its other supported modes of [authentication](https://code.claude.com/docs/en/agent-sdk/quickstart).
+- (Optional) Install the Smart Tools skill so your agent knows about Smart Tools: `npx skills add microsoft/amplifier-smart-tools`
+
+To get started:
+
+```bash
+# Install the Agent Skill so your agent knows about it.
+npx skills add DavidKoleczek/image-design-smart-tool
+# Install the tool, choosing the provider(s) you want
+uv tool install "image-design[all | codex | claude] @ git+https://github.com/DavidKoleczek/image-design-smart-tool"
+# Check the install
+image-design manifest
+```
+
+To use it as a library:
+
+```bash
+uv add "image-design[all] @ git+https://github.com/DavidKoleczek/image-design-smart-tool"
+```
+
+To update:
+
+```bash
+npx skills update image-design   # add -g for global installs
+uv tool upgrade image-design
+```
+
+To uninstall:
+
+```bash
+npx skills remove image-design   # add -g for global installs
+uv tool uninstall image-design
+```
+
+## Interface
+
+```bash
+image-design manifest
+image-design list-intelligence-models
+```
+
+See the [CLI reference](docs/02-cli.md) for every flag and the [library reference](docs/01-library.md) for the Python surface.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to set up your development environment.

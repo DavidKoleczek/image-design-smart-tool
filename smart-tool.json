@@ -1,0 +1,5 @@
+{
+  "manifest": "src/image_design/SMART_TOOL.md",
+  "cli_argv": ["image-design"],
+  "deterministic_smoke": ["manifest"]
+}
