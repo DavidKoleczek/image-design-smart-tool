@@ -17,7 +17,7 @@ Image creation and editing workspace.
 The tool installs from its repository, https://github.com/DavidKoleczek/image-design-smart-tool.
 
 ```bash
-# as a CLI, choosing the agent provider(s) you want: [all], [codex], or [claude]
+# as a CLI, choosing the extras you want: [all], [codex], [claude], or [openai]
 uv tool install "image-design[all] @ git+https://github.com/DavidKoleczek/image-design-smart-tool"
 
 # as a library, from another project

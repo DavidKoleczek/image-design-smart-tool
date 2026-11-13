@@ -1,0 +1,105 @@
+"""What the tool reads from image files, and the sizes the image models accept."""
+
+from io import BytesIO
+import math
+from pathlib import Path
+from typing import NamedTuple
+
+from PIL import Image, UnidentifiedImageError
+
+from image_design.schemas import ImageDesignError
+
+# The sizes the GPT Image 2.6 models accept for a still image, from
+# https://developers.openai.com/api/docs/guides/image-generation. An animation only needs multiples of 16.
+SIZE_STEP = 16
+MAX_EDGE = 3840
+MAX_RATIO = 3
+MIN_PIXELS = 655_360
+MAX_PIXELS = 8_294_400
+
+
+class Picture(NamedTuple):
+    """What the tool needs to know of an image file."""
+
+    format: str  # as Pillow names it, such as PNG or GIF
+    width: int
+    height: int
+    frames: int
+    alpha: bool
+    frame_ms: int | None = None  # how long the first frame shows, for an animation
+
+
+def describe(content: bytes) -> Picture | None:
+    """What `content` is as an image, or None when it is not one Pillow can read."""
+    try:
+        with Image.open(BytesIO(content)) as image:
+            return Picture(
+                format=image.format or "",
+                width=image.width,
+                height=image.height,
+                frames=getattr(image, "n_frames", 1),
+                alpha="A" in image.getbands() or "transparency" in image.info,
+                frame_ms=image.info.get("duration"),
+            )
+    except (UnidentifiedImageError, OSError):
+        return None
+
+
+def read(path: Path) -> Picture:
+    """What the image at `path` is, raising when it is not a file Pillow can read."""
+    if not path.is_file():
+        raise ImageDesignError(f"{path} is not a file. Pass the path of an image that exists.", "no-such-file")
+    picture = describe(path.read_bytes())
+    if picture is None:
+        raise ImageDesignError(f"{path} is not an image the tool can read. Pass a PNG, JPEG, WebP, or GIF file.")
+    return picture
+
+
+def frame_png(path: Path, index: int = 0) -> bytes:
+    """One frame of the image at `path`, as a PNG; the image itself for a still one."""
+    with Image.open(path) as image:
+        image.seek(index)
+        frame = image.convert("RGBA")
+    buffer = BytesIO()
+    frame.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def size_problem(width: int, height: int, animated: bool) -> str | None:
+    """Why the image models would refuse to make an image this size, or None when they accept it."""
+    if width % SIZE_STEP or height % SIZE_STEP or width <= 0 or height <= 0:
+        return f"the width and height must be multiples of {SIZE_STEP}"
+    if animated:
+        return None
+    if max(width, height) > MAX_EDGE:
+        return f"neither edge can be longer than {MAX_EDGE}"
+    if max(width, height) > MAX_RATIO * min(width, height):
+        return f"the longer edge can be at most {MAX_RATIO} times the shorter"
+    if not MIN_PIXELS <= width * height <= MAX_PIXELS:
+        return f"it must have between {MIN_PIXELS:,} and {MAX_PIXELS:,} pixels"
+    return None
+
+
+def nearest_size(width: int, height: int) -> tuple[int, int]:
+    """The still image size the image models accept that is closest in shape and area to `width` by `height`."""
+    if size_problem(width, height, animated=False) is None:
+        return width, height
+    ratio = min(max(width / height, 1 / MAX_RATIO), MAX_RATIO)
+    pixels = min(max(width * height, MIN_PIXELS), MAX_PIXELS)
+    exact_width = math.sqrt(pixels * ratio)
+    exact_height = exact_width / ratio
+    scale = min(1.0, MAX_EDGE / max(exact_width, exact_height))
+    fitted_width = max(SIZE_STEP, round(exact_width * scale / SIZE_STEP) * SIZE_STEP)
+    fitted_height = max(SIZE_STEP, round(exact_height * scale / SIZE_STEP) * SIZE_STEP)
+    # Rounding to the step can cross a limit by one step, so walk back inside.
+    while size_problem(fitted_width, fitted_height, animated=False) is not None:
+        if fitted_width * fitted_height < MIN_PIXELS:
+            if fitted_width <= fitted_height:
+                fitted_width += SIZE_STEP
+            else:
+                fitted_height += SIZE_STEP
+        elif fitted_width >= fitted_height:
+            fitted_width -= SIZE_STEP
+        else:
+            fitted_height -= SIZE_STEP
+    return fitted_width, fitted_height

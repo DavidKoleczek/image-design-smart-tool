@@ -20,6 +20,7 @@ REFERENCES = [
     "https://github.com/DavidKoleczek/3d-modeling-smart-tool",
     "https://github.com/astral-sh/uv",
     "https://github.com/DavidKoleczek/my-design-systems",
+    "https://github.com/openai/openai-python",
 ]
 
 

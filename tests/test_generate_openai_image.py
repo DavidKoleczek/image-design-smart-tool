@@ -1,0 +1,225 @@
+"""Creating and editing images through the Images API, faked in fake_openai.py, from the library and the CLI."""
+
+import asyncio
+from io import BytesIO
+import json
+from pathlib import Path
+import re
+from typing import Any
+
+from fake_openai import COLORS, FakeImagesAPI, picture
+from PIL import Image
+import pytest
+from typer.testing import CliRunner
+
+from image_design import lib
+from image_design.capabilities.openai_image.generate import MARKS_NOTE
+from image_design.cli import app
+from image_design.schemas import DEFAULT_OPENAI_IMAGE_MODEL, ImageDesignError, ImageEvent, ImageResult, ImageUsage, Mark
+from image_design.shared.images.store import GITIGNORE, LOCKS
+
+runner = CliRunner()
+CACTUS = Mark(shape="circle", points=[(0.4, 0.5), (0.6, 0.9)], note="this pot")
+
+
+async def made(**arguments: Any) -> ImageResult:
+    run = await lib.generate_openai_image(**arguments)
+    return await run.result()
+
+
+async def sent(images_api: FakeImagesAPI, count: int = 1) -> None:
+    """Wait until the API has received `count` requests."""
+    while len(images_api.requests) < count:
+        await asyncio.sleep(0.01)
+
+
+def color_of(content: bytes, x: int = 0, y: int = 0) -> tuple[int, ...]:
+    with Image.open(BytesIO(content)) as image:
+        pixel = image.convert("RGB").getpixel((x, y))
+    assert isinstance(pixel, tuple)
+    return pixel
+
+
+def hex_color(color: str) -> tuple[int, ...]:
+    return tuple(int(color[index : index + 2], 16) for index in (1, 3, 5))
+
+
+async def test_an_image_is_created_then_edited_then_restored_and_every_version_is_kept(
+    images_api: FakeImagesAPI,
+) -> None:
+    directory, data = Path("art"), Path("data")
+    where = {"directory": directory, "data_directory": data}
+    created = await made(prompt="A paper-cut cactus.", name="concepts/cactus.png", **where)
+    first = created.path.read_bytes()
+    # A change by hand, which the edit has to keep rather than lose.
+    created.path.write_bytes(picture(1024, 1024, "#ffffff"))
+    Path("palette.png").write_bytes(picture(512, 512, "#000000"))
+    edited = await made(
+        prompt="Make the pot blue.",
+        name="concepts/cactus.png",
+        references=[Path("palette.png")],
+        marks=[CACTUS],
+        **where,
+    )
+    restored = lib.restore_image_version("concepts/cactus.png", "v1", **where)
+
+    creating, editing = images_api.requests
+    assert creating.path.endswith("/images/generations")
+    assert creating.fields["model"] == DEFAULT_OPENAI_IMAGE_MODEL
+    assert (created.status, [version.id for version in created.versions]) == ("done", ["v1"])
+    assert created.usage == ImageUsage(input_text_tokens=100, output_tokens=800, cost=0.0245)
+    assert editing.path.endswith("/images/edits")
+    assert [color_of(image) for image in editing.files["image[]"]] == [(255, 255, 255), (0, 0, 0)]
+    markup = Image.open(BytesIO(editing.files["markup"][0]))
+    assert markup.size == (1024, 1024)
+    assert markup.getpixel((0, 0)) == (0, 0, 0, 0)
+    assert MARKS_NOTE in editing.fields["prompt"]
+    assert "Mark 1 is a red circle: this pot" in editing.fields["prompt"]
+    assert editing.fields["size"] == "1024x1024"
+    assert [version.id for version in edited.versions] == ["v3"]
+    assert edited.usage is not None
+    assert edited.usage.cost == 0.0405
+    assert restored.current == "v1"
+    assert [(version.id, version.method) for version in restored.versions] == [
+        ("v1", "openai"),
+        ("v2", "imported"),
+        ("v3", "openai"),
+    ]
+    assert created.path.read_bytes() == first
+    assert (data / ".gitignore").read_text(encoding="utf-8") == GITIGNORE.read_text(encoding="utf-8")
+    assert not (directory / ".agents").exists()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "refusal"),
+    [
+        ({"name": "cactus.svg"}, "does not end in an image format"),
+        ({"name": "../cactus.png"}, "cannot name an image"),
+        ({"previews": 2, "count": 2}, "Previews work only with a count of 1"),
+        ({"name": "sway.gif", "previews": 1}, "A .gif has no previews"),
+        ({"frames": 4}, "frames and frame_ms are for a .gif"),
+        ({"compression": 50}, "compression is for a .jpg or .webp"),
+        ({"name": "cactus.jpg", "background": "transparent"}, "A transparent background needs a .png or .webp"),
+        ({"size": (1000, 1000)}, "The nearest size that works is 992x992"),
+        ({"model": "dall-e-3"}, "not an image model the tool supports"),
+        ({"marks": [CACTUS]}, "no image named cactus.png to edit"),
+        ({"references": [Path("missing.png")]}, "is not a file"),
+        ({"quality": "ultra"}, "quality"),
+        ({"without_key": True}, "OPENAI_API_KEY"),
+    ],
+)
+async def test_a_request_the_api_would_refuse_is_refused_before_anything_is_sent_or_kept(
+    images_api: FakeImagesAPI, monkeypatch: pytest.MonkeyPatch, arguments: dict[str, Any], refusal: str
+) -> None:
+    if arguments.pop("without_key", False):
+        monkeypatch.delenv("OPENAI_API_KEY")
+
+    with pytest.raises(ImageDesignError, match=refusal):
+        await lib.generate_openai_image("A cactus.", name=arguments.pop("name", "cactus.png"), **arguments)
+
+    assert images_api.requests == []
+    assert not list(Path(".image-design/.agents/images").glob("*"))
+
+
+@pytest.mark.parametrize(
+    ("api", "arguments", "status", "error"),
+    [
+        ({"status": 400}, {}, "failed", r"refused the request \(400, about size\): Invalid size\."),
+        ({"status": 500, "error": "The server had an error."}, {}, "failed", r"\(500, about size\)"),
+        ({"hang": True}, {"timeout_seconds": 1}, "timed-out", "did not finish within 1 seconds"),
+        ({"hang": True}, {"cancel": True}, "cancelled", None),
+    ],
+)
+async def test_a_run_that_makes_no_image_ends_saying_why_and_leaves_the_image_free(
+    images_api: FakeImagesAPI, api: dict[str, Any], arguments: dict[str, Any], status: str, error: str | None
+) -> None:
+    for setting, value in api.items():
+        setattr(images_api, setting, value)
+    cancel = arguments.pop("cancel", False)
+
+    run = await lib.generate_openai_image("A cactus.", name="cactus.png", **arguments)
+    if cancel:
+        await sent(images_api)
+        await run.cancel()
+    result = await run.result()
+
+    # One request each, since one that failed may still have been billed.
+    assert len(images_api.requests) == 1
+    assert result.status == status
+    if error is None:
+        assert result.error is None
+    else:
+        assert result.error is not None
+        assert re.search(error, result.error)
+    assert not result.path.exists()
+    assert not list(Path(".image-design/.agents", LOCKS).glob("*"))
+    images_api.status, images_api.hang = 200, False
+    assert (await made(prompt="A cactus.", name="cactus.png")).status == "done"
+
+
+async def test_previews_arrive_before_the_image_and_a_gif_is_made_and_edited_frame_by_frame(
+    images_api: FakeImagesAPI,
+) -> None:
+    run = await lib.generate_openai_image("A cactus.", name="cactus.png", previews=2)
+    events = [event async for event in run.events()]
+    gif = await made(prompt="A swaying cactus.", name="sway.gif", frames=4, frame_ms=100)
+    edited = await made(prompt="Sway faster.", name="sway.gif", frame=2, count=2)
+
+    streamed, animating, editing = images_api.requests
+    assert [event.kind for event in events] == ["started", "preview", "preview", "version", "finished"]
+    assert all(Path(event.data["path"]).is_file() for event in events if event.kind == "preview")
+    assert (streamed.fields["stream"], streamed.fields["partial_images"]) == (True, 2)
+    assert (animating.fields["frame_count"], animating.fields["frame_duration_ms"]) == (4, 100)
+    assert animating.fields["output_format"] == "gif"
+    assert gif.versions[0].frames == 4
+    assert color_of(editing.files["image[]"][0]) == hex_color(COLORS[2])
+    assert editing.fields["n"] == "2"
+    # An edit of a .gif keeps its size, frames, and timing unless asked otherwise.
+    assert (editing.fields["size"], editing.fields["frame_count"], editing.fields["frame_duration_ms"]) == (
+        "512x512",
+        "4",
+        "100",
+    )
+    assert [version.id for version in edited.versions] == ["v2", "v3"]
+    assert edited.path.read_bytes() == edited.versions[0].file.read_bytes()
+
+
+async def test_only_one_run_works_on_an_image_at_a_time_and_cancel_image_stops_it(images_api: FakeImagesAPI) -> None:
+    images_api.hang = True
+    run = await lib.generate_openai_image("A cactus.", name="cactus.png")
+    await sent(images_api)
+
+    with pytest.raises(ImageDesignError, match="already being worked on by process"):
+        await lib.generate_openai_image("Another cactus.", name="CACTUS.png")
+    lib.cancel_image("cactus.png")
+    result = await asyncio.wait_for(run.result(), 5)
+
+    assert result.status == "cancelled"
+    with pytest.raises(ImageDesignError, match="no run going"):
+        lib.cancel_image("cactus.png")
+
+
+def test_the_cli_prints_each_image_made_and_exits_with_the_run_s_status(images_api: FakeImagesAPI) -> None:
+    Path("marks.json").write_text(json.dumps([{"shape": "box", "points": [[0.1, 0.1], [0.5, 0.5]]}]), encoding="utf-8")
+
+    made = runner.invoke(app, ["generate-openai-image", "A cactus.", "--name", "cactus.jpg", "--count", "2"])
+    edited = runner.invoke(
+        app, ["generate-openai-image", "A blue pot.", "--name", "cactus.jpg", "--marks", "marks.json", "--json"]
+    )
+    restored = runner.invoke(app, ["restore-image-version", "--name", "cactus.jpg", "--version", "v1"])
+    images_api.status = 400
+    refused = runner.invoke(app, ["generate-openai-image", "A cactus.", "--name", "other.png", "--size", "1024x1024"])
+
+    assert made.exit_code == 0, made.output
+    first, second = made.stdout.splitlines()
+    assert first == str(Path(".image-design", "cactus.jpg"))
+    assert second.endswith("v2.jpg")
+    assert "Saved v1 of cactus.jpg" in made.stderr
+    assert edited.exit_code == 0, edited.output
+    events = [ImageEvent.model_validate_json(line) for line in edited.stdout.splitlines()]
+    assert [event.kind for event in events] == ["started", "version", "finished"]
+    assert restored.exit_code == 0, restored.output
+    assert "holds v1." in restored.stdout
+    assert refused.exit_code == 1
+    assert "Invalid size." in refused.stderr
+    assert refused.stdout == ""

@@ -12,5 +12,17 @@
         "editor.defaultFormatter": "charliermarsh.ruff"
     },
     "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true
+    "python.testing.pytestEnabled": true,
+    "files.watcherExclude": {
+        "**/reference/**": true
+    },
+    "search.exclude": {
+        "**/reference": true
+    },
+    "ruff.exclude": [
+        "**/reference/**"
+    ],
+    "python.analysis.exclude": [
+        "**/reference"
+    ]
 }

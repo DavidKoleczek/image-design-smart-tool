@@ -12,6 +12,7 @@ Prerequisites:
 - For the agentic capabilities, one of:
   - `codex` agent provider: the [Codex CLI](https://github.com/openai/codex) signed in with ChatGPT or an API key. See [authentication](https://developers.openai.com/codex/auth).
   - `claude` agent provider: `ANTHROPIC_API_KEY`, or any of its other supported modes of [authentication](https://code.claude.com/docs/en/agent-sdk/quickstart).
+- An `OPENAI_API_KEY` from the [OpenAI API](https://platform.openai.com/api-keys)
 - (Optional) Install the Smart Tools skill so your agent knows about Smart Tools: `npx skills add microsoft/amplifier-smart-tools`
 
 To get started:
@@ -19,8 +20,8 @@ To get started:
 ```bash
 # Install the Agent Skill so your agent knows about it.
 npx skills add DavidKoleczek/image-design-smart-tool
-# Install the tool, choosing the provider(s) you want
-uv tool install "image-design[all | codex | claude] @ git+https://github.com/DavidKoleczek/image-design-smart-tool"
+# Install the tool, choosing the extras you want
+uv tool install "image-design[all | codex | claude | openai] @ git+https://github.com/DavidKoleczek/image-design-smart-tool"
 # Check the install
 image-design manifest
 ```
@@ -48,7 +49,9 @@ uv tool uninstall image-design
 ## Interface
 
 ```bash
-image-design manifest
+image-design generate-openai-image "A paper-cut cactus in a terracotta pot." --name concepts/cactus.png
+image-design restore-image-version --name concepts/cactus.png --version v1
+image-design cancel-image --name concepts/cactus.png
 image-design list-intelligence-models
 ```
 

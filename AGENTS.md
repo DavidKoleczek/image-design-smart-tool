@@ -74,3 +74,4 @@ The repositories are (add to the list as more are needed, the one exception to m
 - https://github.com/DavidKoleczek/3d-modeling-smart-tool
 - https://github.com/astral-sh/uv
 - https://github.com/DavidKoleczek/my-design-systems - use `technical-pastel/` for this tool's look
+- https://github.com/openai/openai-python

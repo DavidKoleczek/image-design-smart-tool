@@ -11,6 +11,7 @@ Install:
 - [prek](https://github.com/j178/prek): Used for precommit hooks. Recommended to install through PyPI/uv with `uv tool install prek`. Use `uv tool upgrade prek` to update it.
 - [Codex CLI](https://github.com/openai/codex) [signed in](https://developers.openai.com/codex/auth) with ChatGPT or an API key, for intelligent features through the `codex` agent provider.
 - [`ANTHROPIC_API_KEY` or a cloud provider's credentials](https://code.claude.com/docs/en/agent-sdk/quickstart), for intelligent features through the `claude` agent provider.
+- An [`OPENAI_API_KEY`](https://platform.openai.com/api-keys), only to try `generate-openai-image` for real. The tests fake the Images API. Put it in a `.env` at the repository root, which is gitignored, and load it with `uv run --env-file .env image-design ...`.
 
 ### Initial Setup
 

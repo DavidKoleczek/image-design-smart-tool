@@ -1,4 +1,6 @@
-from typing import Literal, NamedTuple, get_args
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Annotated, Any, Literal, NamedTuple, get_args
 
 from pydantic import BaseModel, Field
 
@@ -24,7 +26,15 @@ SLUG_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
 
 
 class ImageDesignError(Exception):
-    """Raised for any failure the library can name and explain how to fix."""
+    """Raised for any failure the library can name and explain how to fix.
+
+    `reason` is a stable name for the failure, for code that acts on it, and `image` the image it concerns.
+    """
+
+    def __init__(self, message: str, reason: str | None = None, image: str | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.image = image
 
 
 # region: Manifest
@@ -114,5 +124,178 @@ class IntelligenceModels(BaseModel):
         description="What an agentic capability runs with when given no agent provider, model, or reasoning effort"
     )
 
+
+# endregion
+
+# region: Images
+
+ImageFormat = Literal["png", "jpeg", "webp", "gif"]
+# The extensions an image's name can end in, and the format each is saved in.
+IMAGE_FORMATS: dict[str, ImageFormat] = {".png": "png", ".jpg": "jpeg", ".webp": "webp", ".gif": "gif"}
+ImageMethod = Literal["openai", "imported"]
+ImageRunStatus = Literal["running", "done", "failed", "cancelled", "timed-out"]
+ImageEventKind = Literal["started", "preview", "version", "finished", "failed"]
+MarkShape = Literal["circle", "box", "arrow", "sketch"]
+Fraction = Annotated[float, Field(ge=0, le=1)]
+
+
+class Mark(BaseModel):
+    """A shape drawn over an image to show what a request refers to."""
+
+    shape: MarkShape
+    points: list[tuple[Fraction, Fraction]] = Field(
+        min_length=2,
+        description="Fractions of the image's width and height from its top left: two opposite corners for a circle "
+        "or a box, the tail and then the head for an arrow, and each point along a sketch",
+    )
+    color: str = Field(default="red", description="A CSS color name or a hex code")
+    note: str = ""
+
+
+class ImageUsage(BaseModel):
+    """What a run used: the tokens the service reported, and what they cost."""
+
+    input_text_tokens: int = 0
+    input_image_tokens: int = 0
+    output_tokens: int = 0
+    cost: float | None = Field(default=None, description="US dollars at the model's published prices; None if unknown")
+
+
+class ImageVersion(BaseModel):
+    """One version of an image: a file kept with the image's data, and what made it."""
+
+    id: str = Field(description="v1, v2, and so on, in the order they were made")
+    file: Path = Field(description="Relative to the image's folder in the data directory as kept, absolute in results")
+    width: int
+    height: int
+    frames: int = Field(default=1, description="More than 1 for an animation")
+    sha256: str
+    method: ImageMethod = Field(description="What made it; `imported` for a file the tool found in place")
+    run_id: str | None = None
+    created: datetime
+
+
+class ImageVersions(BaseModel):
+    """versions.json: every version of an image, and which one its file holds."""
+
+    current: str | None = Field(default=None, description="The version in the image's file")
+    versions: list[ImageVersion] = Field(default_factory=list)
+
+
+class ImageRecord(BaseModel):
+    """image.json: what marks an image as one the tool keeps data for. It is committed with the project."""
+
+    tool: Literal["image-design"] = "image-design"
+    id: str = Field(description="Names the image's folder in the data directory, and stays the same when it moves")
+    name: str = Field(description="The image's path in its directory, with forward slashes")
+    created: datetime
+
+
+class ImageRunRecord(BaseModel):
+    """One request on an image, as runs.json keeps it while it runs and after."""
+
+    id: str
+    method: ImageMethod
+    prompt: str
+    request: dict[str, Any] = Field(
+        description="The settings it was sent with, and the files it sent, as copied into the run's folder"
+    )
+    origin: str | None = Field(default=None, description="Who asked, such as `app`")
+    status: ImageRunStatus = "running"
+    pid: int = Field(description="The process running it; a `running` run whose process is gone has crashed")
+    started: datetime
+    last_event: datetime | None = None
+    finished: datetime | None = None
+    versions: list[str] = Field(default_factory=list, description="The versions it made")
+    usage: ImageUsage | None = None
+    error: str | None = None
+
+
+class ImageRuns(BaseModel):
+    """runs.json: every request on an image. Not committed, since it changes with every event and names processes."""
+
+    runs: list[ImageRunRecord] = Field(default_factory=list)
+
+
+class ImageEvent(BaseModel):
+    """One line of a run's events.jsonl."""
+
+    time: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    run_id: str
+    kind: ImageEventKind
+    text: str = Field(default="", description="What happened, for a person to read")
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImageResult(BaseModel):
+    """How a run ended, and what it made."""
+
+    name: str
+    path: Path = Field(description="The image's file")
+    directory: Path
+    data_directory: Path
+    run_id: str
+    status: ImageRunStatus
+    versions: list[ImageVersion] = Field(
+        default_factory=list, description="The versions it made; the first went into the image's file"
+    )
+    usage: ImageUsage | None = None
+    error: str | None = None
+
+
+class ImageSummary(BaseModel):
+    """An image, its versions, and how its last run went."""
+
+    name: str
+    path: Path
+    current: str | None = Field(
+        description="The version in the image's file; None when the file has been changed by hand since"
+    )
+    versions: list[ImageVersion]
+    status: ImageRunStatus | None = Field(description="Its last run's status; None when it has had no run")
+
+
+# endregion
+
+# region: OpenAI images
+
+OpenAIImageQuality = Literal["low", "medium", "high", "xhigh", "max", "auto"]
+OpenAIImageComplexity = Literal["low", "medium", "high"]
+OpenAIImageBackground = Literal["transparent", "opaque", "auto"]
+
+
+class OpenAIImageModel(BaseModel):
+    """An OpenAI image model the tool supports, and its prices in US dollars per million tokens.
+
+    The Images API reports no cached tokens, so the cached prices are left out.
+    """
+
+    id: str
+    label: str
+    pricing: str = Field(description="The page the prices are from")
+    text_input: float
+    image_input: float
+    image_output: float
+
+
+OPENAI_IMAGE_MODELS: tuple[OpenAIImageModel, ...] = (
+    OpenAIImageModel(
+        id="gpt-image-2.6-sunburst",
+        label="GPT Image 2.6 Sunburst",
+        pricing="https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst",
+        text_input=5.0,
+        image_input=8.0,
+        image_output=30.0,
+    ),
+    OpenAIImageModel(
+        id="gpt-image-2.6-flare",
+        label="GPT Image 2.6 Flare",
+        pricing="https://developers.openai.com/api/docs/models/gpt-image-2.6-flare",
+        text_input=5.0,
+        image_input=8.0,
+        image_output=30.0,
+    ),
+)
+DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2.6-sunburst"
 
 # endregion

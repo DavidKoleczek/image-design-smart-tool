@@ -8,6 +8,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
     "jsonschema>=4.26.0,<5.0.0",
+    "pillow>=13.0.0,<14.0.0",
     "pydantic>=2.14,<3.0",
     "pyyaml>=6.0.3,<7.0.0",
     "typer>=0.27.3,<0.28.0",
@@ -22,7 +23,8 @@ image-design = "image_design.cli:main"
 [project.optional-dependencies]
 codex = ["openai-codex>=0.163.0,<1.0.0"]
 claude = ["claude-agent-sdk>=0.2.177,<0.3.0"]
-all = ["image-design[codex,claude]"]
+openai = ["openai>=3.46.0,<4.0.0"]
+all = ["image-design[codex,claude,openai]"]
 
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]
@@ -50,6 +52,7 @@ dev = [
 [tool.ruff]
 line-length = 120
 target-version = "py313"
+extend-exclude = ["reference"]
 
 [tool.ruff.lint]
 select = [
@@ -85,6 +88,9 @@ split-on-trailing-comma = false
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
 
+[tool.ty.src]
+exclude = ["reference"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
@@ -92,4 +98,7 @@ testpaths = ["tests"]
 pythonpath = ["tests"]
 # In parallel. More workers than the most here are no faster, since each takes a while to start.
 # A slow test gets a marker registered here, and that marker goes in `-m "not (...)"`, so it runs only when named.
-addopts = '--import-mode=importlib -n auto --maxprocesses 8'
+addopts = '--import-mode=importlib -n auto --maxprocesses 8 -m "not (detached)"'
+markers = [
+    "detached: starts a run in a process of its own. Run after changing shared/images/detach.py, DetachedRun in shared/images/runs.py, a capability's background.py, or cancel_image.",
+]

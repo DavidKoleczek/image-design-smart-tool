@@ -7,7 +7,7 @@ There are sub-capabilities, that directly interact with image generation models.
 Directory layout:
 - `.image-design/` is the default directory for everything related to what you do within this tool and app
   - Rest of the files and directories underneath are the final generated images
-  - Except `.agents/` is a special in that it holds the data associated with the generated images. Chat logs, history, metadata, etc. This is automatically gitignored by default
+  - Except `.agents/` is special in that it holds the data associated with the generated images. Chat logs, history, metadata, etc. Everything except what's needed to reproduce images is gitignored by default.
 
 It has an app that makes it easy to create new images from references and follow a particular style. 
 It also has an easy way to mark up images to send feedback for them to be edited. 

@@ -26,6 +26,7 @@ async def generate_openai_image(
     count: int = 1,
     frames: int | None = None,
     frame_ms: int | None = None,
+    previews: int = 0,
     timeout_seconds: int = 600,
     origin: str | None = None,
     detach: bool = False,
@@ -64,9 +65,11 @@ The other parameters:
 - `mask`: A PNG the same size as the image, transparent where the model may make changes. It works only for edits of still images, and not together with `marks`. The model treats it as guidance, so other areas can still change.
 - `version`: The version to edit. By default, the version in the image's file.
 - `frame`: When the image being edited is an animation, the frame to send.
-- `model`, `size`, `quality`, `complexity`, `background`, `compression`: Passed to the API. A parameter you leave out uses the API's default, except `size` on an edit, which defaults to the size of the image being edited. `list_image_methods` returns the values each model accepts.
+- `model`: `gpt-image-2.6-sunburst`, the default, or the faster `gpt-image-2.6-flare`.
+- `size`, `quality`, `complexity`, `background`, `compression`: Passed to the API. A parameter you leave out uses the API's default, except `size` on an edit, which defaults to the size of the image being edited, rounded to the nearest size the model accepts. `list_image_methods` returns the values each model accepts.
 - `count`: The number of images to make. Each is saved as its own version, and the first becomes the image's file.
-- `frames`, `frame_ms`: For a `.gif`, the number of frames and the duration of each in milliseconds.
+- `frames`, `frame_ms`: For a `.gif`, the number of frames and the duration of each in milliseconds. An edit of a `.gif` keeps the image's own.
+- `previews`: The number of in-progress images the API sends before the final one, up to 3. Fewer can arrive if the image finishes first. Each adds 100 output tokens to the cost. Previews work only with a `count` of 1, and a `.gif` has none.
 - `origin`: A label for who sent the request, such as `app`.
 - `detach`: Run the request in a separate process that keeps going if the caller exits.
 
@@ -94,8 +97,10 @@ class ImageRun(Protocol):
     async def result(self) -> ImageResult: ...
 ```
 
-`result()` returns an `ImageResult` with the run's `status` and the `versions` it made.
-Each `ImageVersion` records its file, its size, the request that made it, and what the run used: a cost in dollars when the service reports one, otherwise tokens.
+`events()` yields each step of the run as it happens. A `preview` event has the path of an in-progress image, so a viewer can show the image as it forms. Previews are kept with the run's data and do not become versions.
+
+`result()` returns an `ImageResult` with the run's `status`, the `versions` it made, and its `usage`: the tokens the API reported and what they cost in dollars at the model's published prices.
+Each `ImageVersion` records its file, its size, and the request that made it.
 
 Only one run can work on an image at a time. A request for an image that already has a run raises `ImageDesignError`.
 A request that fails or times out is not retried, because it may still have been billed.

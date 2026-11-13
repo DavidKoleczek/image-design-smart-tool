@@ -14,6 +14,12 @@ platforms:
   - macos
   - windows
 requires:
+  - name: openai-api-key
+    purpose: >-
+      OPENAI_API_KEY, and image-design installed with the openai extra, for generate-openai-image.
+      Without them, images cannot be made through the OpenAI Images API. Each request is billed to the key.
+    optional: true
+    install: https://platform.openai.com/api-keys
   - name: codex-sign-in
     purpose: >-
       The Codex CLI signed in with ChatGPT or an API key, for the codex agent provider.
