@@ -132,7 +132,7 @@ class IntelligenceModels(BaseModel):
 ImageFormat = Literal["png", "jpeg", "webp", "gif"]
 # The extensions an image's name can end in, and the format each is saved in.
 IMAGE_FORMATS: dict[str, ImageFormat] = {".png": "png", ".jpg": "jpeg", ".webp": "webp", ".gif": "gif"}
-ImageMethod = Literal["openai", "imported"]
+ImageMethod = Literal["openai", "chatgpt", "imported"]
 ImageRunStatus = Literal["running", "done", "failed", "cancelled", "timed-out"]
 ImageEventKind = Literal["started", "preview", "version", "finished", "failed"]
 MarkShape = Literal["circle", "box", "arrow", "sketch"]
@@ -207,6 +207,9 @@ class ImageRunRecord(BaseModel):
     last_event: datetime | None = None
     finished: datetime | None = None
     versions: list[str] = Field(default_factory=list, description="The versions it made")
+    image_prompt: str | None = Field(
+        default=None, description="The prompt the image model received, when the method words it rather than the caller"
+    )
     usage: ImageUsage | None = None
     error: str | None = None
 
@@ -297,5 +300,12 @@ OPENAI_IMAGE_MODELS: tuple[OpenAIImageModel, ...] = (
     ),
 )
 DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2.6-sunburst"
+
+# endregion
+
+# region: ChatGPT images
+
+# The agent only hands the request to the image tool, which needs little reasoning.
+DEFAULT_CHATGPT_REASONING_EFFORT: ReasoningEffort = "low"
 
 # endregion

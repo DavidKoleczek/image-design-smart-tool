@@ -1,4 +1,4 @@
-"""Marks: drawn on a transparent layer the size of the image they mark, and described in words for the prompt."""
+"""Marks: drawn on a transparent layer the size of the image they mark, or on a copy of it, and described in words."""
 
 from io import BytesIO
 import math
@@ -52,6 +52,17 @@ def layer(marks: list[Mark], width: int, height: int) -> bytes:
                     draw.line([(head_x, head_y), end], fill=color, width=stroke)
             case "sketch":
                 draw.line(points, fill=color, width=stroke, joint="curve")
+    buffer = BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def drawn(image: bytes, marks: list[Mark]) -> bytes:
+    """A PNG of `image` with the marks drawn on it."""
+    with Image.open(BytesIO(image)) as original:
+        canvas = original.convert("RGBA")
+    with Image.open(BytesIO(layer(marks, canvas.width, canvas.height))) as marked:
+        canvas.alpha_composite(marked.convert("RGBA"))
     buffer = BytesIO()
     canvas.save(buffer, format="PNG")
     return buffer.getvalue()

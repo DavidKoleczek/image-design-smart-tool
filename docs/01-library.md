@@ -60,9 +60,9 @@ An edit overwrites the image's file. The previous version is kept in `data_direc
 
 The other parameters:
 
-- `references`: Other images to send with the prompt, for example to copy a style or a subject. An SVG file is sent as a PNG render.
+- `references`: Other images to send with the prompt, for example to copy a style or a subject. A PNG, JPEG, or WebP is sent as it is. Any other image, such as an SVG, GIF, or TIFF, is sent as a PNG.
 - `marks`: Shapes drawn over the image to show what the prompt refers to. They are sent as a separate layer, so the image itself is sent unmarked.
-- `mask`: A PNG the same size as the image, transparent where the model may make changes. It works only for edits of still images, and not together with `marks`. The model treats it as guidance, so other areas can still change.
+- `mask`: An image the same size as the image, transparent where the model may make changes. It is sent as a PNG, and works only for edits of still images. Cannot be used with `marks`.
 - `version`: The version to edit. By default, the version in the image's file.
 - `frame`: When the image being edited is an animation, the frame to send.
 - `model`: `gpt-image-2.6-sunburst`, the default, or the faster `gpt-image-2.6-flare`.
@@ -107,9 +107,9 @@ A request that fails or times out is not retried, because it may still have been
 
 ## Generate an image with ChatGPT
 
-`generate_chatgpt_image` creates or edits an image with the image generation built into Codex.
+`generate_chatgpt_image` creates or edits an image with the image generation built into Codex. A Codex agent passes the request to its image tool.
 It uses the ChatGPT account that Codex is signed in with, so it counts against that plan and needs no API key.
-If Codex is signed in with an API key instead, the function raises `ImageDesignError` rather than bill the API.
+If Codex is signed in with an API key instead, the function raises `ImageDesignError` rather than bill the API. It needs the `codex` extra.
 
 ```python
 async def generate_chatgpt_image(
@@ -122,7 +122,7 @@ async def generate_chatgpt_image(
     version: str | None = None,
     transparent: bool = False,
     model: str | None = None,
-    reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT,
+    reasoning_effort: ReasoningEffort = DEFAULT_CHATGPT_REASONING_EFFORT,
     timeout_seconds: int = 600,
     origin: str | None = None,
     detach: bool = False,
@@ -131,15 +131,19 @@ async def generate_chatgpt_image(
 ```
 
 It creates, edits, and returns a run the same way as `generate_openai_image`, but it has fewer options.
-ChatGPT chooses the image model, the size, and the quality. Masks and animations are not supported, and the output is always a `.png`.
+ChatGPT chooses the image model, the size, and the quality, so an edit can come back at a different size than the image it changes. Masks and animations are not supported, and the output is always a `.png`.
+Each run makes one image. The agent is stopped as soon as the image arrives.
 
 The parameters that differ:
 
+- `prompt`: Passed to the image tool as written. The run's record keeps the prompt the image tool received.
 - `references`: A request can include at most five images, counting the image being edited.
-- `marks`: Drawn on a copy of the image. The copy is sent after the original and counts toward the five images.
+- `marks`: Drawn on a copy of the image. The copy is sent second, so with marks the references start at image 3. It counts toward the five images.
 - `transparent`: Ask for a transparent background.
-- `model`, `reasoning_effort`: The Codex model that runs the request. This is not the image model.
-- `intelligence`: An agent to use in place of Codex. Tests use it to pass a fake.
+- `model`, `reasoning_effort`: The Codex model that runs the request, which defaults to `low` effort. This is not the image model.
+- `intelligence`: An agent to use in place of Codex. Tests use it to pass a fake. It cannot be combined with `detach`.
+
+The result's `usage` is None, since the run counts against the ChatGPT plan rather than being billed by the token.
 
 ## Draw an SVG image
 

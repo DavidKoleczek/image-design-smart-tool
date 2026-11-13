@@ -10,7 +10,7 @@ We support the [OpenAI Codex SDK](https://github.com/openai/codex/tree/main/sdk/
 Prerequisites:
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - For the agentic capabilities, one of:
-  - `codex` agent provider: the [Codex CLI](https://github.com/openai/codex) signed in with ChatGPT or an API key. See [authentication](https://developers.openai.com/codex/auth).
+  - `codex` agent provider: the [Codex CLI](https://github.com/openai/codex) signed in with ChatGPT. See [authentication](https://developers.openai.com/codex/auth).
   - `claude` agent provider: `ANTHROPIC_API_KEY`, or any of its other supported modes of [authentication](https://code.claude.com/docs/en/agent-sdk/quickstart).
 - An `OPENAI_API_KEY` from the [OpenAI API](https://platform.openai.com/api-keys)
 - (Optional) Install the Smart Tools skill so your agent knows about Smart Tools: `npx skills add microsoft/amplifier-smart-tools`
@@ -50,6 +50,7 @@ uv tool uninstall image-design
 
 ```bash
 image-design generate-openai-image "A paper-cut cactus in a terracotta pot." --name concepts/cactus.png
+image-design generate-chatgpt-image "Make the pot blue." --name concepts/cactus.png
 image-design restore-image-version --name concepts/cactus.png --version v1
 image-design cancel-image --name concepts/cactus.png
 image-design list-intelligence-models

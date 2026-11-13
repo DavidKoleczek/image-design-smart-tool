@@ -31,10 +31,11 @@ opposite corners for a `circle` or `box`, the tail then the head for an `arrow`,
 - `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
 - `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory. Pass the same one
   every time.
-- `--reference`: Another image to send with the prompt, such as for a style or a subject. Repeatable.
+- `--reference`: Another image to send with the prompt, such as for a style or a subject. Repeatable. Any image
+  format, or an SVG; one other than PNG, JPEG, or WebP is sent as a PNG at its own size.
 - `--marks`: A JSON file of marks drawn over the image being edited, sent as a separate layer.
-- `--mask`: A PNG the image's size, transparent where the model may make changes. Only for edits of still images, and
-  not with `--marks`. The model treats it as guidance.
+- `--mask`: An image the image's size, transparent where the model may make changes, sent as a PNG. Only for edits of
+  still images, and not with `--marks`. The model treats it as guidance.
 - `--version`: The version to edit, such as `v2`. Defaults to the one in the image's file.
 - `--frame`: When the image being edited is an animation, the frame to send, from 0.
 - `--model`: `gpt-image-2.6-sunburst`, the default, or the faster `gpt-image-2.6-flare`.

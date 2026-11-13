@@ -1,4 +1,4 @@
-"""What the tool reads from image files, and the sizes the image models accept."""
+"""What the tool reads from image files, how it converts them for sending, and the sizes the image models accept."""
 
 from io import BytesIO
 import math
@@ -6,9 +6,14 @@ from pathlib import Path
 from typing import NamedTuple
 
 from PIL import Image, UnidentifiedImageError
+import resvg_py
 
 from image_design.schemas import ImageDesignError
 
+# The formats, as Pillow names them, that the image services take as they are, and the suffix each is sent with. Any
+# other image is sent as a PNG.
+SENT_AS_IS = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}
+SVG_SUFFIXES = (".svg", ".svgz")
 # The sizes the GPT Image 2.6 models accept for a still image, from
 # https://developers.openai.com/api/docs/guides/image-generation. An animation only needs multiples of 16.
 SIZE_STEP = 16
@@ -51,7 +56,9 @@ def read(path: Path) -> Picture:
         raise ImageDesignError(f"{path} is not a file. Pass the path of an image that exists.", "no-such-file")
     picture = describe(path.read_bytes())
     if picture is None:
-        raise ImageDesignError(f"{path} is not an image the tool can read. Pass a PNG, JPEG, WebP, or GIF file.")
+        raise ImageDesignError(
+            f"{path} is not an image the tool can read. Pass an image file, such as a PNG, JPEG, WebP, GIF, or SVG."
+        )
     return picture
 
 
@@ -63,6 +70,39 @@ def frame_png(path: Path, index: int = 0) -> bytes:
     buffer = BytesIO()
     frame.save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def sendable(path: Path) -> tuple[bytes, str]:
+    """The image at `path` in a format the image services take, and the suffix to send it with.
+
+    A PNG, JPEG, or WebP is sent as it is, whatever its file is named. Any other image is sent as `png` makes it.
+    """
+    if path.suffix.lower() not in SVG_SUFFIXES and (format := read(path).format) in SENT_AS_IS:
+        return path.read_bytes(), SENT_AS_IS[format]
+    return png(path), ".png"
+
+
+def png(path: Path) -> bytes:
+    """The image at `path` as a PNG with transparency, at its own size.
+
+    An SVG is rendered with resvg. Any other image Pillow reads gives its first frame.
+    """
+    if path.suffix.lower() not in SVG_SUFFIXES:
+        read(path)
+        return frame_png(path)
+    if not path.is_file():
+        raise ImageDesignError(f"{path} is not a file. Pass the path of an image that exists.", "no-such-file")
+    try:
+        return resvg_py.svg_to_bytes(svg_path=str(path), resources_dir=str(path.parent))
+    except ValueError as error:
+        raise ImageDesignError(f"{path} is an SVG that could not be rendered: {error}. Fix the SVG.") from None
+
+
+def transparent(content: bytes) -> bool:
+    """Whether any pixel of the image is transparent, even partly."""
+    with Image.open(BytesIO(content)) as image:
+        lowest, _ = image.convert("RGBA").getchannel("A").getextrema()
+    return isinstance(lowest, int | float) and lowest < 255
 
 
 def size_problem(width: int, height: int, animated: bool) -> str | None:

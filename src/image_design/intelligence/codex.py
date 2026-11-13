@@ -1,6 +1,7 @@
 """OpenAI Codex SDK implementation of the intelligence interface."""
 
 import asyncio
+import base64
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
@@ -8,6 +9,7 @@ from datetime import UTC, datetime
 from importlib.metadata import version
 import json
 from pathlib import Path
+import re
 import shutil
 from typing import Any
 
@@ -41,6 +43,15 @@ from image_design.schemas import ImageDesignError
 
 SIGN_IN_DOCUMENTATION = "https://developers.openai.com/codex/auth"
 TELEMETRY_OFF = ("analytics.enabled=false", 'otel.metrics_exporter="none"', "feedback.enabled=false")
+# A run that may make images signs in only with ChatGPT, so its images count against the ChatGPT plan and are never
+# billed to an API key. Codex reads an empty key as none.
+CHATGPT_ONLY = ('forced_login_method="chatgpt"', 'model_provider="openai"')
+NO_API_KEYS = {"OPENAI_API_KEY": "", "CODEX_API_KEY": ""}
+# What a run without a workspace turns off, so it has no tools but those the request asks for.
+NO_TOOL_FEATURES = {"shell_tool": False, "unified_exec": False, "apps": False, "multi_agent": False, "memories": False}
+NO_TOOL_CONFIG = {"web_search": "disabled", "include_apps_instructions": False, "include_environment_context": False}
+# What an image's first bytes say it is, for the suffix of the file it is saved to.
+IMAGE_SIGNATURES = ((b"\x89PNG", ".png"), (b"\xff\xd8\xff", ".jpg"), (b"GIF8", ".gif"), (b"RIFF", ".webp"))
 # How long a stopping run waits for Codex to end its turn, and then for the turn's last notifications.
 DRAIN_SECONDS = 30
 # Without it the runtime leaves reasoning summaries out, and they are what the activity shows of reasoning.
@@ -147,10 +158,12 @@ class CodexRun:
         try:
             # Opened and closed in this one task, since closing the runtime ends what its turns started.
             async with AsyncCodex(codex_config(self._request)) as codex:
+                if self._request.generated_images is not None:
+                    require_chatgpt(await codex.account())
                 result = await self._run(codex)
         except Exception as error:
             if result is None:
-                self.unavailable = _unavailable(error)
+                self.unavailable = error if isinstance(error, ImageDesignError) else _unavailable(error)
                 result = AgentResult(error=str(self.unavailable), session_id=self._session_id)
         finally:
             self._began.set()
@@ -189,6 +202,18 @@ class CodexRun:
         request = self._request
         cwd = workspace(request)
         await asyncio.to_thread(copy_skills, request.skill_directories, cwd)
+        config: dict[str, Any] = {
+            "model_reasoning_summary": "detailed",
+            # A workspace's AGENTS.md is written for whoever develops there, not for the tool's agent.
+            "project_doc_max_bytes": 0,
+            # Otherwise a writable thread in an untrusted project records it as trusted in ~/.codex/config.toml.
+            "projects": {str(cwd): {"trust_level": "trusted"}},
+        }
+        features = {"image_generation": request.generated_images is not None}
+        if request.workspace is None:
+            features |= NO_TOOL_FEATURES
+            config |= NO_TOOL_CONFIG
+        config["features"] = features
         options: dict[str, Any] = {
             "cwd": str(cwd),
             "model": request.model,
@@ -197,13 +222,7 @@ class CodexRun:
             # there to give it.
             "sandbox": Sandbox.full_access,
             "approval_mode": ApprovalMode.deny_all,
-            "config": {
-                "model_reasoning_summary": "detailed",
-                # A workspace's AGENTS.md is written for whoever develops there, not for the tool's agent.
-                "project_doc_max_bytes": 0,
-                # Otherwise a writable thread in an untrusted project records it as trusted in ~/.codex/config.toml.
-                "projects": {str(cwd): {"trust_level": "trusted"}},
-            },
+            "config": config,
         }
         if request.resume is not None:
             self._thread = await codex.thread_resume(request.resume, **options)
@@ -335,6 +354,21 @@ class CodexRun:
             if failed:
                 outcome["error"] = _failure(item, output)
             self._emit("tool_result", output or outcome.get("error", ""), outcome, time)
+            if kind == "imageGeneration" and not failed:
+                self._keep_image(item, time)
+
+    def _keep_image(self, item: dict[str, Any], time: datetime | None) -> None:
+        """Save the image a call to the image tool made, and announce it."""
+        directory = self._request.generated_images
+        content = _image(item)
+        if directory is None or content is None:
+            return
+        directory.mkdir(parents=True, exist_ok=True)
+        suffix = next((suffix for start, suffix in IMAGE_SIGNATURES if content.startswith(start)), ".bin")
+        path = directory / f"{re.sub(r'[^A-Za-z0-9_-]', '_', str(item.get('id') or 'image'))}{suffix}"
+        path.write_bytes(content)
+        data = {"path": str(path), "tool_call_id": item.get("id"), "prompt": item.get("revisedPrompt")}
+        self._emit("image", str(path), data, time)
 
     def _note_usage(self, data: dict[str, Any]) -> None:
         usage = data.get("tokenUsage")
@@ -406,7 +440,28 @@ class CodexIntelligence:
 
 def codex_config(request: AgentRequest) -> CodexConfig:
     """The configuration one run's Codex runtime starts with."""
-    return CodexConfig(config_overrides=TELEMETRY_OFF)
+    if request.generated_images is None:
+        return CodexConfig(config_overrides=TELEMETRY_OFF)
+    return CodexConfig(config_overrides=TELEMETRY_OFF + CHATGPT_ONLY, env=NO_API_KEYS)
+
+
+def require_chatgpt(response: GetAccountResponse) -> None:
+    """Raise unless Codex is signed in with ChatGPT, which a run that may make images needs."""
+    account = response.account.root if response.account is not None else None
+    if account is not None and account.type == "chatgpt":
+        return
+    if account is None:
+        signed_in = "is not signed in"
+    elif account.type == "apiKey":
+        signed_in = "is signed in with an API key"
+    else:
+        signed_in = f"is signed in with {account.type}"
+    raise ImageDesignError(
+        f"Codex {signed_in}. It makes images only with a ChatGPT sign-in, so they count against the ChatGPT plan "
+        f"rather than being billed to an API key. Run `codex login` and sign in with ChatGPT, as "
+        f"{SIGN_IN_DOCUMENTATION} describes.",
+        "not-set-up",
+    )
 
 
 def workspace(request: AgentRequest) -> Path:
@@ -581,12 +636,28 @@ def _failed(item: dict[str, Any]) -> bool:
 
 def _failure(item: dict[str, Any], output: str) -> str:
     """Why the call failed, in the tool's own words where it gave any."""
+    failure = item.get("failure")
+    if isinstance(failure, dict) and failure.get("type") == "usageLimitExceeded":
+        resets = failure.get("resetsAt")
+        when = f" It resets at {datetime.fromtimestamp(resets, UTC):%Y-%m-%d %H:%M} UTC." if resets else ""
+        return f"The ChatGPT plan's limit on making images ({failure.get('limitId')}) is reached.{when}"
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     if lines:
         # A command prints its error last, after whatever it printed on the way.
         return lines[-1] if item.get("type") == "commandExecution" else lines[0]
     exit_code = item.get("exitCode")
     return f"Exited with code {exit_code}" if isinstance(exit_code, int) else f"The call ended {item.get('status')}."
+
+
+def _image(item: dict[str, Any]) -> bytes | None:
+    """The image an image tool call made: the bytes it carries, else the one file it says it saved them to."""
+    encoded = item.get("result")
+    if isinstance(encoded, str) and encoded:
+        return base64.b64decode(encoded)
+    saved = item.get("savedPath")
+    if isinstance(saved, str) and Path(saved).is_file():
+        return Path(saved).read_bytes()
+    return None
 
 
 def _text(content: Any) -> str:

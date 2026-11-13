@@ -388,6 +388,8 @@ class ClaudeIntelligence:
 
     async def start(self, request: AgentRequest) -> ClaudeRun:
         require_showable(request.images)
+        if request.generated_images is not None:
+            raise ImageDesignError("Claude has no tool that makes images. Use the codex agent provider to make them.")
         client = ClaudeSDKClient(options=claude_options(request))
         try:
             await client.connect()

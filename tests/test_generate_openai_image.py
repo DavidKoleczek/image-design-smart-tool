@@ -16,6 +16,7 @@ from image_design import lib
 from image_design.capabilities.openai_image.generate import MARKS_NOTE
 from image_design.cli import app
 from image_design.schemas import DEFAULT_OPENAI_IMAGE_MODEL, ImageDesignError, ImageEvent, ImageResult, ImageUsage, Mark
+from image_design.shared.images import pictures
 from image_design.shared.images.store import GITIGNORE, LOCKS
 
 runner = CliRunner()
@@ -38,6 +39,12 @@ def color_of(content: bytes, x: int = 0, y: int = 0) -> tuple[int, ...]:
         pixel = image.convert("RGB").getpixel((x, y))
     assert isinstance(pixel, tuple)
     return pixel
+
+
+def described(content: bytes) -> tuple[str, int, int]:
+    found = pictures.describe(content)
+    assert found is not None
+    return found.format, found.width, found.height
 
 
 def hex_color(color: str) -> tuple[int, ...]:
@@ -119,6 +126,36 @@ async def test_a_request_the_api_would_refuse_is_refused_before_anything_is_sent
 
     assert images_api.requests == []
     assert not list(Path(".image-design/.agents/images").glob("*"))
+
+
+async def test_references_and_a_mask_in_any_format_are_sent_in_one_the_api_takes(images_api: FakeImagesAPI) -> None:
+    await made(prompt="A cactus.", name="cactus.png")
+    Path("logo.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><rect width="40" height="30"/></svg>',
+        encoding="utf-8",
+    )
+    for name in ("photo.bmp", "scan.tiff", "art.avif"):
+        Image.new("RGB", (32, 32), "#2a9d8f").save(name)
+    Image.new("RGB", (32, 32), "#2a9d8f").save("misnamed.png", format="JPEG")
+    mask = Image.new("RGBA", (1024, 1024), (0, 0, 0, 255))
+    mask.paste((0, 0, 0, 0), (0, 0, 512, 512))
+    mask.save("mask.webp", lossless=True)
+    Image.new("RGBA", (1024, 1024), (0, 0, 0, 255)).save("opaque.png")
+    references = [Path(name) for name in ("logo.svg", "photo.bmp", "scan.tiff", "art.avif", "misnamed.png")]
+
+    await made(prompt="Make it teal.", name="cactus.png", references=references, mask=Path("mask.webp"))
+    with pytest.raises(ImageDesignError, match="has no transparent area"):
+        await lib.generate_openai_image("Make it teal.", name="cactus.png", mask=Path("opaque.png"))
+
+    _, editing = images_api.requests
+    assert [described(content) for content in editing.files["image[]"][1:]] == [
+        ("PNG", 40, 30),
+        ("PNG", 32, 32),
+        ("PNG", 32, 32),
+        ("PNG", 32, 32),
+        ("JPEG", 32, 32),
+    ]
+    assert [described(content) for content in editing.files["mask"]] == [("PNG", 1024, 1024)]
 
 
 @pytest.mark.parametrize(

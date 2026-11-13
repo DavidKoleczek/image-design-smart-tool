@@ -10,7 +10,7 @@ from image_design.schemas import DEFAULT_REASONING_EFFORT, ReasoningEffort
 
 # How a steering message lands: in the current turn, when the agent next reads input, or by restarting the run.
 Steering = Literal["mid-turn", "queued", "restart"]
-AgentEventKind = Literal["message", "reasoning", "tool_call", "tool_result", "usage", "terminal"]
+AgentEventKind = Literal["message", "reasoning", "tool_call", "tool_result", "image", "usage", "terminal"]
 # The image types an agent can be shown inline, by file suffix.
 IMAGE_MEDIA_TYPES = {
     ".png": "image/png",
@@ -54,10 +54,18 @@ class AgentRequest(BaseModel):
     skill_directories: list[Path] = Field(
         default_factory=list, description="Directories of Agent Skills, a folder holding a SKILL.md each, it may use"
     )
+    generated_images: Path | None = Field(
+        default=None,
+        description="Where each image the agent makes with the agent provider's image tool is saved, announced by an "
+        "`image` event; None means it cannot make images",
+    )
 
 
 class AgentEvent(BaseModel):
-    """One thing the agent did, in the same shape for every agent provider; `terminal` comes last, once."""
+    """One thing the agent did, in the same shape for every agent provider; `terminal` comes last, once.
+
+    An `image` event has the `path` of an image the agent made, and the `prompt` the image tool received.
+    """
 
     time: datetime = Field(default_factory=lambda: datetime.now(UTC))
     kind: AgentEventKind

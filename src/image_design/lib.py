@@ -2,12 +2,15 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Literal, overload
 
+from image_design.capabilities.chatgpt_image import generate as chatgpt_image
 from image_design.capabilities.intelligence_models import intelligence_models
 from image_design.capabilities.manage_images import manage_images
 from image_design.capabilities.openai_image import generate
 from image_design.core import manifest
 from image_design.core import skill as skill_module
+from image_design.intelligence.interface import Intelligence
 from image_design.schemas import (
+    DEFAULT_CHATGPT_REASONING_EFFORT,
     ImageSummary,
     IntelligenceModels,
     Manifest,
@@ -15,6 +18,7 @@ from image_design.schemas import (
     OpenAIImageBackground,
     OpenAIImageComplexity,
     OpenAIImageQuality,
+    ReasoningEffort,
 )
 from image_design.shared.images import runs
 from image_design.shared.images.runs import ImageRun
@@ -55,9 +59,10 @@ async def generate_openai_image(
         name: The image's path in `directory`. Its extension sets the format: .png, .jpg, .webp, or .gif.
         directory: Where images are kept; `.image-design` in the working directory when None.
         data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
-        references: Other images to send with the prompt, such as for a style or a subject.
+        references: Other images to send with the prompt, such as for a style or a subject. A PNG, JPEG, or WebP is
+            sent as it is, and any other image, such as an SVG, as a PNG at its own size.
         marks: Shapes drawn over the image being edited, sent as a separate layer, to show what the prompt refers to.
-        mask: A PNG the image's size, transparent where the model may make changes; for edits of still images.
+        mask: An image the image's size, transparent where the model may make changes; for edits of still images.
         version: The version to edit; the one in the image's file when None.
         frame: When the image being edited is an animation, the frame to send; the first when None.
         model: `gpt-image-2.6-sunburst` when None, or `gpt-image-2.6-flare`.
@@ -104,6 +109,69 @@ async def generate_openai_image(
     )
 
 
+async def generate_chatgpt_image(
+    prompt: str,
+    name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+    version: str | None = None,
+    transparent: bool = False,
+    model: str | None = None,
+    reasoning_effort: ReasoningEffort = DEFAULT_CHATGPT_REASONING_EFFORT,
+    timeout_seconds: int = 600,
+    origin: str | None = None,
+    detach: bool = False,
+    intelligence: Intelligence | None = None,
+) -> ImageRun:
+    """Create or edit an image with the image generation built into Codex. Agentic.
+
+    A Codex agent passes the request to its image tool. It uses the ChatGPT account Codex is signed in with, so it
+    counts against that plan and needs no API key; with any other sign-in it raises before anything is sent. ChatGPT
+    chooses the image model, the size, and the quality, and the image is always a PNG. Needs the codex extra.
+
+    Args:
+        prompt: What to make, or what to change. It is passed to the image tool as written.
+        name: The image's path in `directory`, ending in .png. A new name creates the image, and one that exists edits
+            it, overwriting its file.
+        directory: Where images are kept; `.image-design` in the working directory when None.
+        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        references: Other images to send with the prompt. A request sends at most five images, counting the image
+            being edited and its marked copy.
+        marks: Shapes drawn on a copy of the image being edited, to show what the prompt refers to. The copy is sent
+            second, so with marks the references start at image 3.
+        version: The version to edit; the one in the image's file when None.
+        transparent: Ask for a transparent background.
+        model: The Codex model that passes the request on, not the image model; Codex's default when None.
+        reasoning_effort: That model's reasoning effort.
+        timeout_seconds: How long the request may take before it is stopped.
+        origin: Who asked, such as `app`.
+        detach: Run the request in a process of its own, which goes on when the caller exits.
+        intelligence: An agent to use in place of Codex, such as a fake in tests. Not with `detach`.
+
+    Returns:
+        The run, once the agent has started. Its `result()` waits for the `ImageResult`, whose `usage` is None since
+        the plan, not the tokens, pays for it.
+    """
+    return await chatgpt_image.generate_chatgpt_image(
+        prompt=prompt,
+        name=name,
+        directory=directory,
+        data_directory=data_directory,
+        references=references,
+        marks=marks,
+        version=version,
+        transparent=transparent,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        timeout_seconds=timeout_seconds,
+        origin=origin,
+        detach=detach,
+        intelligence=intelligence,
+    )
+
+
 def restore_image_version(
     name: str, version: str, directory: Path | None = None, data_directory: Path | None = None
 ) -> ImageSummary:
@@ -112,7 +180,10 @@ def restore_image_version(
 
 
 def cancel_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
-    """Stop the run working on an image, from any process. A request already sent may still be billed."""
+    """Stop the run working on an image, from any process.
+
+    A request already sent may still be billed, or counted against a plan.
+    """
     manage_images.cancel_image(name, directory, data_directory)
 
 

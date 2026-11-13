@@ -20,6 +20,12 @@ CAPABILITIES = (
         skill="capabilities/openai_image/skills/skill_generate_openai_image.md",
     ),
     Capability(
+        "generate-chatgpt-image",
+        "Create or edit an image with the image generation built into Codex, on a ChatGPT plan.",
+        model_backed=True,
+        skill="capabilities/chatgpt_image/skills/skill_generate_chatgpt_image.md",
+    ),
+    Capability(
         "restore-image-version",
         "Put an earlier version of an image back in its file.",
         model_backed=False,

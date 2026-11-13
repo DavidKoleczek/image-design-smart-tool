@@ -18,6 +18,7 @@ from typer.models import CommandFunctionType
 from image_design import lib
 from image_design.core.skill import DISTRIBUTION
 from image_design.schemas import (
+    DEFAULT_CHATGPT_REASONING_EFFORT,
     ImageDesignError,
     ImageEvent,
     ImageResult,
@@ -26,6 +27,7 @@ from image_design.schemas import (
     OpenAIImageBackground,
     OpenAIImageComplexity,
     OpenAIImageQuality,
+    ReasoningEffort,
 )
 
 DIRECTORY_HELP = "Where images are kept; .image-design here when omitted."
@@ -140,7 +142,7 @@ def generate_openai_image(
     ] = None,
     mask: Annotated[
         Path | None,
-        typer.Option("--mask", help="A PNG the image's size, transparent where the model may make changes."),
+        typer.Option("--mask", help="An image the image's size, transparent where the model may make changes."),
     ] = None,
     version: Annotated[
         str | None, typer.Option("--version", help="The version to edit; the one in the image's file when omitted.")
@@ -205,6 +207,69 @@ def generate_openai_image(
                 frames=frames,
                 frame_ms=frame_ms,
                 previews=previews,
+                timeout_seconds=timeout_seconds,
+                origin=origin,
+                detach=detach,
+            ),
+            detach,
+            json,
+        )
+    )
+    raise typer.Exit(code)
+
+
+@app.command()
+def generate_chatgpt_image(
+    prompt: Annotated[str, typer.Argument(help="What to make, or what to change.", show_default=False)],
+    name: Annotated[
+        str,
+        typer.Option(
+            "--name", help="The image's path in the directory, such as concepts/cactus.png; one that exists is edited."
+        ),
+    ],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    references: Annotated[
+        list[Path] | None, typer.Option("--reference", help="Another image to send with the prompt; repeatable.")
+    ] = None,
+    marks: Annotated[
+        Path | None,
+        typer.Option("--marks", help="A JSON file with a list of marks to draw on a copy of the image being edited."),
+    ] = None,
+    version: Annotated[
+        str | None, typer.Option("--version", help="The version to edit; the one in the image's file when omitted.")
+    ] = None,
+    transparent: Annotated[bool, typer.Option("--transparent", help="Ask for a transparent background.")] = False,
+    model: Annotated[
+        str | None, typer.Option("--model", help="The Codex model that passes the request on, not the image model.")
+    ] = None,
+    reasoning_effort: Annotated[
+        ReasoningEffort, typer.Option("--reasoning-effort", help="That model's reasoning effort.")
+    ] = DEFAULT_CHATGPT_REASONING_EFFORT,
+    timeout_seconds: Annotated[int, typer.Option("--timeout-seconds", min=1)] = 600,
+    origin: Annotated[str | None, typer.Option("--origin", help="Who asked, such as app.")] = None,
+    detach: Annotated[
+        bool, typer.Option("--detach", help="Leave the run going in a process of its own once it is sent.")
+    ] = False,
+    json: Annotated[bool, typer.Option("--json", help="Print each event as a line of JSON instead.")] = False,
+) -> None:
+    """Create or edit an image with the image generation built into Codex. Agentic, on Codex's ChatGPT plan.
+
+    Prints the path of the image made, with progress on stderr. Exits 0 when the run is done.
+    """
+    code = asyncio.run(
+        _follow(
+            lib.generate_chatgpt_image(
+                prompt=prompt,
+                name=name,
+                directory=directory,
+                data_directory=data_directory,
+                references=references,
+                marks=_marks(marks),
+                version=version,
+                transparent=transparent,
+                model=model,
+                reasoning_effort=reasoning_effort,
                 timeout_seconds=timeout_seconds,
                 origin=origin,
                 detach=detach,

@@ -1,7 +1,9 @@
 """Drives the Codex adapter with the SDK's client faked, so neither a Codex sign-in nor a network is needed."""
 
 import asyncio
+import base64
 from collections.abc import AsyncIterator, Callable
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -253,6 +255,7 @@ async def test_a_thread_gets_the_workspace_trusted_telemetry_off_and_no_agents_m
                 "model_reasoning_summary": "detailed",
                 "project_doc_max_bytes": 0,
                 "projects": {cwd: {"trust_level": "trusted"}},
+                "features": {"image_generation": False},
             },
         }
     ]
@@ -597,6 +600,70 @@ def test_preflight_passes_when_signed_in(world: Callable[..., FakeWorld]) -> Non
 
     assert CodexIntelligence().steering == "mid-turn"
     assert CodexIntelligence().implementation.startswith("openai-codex ")
+
+
+def account(**signed_in: Any) -> GetAccountResponse:
+    return GetAccountResponse.model_validate({"account": signed_in or None, "requiresOpenaiAuth": True})
+
+
+async def test_an_image_run_signs_in_only_with_chatgpt_has_no_other_tools_and_saves_the_image_it_makes(
+    world: Callable[..., FakeWorld], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter, "state_directory", lambda provider: tmp_path / provider)
+    png = b"\x89PNG\r\n\x1a\nfake image"
+    encoded = base64.b64encode(png).decode()
+    making: dict[str, Any] = {"id": "ig_1", "type": "imageGeneration", "status": "in_progress", "result": ""}
+    limited = making | {
+        "status": "failed",
+        "failure": {"type": "usageLimitExceeded", "limitId": "image_gen", "resetsAt": 1_800_000_000},
+    }
+    made = making | {"id": "ig_2", "status": "completed", "result": encoded, "revisedPrompt": "A cactus."}
+    fake = world(lambda turn: turn.emit(started(making), completed(limited), completed(made), turn_completed()))
+    fake.account = account(type="chatgpt", email=None, planType="plus")
+
+    run = await CodexIntelligence().start(request(generated_images=tmp_path / "made"))
+    await run.result()
+    events = await collect(run)
+
+    [config] = fake.configs
+    assert config is not None
+    assert config.config_overrides[-2:] == ('forced_login_method="chatgpt"', 'model_provider="openai"')
+    assert config.env == {"OPENAI_API_KEY": "", "CODEX_API_KEY": ""}
+    options = fake.thread_options[0]["config"]
+    assert options["features"] == {
+        "image_generation": True,
+        "shell_tool": False,
+        "unified_exec": False,
+        "apps": False,
+        "multi_agent": False,
+        "memories": False,
+    }
+    assert options["web_search"] == "disabled"
+    assert [each.kind for each in events] == ["tool_call", "tool_result", "tool_result", "image", "terminal"]
+    assert events[1].data["error"] == (
+        "The ChatGPT plan's limit on making images (image_gen) is reached. It resets at 2027-01-15 08:00 UTC."
+    )
+    image = events[3]
+    assert image.data == {"path": str(tmp_path / "made" / "ig_2.png"), "tool_call_id": "ig_2", "prompt": "A cactus."}
+    assert (tmp_path / "made" / "ig_2.png").read_bytes() == png
+    assert encoded not in json.dumps([each.model_dump(mode="json") for each in events])
+
+
+@pytest.mark.parametrize(
+    ("signed_in", "named"),
+    [({"type": "apiKey"}, "is signed in with an API key"), ({}, "is not signed in")],
+)
+async def test_an_image_run_without_a_chatgpt_sign_in_is_refused_before_a_thread_starts(
+    world: Callable[..., FakeWorld], tmp_path: Path, signed_in: dict[str, Any], named: str
+) -> None:
+    fake = world()
+    fake.account = account(**signed_in)
+
+    with pytest.raises(ImageDesignError, match=named):
+        await CodexIntelligence().start(request(generated_images=tmp_path))
+
+    assert fake.thread_options == []
+    assert fake.closed == 1
 
 
 async def test_an_image_that_cannot_be_shown_is_refused_before_a_runtime_starts(

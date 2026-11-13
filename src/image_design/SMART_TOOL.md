@@ -23,6 +23,7 @@ requires:
   - name: codex-sign-in
     purpose: >-
       The Codex CLI signed in with ChatGPT or an API key, for the codex agent provider.
+      generate-chatgpt-image needs the ChatGPT sign-in.
       Without it, the agentic capabilities cannot run through codex.
     optional: true
     install: https://developers.openai.com/codex/auth

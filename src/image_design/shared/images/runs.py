@@ -1,7 +1,7 @@
 """A run on an image: its work done by this process, or a detached run followed through the files its process writes."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Coroutine, Generator
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Generator
 import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -74,10 +74,21 @@ Work = Callable[[RunOutput], Coroutine[Any, Any, None]]
 
 
 class InProcessRun:
-    """An image being made by work this process does."""
+    """An image being made by work this process does.
+
+    `stop` ends what was started for the work, such as an agent, once the work has ended however it ended. A cancel
+    can come before the work's first step, when nothing in the work itself would run.
+    """
 
     def __init__(
-        self, image: StoredImage, run: ImageRunRecord, work: Work, timeout_seconds: int, lock: Path, suffix: str
+        self,
+        image: StoredImage,
+        run: ImageRunRecord,
+        work: Work,
+        timeout_seconds: int,
+        lock: Path,
+        suffix: str,
+        stop: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.name = image.name
         self.directory = image.root
@@ -90,6 +101,7 @@ class InProcessRun:
         self._timeout_seconds = timeout_seconds
         self._lock = lock
         self._suffix = suffix
+        self._stop = stop
         self._made: list[ImageVersion] = []
         self._events: list[ImageEvent] = []
         # Replaced on every append, so a reader waits on the one current when it ran out of events.
@@ -107,7 +119,7 @@ class InProcessRun:
         return self._replay()
 
     async def cancel(self) -> None:
-        """Stop the run at once and wait for it to end. A request already sent may still be billed."""
+        """Stop the run at once and wait for it to end. A request already sent may still be billed or counted."""
         self._working.cancel()
         await asyncio.wait([self._task])
 
@@ -142,6 +154,10 @@ class InProcessRun:
                 timed_out = True
                 self._working.cancel()
                 await asyncio.wait([self._working])
+            # Awaited before the end is set below: from then on a reader's wait returns at once, so it never yields.
+            if self._stop is not None:
+                with contextlib.suppress(Exception):
+                    await self._stop()
         except asyncio.CancelledError:
             # The caller's loop is ending with the run in it, so the run ends with it.
             self._working.cancel()
@@ -157,7 +173,8 @@ class InProcessRun:
             status = "timed-out"
             error = (
                 f"The request did not finish within {self._timeout_seconds} seconds and was stopped. It may still "
-                "have been billed. Give it more time with timeout_seconds (--timeout-seconds)."
+                "have been billed or counted against a plan. Give it more time with timeout_seconds "
+                "(--timeout-seconds)."
             )
         elif self._working.cancelled():
             status = "cancelled"
@@ -251,7 +268,7 @@ class DetachedRun:
         return self._follow()
 
     async def cancel(self) -> None:
-        """Stop the run at once and wait for it to end. A request already sent may still be billed."""
+        """Stop the run at once and wait for it to end. A request already sent may still be billed or counted."""
         if await asyncio.to_thread(self._running):
             (self._run_folder / CANCEL).touch()
         await self.result()

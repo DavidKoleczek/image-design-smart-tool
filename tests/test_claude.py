@@ -662,11 +662,17 @@ async def test_a_writable_workspace_adds_the_file_writing_tools(
     assert options.tools == ["Read", "Glob", "Grep", "Bash", "Edit", "Write"]
 
 
-async def test_the_ultra_reasoning_effort_is_refused_before_claude_code_starts(world: Callable[..., FakeWorld]) -> None:
+@pytest.mark.parametrize(
+    ("fields", "named"),
+    [({"reasoning_effort": "ultra"}, "'max'"), ({"generated_images": Path("made")}, "no tool that makes images")],
+)
+async def test_a_request_claude_cannot_take_is_refused_before_claude_code_starts(
+    world: Callable[..., FakeWorld], fields: dict[str, Any], named: str
+) -> None:
     fake = world()
 
-    with pytest.raises(ImageDesignError, match="'max'"):
-        await ClaudeIntelligence().start(request(reasoning_effort="ultra"))
+    with pytest.raises(ImageDesignError, match=named):
+        await ClaudeIntelligence().start(request(**fields))
 
     assert fake.options == []
 
