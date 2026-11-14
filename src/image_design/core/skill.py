@@ -68,6 +68,18 @@ CAPABILITIES = (
         skill="capabilities/manage_images/skills/skill_read_image_activity.md",
     ),
     Capability(
+        "app",
+        "Serve the app in a browser page on this machine.",
+        model_backed=False,
+        skill="capabilities/app/skills/skill_app.md",
+    ),
+    Capability(
+        "mcp",
+        "Serve the app over stdio as an MCP App, so a session can show it inline or in a browser.",
+        model_backed=False,
+        skill="adapters/skills/skill_mcp.md",
+    ),
+    Capability(
         "manifest", "Print the tool's manifest as JSON.", model_backed=False, skill="core/skills/skill_manifest.md"
     ),
     Capability(

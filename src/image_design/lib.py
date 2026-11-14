@@ -2,6 +2,9 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Literal, overload
 
+from image_design.capabilities.app import mcp_server as app_server_module
+from image_design.capabilities.app import server as app_module
+from image_design.capabilities.app.mcp_server import AppServer
 from image_design.capabilities.chatgpt_image import generate as chatgpt_image
 from image_design.capabilities.intelligence_models import intelligence_models
 from image_design.capabilities.manage_images import manage_images
@@ -349,6 +352,20 @@ def skill(capability: str | None = None) -> str:
 def version() -> str:
     """The installed package's version, from its metadata."""
     return skill_module.version()
+
+
+def app_server() -> AppServer:
+    """The app's MCP server: the tool that opens the app, and the view as an MCP App.
+
+    Serve `AppServer.server` over any MCP transport. `AppServer.open` serves the browser host page, which renders the
+    view for agents that cannot embed it and reaches the same server at its own `/mcp`. `AppServer.close` stops it.
+    """
+    return app_server_module.AppServer(skill_module.DISTRIBUTION, version())
+
+
+def app_view() -> str:
+    """The app's view, an MCP App: the HTML a host renders inline, and the one the browser host page renders."""
+    return app_module.view()
 
 
 @overload

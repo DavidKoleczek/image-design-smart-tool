@@ -7,12 +7,15 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.162.2,<0.163.0",
     "jsonschema>=4.26.0,<5.0.0",
+    "mcp>=2.3.0,<3.0.0",
     "pillow>=13.0.0,<14.0.0",
     "pydantic>=2.14,<3.0",
     "pyyaml>=6.0.3,<7.0.0",
     "resvg-py>=0.5.0,<0.6.0",
     "typer>=0.27.3,<0.28.0",
+    "uvicorn>=0.54.0,<0.55.0",
 ]
 
 [project.urls]
@@ -53,7 +56,7 @@ dev = [
 [tool.ruff]
 line-length = 120
 target-version = "py313"
-extend-exclude = ["reference"]
+extend-exclude = ["reference", "app"]
 
 [tool.ruff.lint]
 select = [
@@ -99,8 +102,9 @@ testpaths = ["tests"]
 pythonpath = ["tests"]
 # In parallel. More workers than the most here are no faster, since each takes a while to start.
 # A slow test gets a marker registered here, and that marker goes in `-m "not (...)"`, so it runs only when named.
-addopts = '--import-mode=importlib -n auto --maxprocesses 8 -m "not (detached or uv)"'
+addopts = '--import-mode=importlib -n auto --maxprocesses 8 -m "not (mcp_process or detached or uv)"'
 markers = [
+    "mcp_process: starts `image-design mcp` as a process. Run after changing adapters/mcp.py, the mcp command in cli.py, or open_app and what a client sees in capabilities/app/.",
     "detached: starts a run in a process of its own. Run after changing shared/images/detach.py, DetachedRun in shared/images/runs.py, a capability's background.py, or cancel_image.",
     "uv: runs a drawing's image.py with uv. Run after changing capabilities/svg_image/build.py.",
 ]

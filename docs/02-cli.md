@@ -74,10 +74,15 @@ image-design export-svg-image --name <name> --output <path>      render a drawin
 image-design list-image-methods                                  the ways to make an image
 image-design list-intelligence-models                            the models an agent can use
 image-design manifest                                            the tool's manifest
+image-design app [--port <n>]                                    serve the app in a browser page
+image-design mcp                                                 serve the app over stdio as an MCP App
 ```
 
 Every command that works on images also takes `--directory` and `--data-directory`.
 
 `steer-svg-image`, `cancel-image`, and `delete-image` print nothing. `manifest` prints JSON. The others print text, or JSON with `--json`.
+
+`app` calls `lib.app_server().open()`, prints its URL, and keeps serving until Ctrl+C, which exits 0.
+`mcp` calls `image_design.adapters.mcp.run_stdio()`, for MCP clients that launch the server themselves. stdin and stdout carry only MCP messages until the client disconnects.
 
 A command exits with 1 and prints the error to stderr when the library raises `ImageDesignError`. An invalid command line exits with 2.

@@ -1,10 +1,12 @@
 import asyncio
 from collections.abc import Callable, Coroutine
+import contextlib
 import io
 import json as json_module
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Annotated, Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -16,6 +18,7 @@ from typer.core import TyperCommand, TyperOption
 from typer.models import CommandFunctionType
 
 from image_design import lib
+from image_design.adapters import mcp as mcp_adapter
 from image_design.core.skill import DISTRIBUTION
 from image_design.schemas import (
     DEFAULT_CHATGPT_REASONING_EFFORT,
@@ -467,6 +470,32 @@ def read_image_activity(
         typer.echo(f"{activity.name} has had no run.")
     else:
         typer.echo(f"Status: {activity.status}. To read only what comes next, pass --after {activity.cursor}")
+
+
+@app.command("app")
+def app_(
+    port: Annotated[int | None, typer.Option(help="The port to bind; a free one is chosen when omitted.")] = None,
+) -> None:
+    """Serve the app in a browser page on this machine and print its URL.
+
+    Keeps serving until Ctrl+C. Exits 1 with the cause and remedy when the port is held.
+    """
+    app_server = lib.app_server()
+    typer.echo(app_server.open(port).url)
+    with contextlib.suppress(KeyboardInterrupt):
+        while True:
+            time.sleep(1)
+    app_server.close()
+
+
+@app.command()
+def mcp() -> None:
+    """Serve the app's MCP server on stdio, with the app as an MCP App.
+
+    For MCP clients that launch the server themselves. Reads and writes MCP messages on stdin and stdout until the
+    client disconnects; prints nothing else to stdout.
+    """
+    mcp_adapter.run_stdio()
 
 
 @app.command()

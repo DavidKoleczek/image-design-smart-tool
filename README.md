@@ -49,6 +49,22 @@ uv tool uninstall image-design
 ## Interface
 
 ```bash
+# Run the app in background on your system at http://127.0.0.1:8789
+# PowerShell (Windows)
+Start-Process image-design -ArgumentList "app", "--port", "8789" -WindowStyle Hidden
+# Stop it on PowerShell
+Stop-Process -Id (Get-NetTCPConnection -LocalPort 8789 -State Listen).OwningProcess
+
+# bash (macOS, Linux)
+nohup image-design app --port 8789 > /dev/null 2>&1 &
+# Stop it on bash
+pkill -f "image-design app --port 8789"
+
+# Serve the app as an MCP App
+image-design mcp
+# Serve the app in the browser
+image-design app
+
 image-design generate-openai-image "A paper-cut cactus in a terracotta pot." --name concepts/cactus.png
 image-design generate-chatgpt-image "Make the pot blue." --name concepts/cactus.png
 image-design draw-svg-image "A flat vector sailboat on calm water at sunset. No text." --name sailboat.svg

@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "image-design": { "command": "uv", "args": ["run", "image-design", "mcp"] }
+  }
+}

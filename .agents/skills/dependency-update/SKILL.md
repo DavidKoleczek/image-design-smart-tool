@@ -1,6 +1,6 @@
 ---
 name: dependency-update
-description: Run this to update the Python dependencies to the newest versions the cooldown allows.
+description: Run this to update the Python and app dependencies to the newest versions the cooldown allows.
 disable-model-invocation: true
 metadata:
   internal: true
@@ -8,7 +8,7 @@ metadata:
 
 # Dependency update
 
-All dependencies have a cooldown time: `exclude-newer = "5 days"` under `[tool.uv]` in `pyproject.toml`.
+All dependencies have a cooldown time. `exclude-newer = "5 days"` under `[tool.uv]` in `pyproject.toml`, and `minimumReleaseAge: 7200` (minutes) in `app/pnpm-workspace.yaml`.
 Never apply a major version upgrade yourself. Collect each one, check whether its peers allow it, and report it at the end for the user to decide.
 
 ## Python
@@ -18,17 +18,32 @@ Never apply a major version upgrade yourself. Collect each one, check whether it
 1. Raise each floor that is behind to that version, keeping the form the entry already uses (`>=2.14,<3.0` stays two-part, `>=0.27.3,<0.28.0` stays three-part). Never raise a cap: a latest version at or past the cap is a major upgrade to report.
 1. Update `uv_build` under `[build-system]` to the latest version, moving its cap with it. It is the one exception to the cap rule.
 1. Run `uv lock --upgrade`. It respects the cooldown and the caps, and moves transitive dependencies too. Do this even when `pyproject.toml` did not change.
-1. Run `uv sync --frozen --all-extras --all-groups`. On Windows this fails with `failed to remove file ... image-design.exe` while another process is running `image-design`. Either stop that process, or verify in a throwaway environment and tell the user to sync afterwards:
+1. Run `uv sync --frozen --all-extras --all-groups`. On Windows this fails with `failed to remove file ... image-design.exe` while another process is running `image-design`, such as an agent session with the `image-design` MCP server. Either stop that process, or verify in a throwaway environment and tell the user to sync afterwards:
 
    ```bash
    UV_PROJECT_ENVIRONMENT=temp/.venv-verify uv sync --frozen --all-extras --all-groups
    ```
 
    Then prefix the checks below with the same variable and delete `temp/.venv-verify` when done.
-1. Run `uv build --wheel -o temp/dist` and confirm the wheel still holds `SMART_TOOL.md` and every capability's `skill_*.md`. Delete `temp/dist` after.
-1. `.pre-commit-config.yaml` only has local hooks that run through `uv run`, so it has no hook versions to bump. If a remote hook repository is ever added, bump its `rev` to its latest release the same way.
+1. Run `uv build --wheel -o temp/dist` and confirm the wheel still holds `SMART_TOOL.md`, every capability's `skill_*.md`, and `capabilities/app/static/`. Delete `temp/dist` after.
+1. `.pre-commit-config.yaml` only has local hooks that run through `uv run` and `build-app.py`, so it has no hook versions to bump. If a remote hook repository is ever added, bump its `rev` to its latest release the same way.
+
+## App
+
+1. Run `pnpm --dir app outdated`. Its Latest column already respects the cooldown.
+1. Note every row whose Latest is a new major (for example `typescript` 6 to 7). For each, check its peers with `pnpm view <package>@<version> peerDependencies`, and the peer ranges of the packages that depend on it, so the report can say whether it is possible today. A common blocker is `typescript-eslint` capping `typescript`.
+1. Update everything else, excluding each major by name:
+
+   ```bash
+   pnpm --dir app update --latest '!<major-1>' '!<major-2>'
+   ```
+
+   Read the output for peer dependency warnings, especially across the React, Vite, and ESLint packages.
+1. Run `pnpm --dir app update <package>` for each excluded major, so it still moves to the newest release within its current range.
+1. If `app/package.json` has a `pnpm.overrides` section, make sure each override still matches the updated versions, then run `pnpm --dir app install`.
+1. Run `uv run build-app.py`. It installs, lints, formats, type checks, and compiles both the host page and the view into `src/image_design/capabilities/app/static/`. Those compiled files are committed, so they are part of the change.
 
 ## Finish
 
 1. Run `prek run --all-files` and `uv run pytest`; both must pass.
-1. Report what moved, every major upgrade you held back with whether its peers allow it, and whether the user still needs to run `uv sync`.
+1. Report what moved on each side, every major upgrade you held back with whether its peers allow it, and whether the user still needs to run `uv sync`.

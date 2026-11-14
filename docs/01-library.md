@@ -301,6 +301,43 @@ An image's file is kept apart from the tool's data for it. With the default `dat
 If you set `data_directory`, pass the same one in every call. The tool does not record where it is.
 An image file that you put in the directory yourself is listed like any other.
 
+## App
+
+Its view is an [MCP App](https://github.com/modelcontextprotocol/ext-apps): one HTML file that speaks only to its host. Hosts that render MCP Apps show it inline; for those that do not, `app_server` serves it in a browser page.
+
+```python
+def app_view() -> str
+```
+
+The view's HTML, compiled from `app/` and offered as the `ui://image-design/app` resource in the MCP server. Raises `ImageDesignError` naming the build command when the view is not compiled.
+
+```python
+def app_server() -> AppServer
+```
+
+```python
+class AppServer:
+    server: Server
+
+    def open(self, port: int | None = None) -> App: ...
+    def close(self) -> None: ...
+```
+
+- `port`: The port for the browser page, on `127.0.0.1`. If you do not give a port, the tool selects a free port. If another program uses the port, `open` raises `ImageDesignError`.
+
+`server` is an MCP SDK low-level server to run over any transport; several at once share the state. Its one tool, `open_app`, opens the browser page and returns its URL. The view is listed as a resource only to hosts that render MCP Apps.
+`open` serves the browser host page on `127.0.0.1` from daemon threads and returns once it listens, or returns the one already open. The page reaches the same server at its own `/mcp` and renders the view behind a sandbox proxy on a second port, a separate origin as the MCP Apps spec requires. `close` stops serving. `App.url` is where to open the page.
+
+## MCP server
+
+The app's MCP server over stdio, a thin surface over the library like the CLI, in `image_design.adapters.mcp`.
+
+```python
+def run_stdio() -> None
+```
+
+It runs `app_server().server` over stdio until the client disconnects, then stops the browser page if `open_app` opened it.
+
 ## Manifest
 
 The tool's `SMART_TOOL.md` as structured data: the frontmatter as fields, the Markdown below it as `Manifest.body`.
