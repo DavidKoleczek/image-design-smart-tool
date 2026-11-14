@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import {
+  readImageFrame,
   readImagePicture,
   readRunPreview,
   type ImageSummary,
@@ -17,6 +18,8 @@ export type Picture = {
   small: boolean;
   /** For an in-progress image of a run: the run's id, and the index the image has among the run's previews. */
   preview: { run: string; index: number } | null;
+  /** For one frame of an animation: its index from 0. */
+  frame?: number;
   /**
    * What tells its content from any other: the hash of the file or version, so the same content is read once however
    * it is reached, or the run and index of an in-progress image.
@@ -69,15 +72,34 @@ export function previewPicture(
   };
 }
 
+/** One frame of an animation, which `of` is as a whole. */
+export function framePicture(
+  of: Picture,
+  frame: number,
+  small = false,
+): Picture {
+  return { ...of, small, frame, key: `${of.key}#${frame}` };
+}
+
 type Entry = { promise: Promise<string>; url: string | null };
 
 // Thumbnails are a few kilobytes each, so a directory's worth stays; a full image can be megabytes, so only the last
-// few looked at do, enough to go back and forth between versions without reading them again.
-const KEPT = { small: 600, full: 12 };
+// few looked at do, enough to go back and forth between versions without reading them again. An animation's frames
+// are kept apart from those, so playing one through does not push out the images around it.
+const KEPT = { small: 600, full: 12, frames: 96 };
 const caches = {
   small: new Map<string, Entry>(),
   full: new Map<string, Entry>(),
+  frames: new Map<string, Entry>(),
 };
+
+function cacheOf(picture: Picture): Map<string, Entry> {
+  return picture.small
+    ? caches.small
+    : picture.frame === undefined
+      ? caches.full
+      : caches.frames;
+}
 
 // At most this many thumbnails are read at once, so the image in view is not read behind a directory of them.
 const SMALL_AT_ONCE = 4;
@@ -104,7 +126,7 @@ function inTurn(read: () => Promise<string>): Promise<string> {
 }
 
 function entryOf(picture: Picture): Entry {
-  const cache = picture.small ? caches.small : caches.full;
+  const cache = cacheOf(picture);
   const key = picture.key;
   const kept = cache.get(key);
   if (kept) {
@@ -113,11 +135,13 @@ function entryOf(picture: Picture): Entry {
     cache.set(key, kept);
     return kept;
   }
-  const { preview } = picture;
+  const { preview, frame } = picture;
   const read = () =>
     preview
       ? readRunPreview(picture.name, preview.run, preview.index)
-      : readImagePicture(picture.name, picture.version, picture.small);
+      : frame !== undefined
+        ? readImageFrame(picture.name, picture.version, frame, picture.small)
+        : readImagePicture(picture.name, picture.version, picture.small);
   const entry: Entry = {
     promise: picture.small ? inTurn(read) : read(),
     url: null,
@@ -130,8 +154,13 @@ function entryOf(picture: Picture): Entry {
     () => cache.delete(key),
   );
   cache.set(key, entry);
+  const most = picture.small
+    ? KEPT.small
+    : frame === undefined
+      ? KEPT.full
+      : KEPT.frames;
   for (const old of cache.keys()) {
-    if (cache.size <= (picture.small ? KEPT.small : KEPT.full)) {
+    if (cache.size <= most) {
       break;
     }
     cache.delete(old);
@@ -139,12 +168,19 @@ function entryOf(picture: Picture): Entry {
   return entry;
 }
 
+/** Read the picture ahead of when it shows, and say once it has been read, or that it could not be. */
+export function readAhead(picture: Picture): Promise<unknown> {
+  return entryOf(picture).promise;
+}
+
 type Loaded = { picture: Picture; url: string | null; error: string | null };
 
 /**
- * The picture read through the host: its data URL once read, or why it could not be. Two kinds keep showing what
- * showed of the same image until the new one is read: a thumbnail, so a row does not blink each time its image
- * changes, and whatever comes before or after an in-progress image, so an image forms without going blank between.
+ * The picture read through the host: its data URL once read, or why it could not be.
+ *
+ * Some pictures keep showing what showed of the same image until the new one is read. A thumbnail does, so a row does
+ * not blink each time its image changes. An in-progress image and what comes before or after it do, so an image
+ * forms without going blank. A frame of an animation does, so it plays without going blank.
  */
 export function usePicture(picture: Picture | null): {
   url: string | null;
@@ -157,6 +193,7 @@ export function usePicture(picture: Picture | null): {
   const key = picture?.key ?? null;
   const run = picture?.preview?.run ?? null;
   const index = picture?.preview?.index ?? null;
+  const frame = picture?.frame;
 
   useEffect(() => {
     if (name === null || key === null) {
@@ -167,6 +204,7 @@ export function usePicture(picture: Picture | null): {
       version,
       small,
       preview: run !== null && index !== null ? { run, index } : null,
+      ...(frame !== undefined ? { frame } : {}),
       key,
     };
     let current = true;
@@ -179,13 +217,12 @@ export function usePicture(picture: Picture | null): {
     return () => {
       current = false;
     };
-  }, [name, version, small, key, run, index]);
+  }, [name, version, small, key, run, index, frame]);
 
   if (picture === null) {
     return { url: null, error: null };
   }
-  const cache = picture.small ? caches.small : caches.full;
-  const ready = cache.get(picture.key)?.url ?? null;
+  const ready = cacheOf(picture).get(picture.key)?.url ?? null;
   if (ready !== null) {
     return { url: ready, error: null };
   }
@@ -201,7 +238,10 @@ export function usePicture(picture: Picture | null): {
     loaded.picture.small === picture.small &&
     loaded.picture.name === picture.name &&
     (picture.small
-      ? loaded.picture.version === picture.version
-      : picture.preview !== null || loaded.picture.preview !== null);
+      ? loaded.picture.version === picture.version &&
+        loaded.picture.frame === picture.frame
+      : picture.preview !== null ||
+        loaded.picture.preview !== null ||
+        (picture.frame !== undefined && loaded.picture.frame !== undefined));
   return { url: before ? loaded.url : null, error: null };
 }

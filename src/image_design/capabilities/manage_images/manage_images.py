@@ -7,7 +7,18 @@ import secrets
 import shutil
 import time
 
-from image_design.schemas import ImageActivity, ImageDesignError, ImageEvent, ImageListing, ImageRunRecord, ImageSummary
+from image_design.schemas import (
+    ImageActivity,
+    ImageDesignError,
+    ImageEvent,
+    ImageFrame,
+    ImageFrames,
+    ImageListing,
+    ImageRunRecord,
+    ImageSummary,
+    ImageView,
+)
+from image_design.shared.images import pictures
 from image_design.shared.images.runs import CANCEL
 from image_design.shared.images.store import (
     EVENTS,
@@ -20,12 +31,10 @@ from image_design.shared.images.store import (
     kept_images,
     load_runs,
     read_events,
-    read_state,
     release_lock,
     remove_empty_folders,
     require_image,
     take_lock,
-    write_state,
 )
 from image_design.shared.images.store import alive as process_alive
 
@@ -37,7 +46,7 @@ EXIT_WAIT_SECONDS = 1
 
 
 def list_images(directory: Path | None = None, data_directory: Path | None = None) -> ImageListing:
-    """Every image in the directory, in name order, and the one viewed last. Reads only.
+    """Every image in the directory, in name order. Reads only.
 
     An image file the tool keeps no data for, such as one put there by hand, is listed with no versions.
     """
@@ -49,22 +58,38 @@ def list_images(directory: Path | None = None, data_directory: Path | None = Non
     names = {image.name.casefold() for image in kept}
     images.extend(found_summary(root, name) for name in found_names(root, data) if name.casefold() not in names)
     images.sort(key=lambda summary: summary.name.casefold())
-    last_viewed = read_state(data).last_viewed
-    return ImageListing(
-        directory=root,
-        data_directory=data,
-        images=images,
-        last_viewed=last_viewed if any(summary.name == last_viewed for summary in images) else None,
-        unreadable=unreadable,
-    )
+    return ImageListing(directory=root, data_directory=data, images=images, unreadable=unreadable)
 
 
-def view_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> ImageSummary:
-    """Record the image as the one viewed last in its directory, and return its summary."""
+def view_image(
+    name: str,
+    version: str | None = None,
+    frames_output: Path | None = None,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+) -> ImageView:
+    """The image's summary, with its file or one of its versions frame by frame. Writes only to `frames_output`, a
+    folder each frame is written to as a PNG named after its index."""
     root, data = directories(directory, data_directory)
-    summary = _summary(_find(root, data, name), root)
-    write_state(data, read_state(data).model_copy(update={"last_viewed": summary.name}))
-    return summary
+    found = _find(root, data, name)
+    summary = _summary(found, root)
+    if version is not None:
+        image = found if isinstance(found, StoredImage) else require_image(root, data, name)
+        viewed = _frames(image.folder / image.version(version).file, version)
+    elif summary.width is not None:
+        viewed = _frames(root / summary.name, None)
+    elif frames_output is not None:
+        raise ImageDesignError(
+            f"{summary.name} has no file that can be read, so it has no frames to write out. Pass --version to write "
+            "out a version's frames.",
+            "no-such-file",
+            summary.name,
+        )
+    else:
+        viewed = None
+    if viewed is not None and frames_output is not None:
+        _write_frames(viewed, frames_output, summary.name)
+    return ImageView(**dict(summary), viewed=viewed)
 
 
 def move_image(
@@ -117,7 +142,6 @@ def move_image(
         if isinstance(found, StoredImage):
             found.record.name = new
             found.save_record()
-        _follow(data, old, new)
     finally:
         for lock in locks:
             release_lock(lock, holder)
@@ -131,7 +155,6 @@ def delete_image(name: str, directory: Path | None = None, data_directory: Path 
     if isinstance(found, str):
         _remove_file(root / found, found)
         remove_empty_folders((root / found).parent, root)
-        _follow(data, found, None)
         return
     run = found.running()
     if run is not None and run.pid == os.getpid():
@@ -165,7 +188,6 @@ def delete_image(name: str, directory: Path | None = None, data_directory: Path 
             raise
         shutil.rmtree(aside, ignore_errors=True)
         remove_empty_folders(found.path.parent, root)
-        _follow(data, found.name, None)
     finally:
         release_lock(lock, holder)
 
@@ -227,6 +249,38 @@ def read_image_activity(
     return ImageActivity(name=image.name, events=events, status=image.summary().status, cursor=cursor)
 
 
+def _frames(path: Path, version: str | None) -> ImageFrames:
+    """Each frame of the file and how long it shows: one frame for a still image."""
+    picture = pictures.read(path)
+    # An SVG has the one frame resvg renders, which Pillow cannot read.
+    reel = pictures.reel(path) if picture.frames > 1 else None
+    durations = [reel.duration_ms(index) for index in range(reel.count)] if reel is not None else [0]
+    return ImageFrames(
+        version=version,
+        path=path,
+        width=picture.width,
+        height=picture.height,
+        frames=[ImageFrame(index=index, duration_ms=duration) for index, duration in enumerate(durations)],
+    )
+
+
+def _write_frames(viewed: ImageFrames, output: Path, name: str) -> None:
+    """Write each frame to `output` as a PNG, and set each frame's `path` to its file."""
+    reel = pictures.reel(viewed.path) if len(viewed.frames) > 1 else None
+    try:
+        output.mkdir(parents=True, exist_ok=True)
+        for frame in viewed.frames:
+            written = output / f"frame-{frame.index}.png"
+            written.write_bytes(reel.png(frame.index) if reel is not None else pictures.png(viewed.path))
+            frame.path = written.resolve()
+    except OSError as error:
+        raise ImageDesignError(
+            f"The frames of {name} could not be written to {output}: {error}. Pass a folder that can be written.",
+            None,
+            name,
+        ) from None
+
+
 def _find(root: Path, data: Path, name: str) -> StoredImage | str:
     """The image named `name`: what the tool keeps for it, or only its name when it is a file the tool has not kept.
 
@@ -255,13 +309,6 @@ def _name(found: StoredImage | str) -> str:
 
 def _summary(found: StoredImage | str, root: Path) -> ImageSummary:
     return found.summary() if isinstance(found, StoredImage) else found_summary(root, found)
-
-
-def _follow(data: Path, name: str, new_name: str | None) -> None:
-    """Keep the record of the image viewed last pointing at it when it moves, and empty it when the image is gone."""
-    state = read_state(data)
-    if state.last_viewed is not None and state.last_viewed.casefold() == name.casefold():
-        write_state(data, state.model_copy(update={"last_viewed": new_name}))
 
 
 def _remove_file(path: Path, name: str) -> None:

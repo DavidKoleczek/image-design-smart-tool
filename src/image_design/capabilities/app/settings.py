@@ -56,8 +56,19 @@ def read_app_state(data: Path) -> AppState:
 
 
 def save_app_state(state: dict[str, Any], data: Path) -> AppState:
-    """Check `state` and keep it for the images of `data`, replacing what was there."""
+    """Check `state` and keep it for the images of `data`, replacing what was there but the image shown."""
     checked = _checked(state, AppState, "state", "read_app_state", "bad-state")
+    # Set by the server alone, so a view saving what it read earlier does not undo `open_app` bringing an image up.
+    checked.shown = read_app_state(data).shown
+    return _write_state(checked, data)
+
+
+def show_image(name: str | None, data: Path) -> None:
+    """Keep `name` as the image the app shows, which it opens on; None for none."""
+    _write_state(read_app_state(data).model_copy(update={"shown": name}), data)
+
+
+def _write_state(checked: AppState, data: Path) -> AppState:
     path = state_path(data)
     try:
         # The data directory's .gitignore leaves this folder out of a project's commits.

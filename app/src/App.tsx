@@ -21,13 +21,19 @@ import {
   type CanvasMode,
 } from "@/lib/canvas";
 import { onDisplay, requestDisplayMode } from "@/lib/host";
-import { moveDraft, NEW_IMAGE, updateDraft } from "@/lib/drafts";
+import { moveDraft, NEW_IMAGE, updateDraft, useDraft } from "@/lib/drafts";
 import { moveDrawing, sentDrawing } from "@/lib/drawing";
 import { useImages } from "@/lib/images";
 import { paneLayout, useBreakpoint } from "@/lib/layout";
 import { useMethods } from "@/lib/methods";
 import { addEntries, clearReferences, moveReferences } from "@/lib/references";
-import { guideBlock, isDrawing, makesNew, pickedModel } from "@/lib/request";
+import {
+  guideBlock,
+  isDrawing,
+  kindOf,
+  makesNew,
+  pickedModel,
+} from "@/lib/request";
 import { useRuns } from "@/lib/runs";
 import { updateSettings, useLayoutResets, useSettings } from "@/lib/settings";
 import { useShortcuts } from "@/lib/shortcuts";
@@ -57,11 +63,18 @@ function App() {
   const method = state.method;
   const model =
     methods && method === "model" ? pickedModel(state.request, methods) : null;
+  const draft = useDraft(image?.name ?? NEW_IMAGE);
   // A request that makes a new image from the one in view takes neither marks nor a mask.
   const fresh =
     image !== null &&
     methods !== null &&
-    makesNew(image, method, model, methods);
+    makesNew(
+      image,
+      method,
+      model,
+      methods,
+      kindOf(image, draft.kind, state.request, model),
+    );
   const blocks: Record<CanvasMode, string | null> = {
     markup: guideBlock("markup", image, shown, model, fresh),
     mask: guideBlock("mask", image, shown, model, fresh),
@@ -301,6 +314,7 @@ function App() {
                     listing.images.length > 0
                   }
                   search={search}
+                  onNew={startNew}
                   {...picking}
                 />
               }

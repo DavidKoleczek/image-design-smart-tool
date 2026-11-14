@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from fake_openai import FakeImagesAPI, picture
+from PIL import Image
 import pytest
 from typer.testing import CliRunner
 
@@ -47,7 +48,7 @@ async def test_a_directory_lists_the_images_the_tool_made_and_the_files_put_ther
     (ROOT / "concepts/cactus.png").write_bytes(picture(640, 480, "#ffffff"))
     [changed, _] = lib.list_images().images
 
-    assert (empty.images, empty.last_viewed, read_only) == ([], None, True)
+    assert (empty.images, read_only) == ([], True)
     assert (listing.directory, listing.data_directory) == (ROOT.resolve(), DATA.resolve())
     assert [summary.name for summary in listing.images] == ["concepts/cactus.png", "Photo.PNG"]
     assert (cactus.width, cactus.height, cactus.frames, cactus.current, cactus.status) == (1024, 1024, 1, "v1", "done")
@@ -77,30 +78,33 @@ async def test_a_listing_leaves_out_an_image_whose_data_cannot_be_read_and_says_
         lib.list_images(directory=Path("a-file"))
 
 
-async def test_the_image_viewed_last_is_recorded_and_follows_the_image_when_it_moves_or_goes(
-    images_api: FakeImagesAPI,
-) -> None:
+async def test_viewing_an_image_only_reads_it(images_api: FakeImagesAPI) -> None:
     await made("A cactus.", "cactus.png")
     by_hand("photo.jpg")
+    kept = sorted(path for path in DATA.rglob("*") if path.is_file())
 
     viewed = lib.view_image("CACTUS.png")
-    after_view = lib.list_images().last_viewed
-    lib.move_image("cactus.png", "concepts/cactus.png")
-    after_move = lib.list_images().last_viewed
-    lib.view_image("photo.jpg")
-    after_another = lib.list_images().last_viewed
-    lib.delete_image("photo.jpg")
-    after_delete = lib.list_images().last_viewed
+    photo = lib.view_image("photo.jpg")
+    with pytest.raises(
+        ImageDesignError, match=r"no image named 'gone\.png'.*The images there: cactus\.png, photo\.jpg"
+    ):
+        lib.view_image("gone.png")
+    (ROOT / "cactus.png").unlink()
+    without_file = lib.view_image("cactus.png")
+    earlier = lib.view_image("cactus.png", version="v1")
 
     assert (viewed.name, viewed.current) == ("cactus.png", "v1")
-    assert (after_view, after_move, after_another, after_delete) == (
-        "cactus.png",
-        "concepts/cactus.png",
-        "photo.jpg",
-        None,
-    )
-    with pytest.raises(ImageDesignError, match=r"no image named 'gone.png'.*The images there: concepts/cactus.png"):
-        lib.view_image("gone.png")
+    assert viewed.viewed is not None
+    assert (viewed.viewed.version, viewed.viewed.width, len(viewed.viewed.frames)) == (None, 1024, 1)
+    assert (photo.name, photo.versions, photo.viewed and photo.viewed.width) == ("photo.jpg", [], 800)
+    # An image whose file is gone has nothing to view frame by frame but its versions.
+    assert (without_file.modified, without_file.viewed, without_file.versions[0].id) == (None, None, "v1")
+    assert earlier.viewed is not None
+    assert earlier.viewed.version == "v1"
+    with pytest.raises(ImageDesignError, match="has no file that can be read") as nothing:
+        lib.view_image("cactus.png", frames_output=Path("out"))
+    assert nothing.value.reason == "no-such-file"
+    assert sorted(path for path in DATA.rglob("*") if path.is_file()) == kept
 
 
 async def test_a_moved_image_keeps_its_versions_and_the_next_edit_adds_to_them(images_api: FakeImagesAPI) -> None:
@@ -160,6 +164,59 @@ async def test_a_deleted_image_is_gone_with_everything_kept_for_it(images_api: F
         lib.delete_image("fern.png")
 
 
+async def test_viewing_an_image_gives_its_frames_and_how_long_each_shows_and_writes_them_out_as_pngs(
+    images_api: FakeImagesAPI,
+) -> None:
+    run = await lib.generate_openai_image("A cactus swaying.", name="loops/sway.gif", frames=3, frame_ms=120)
+    assert (await run.result()).status == "done"
+    edit = await lib.generate_openai_image("Sway further.", name="loops/sway.gif", frames=2, frame_ms=300)
+    assert (await edit.result()).status == "done"
+    by_hand("photo.png")
+
+    read = lib.view_image("loops/sway.gif").viewed
+    earlier = lib.view_image("loops/sway.gif", version="v1", frames_output=Path("out/frames")).viewed
+    still = lib.view_image("photo.png", frames_output=Path("out/still")).viewed
+    shown = runner.invoke(app, ["view-image", "--name", "loops/sway.gif", "--frames-output", "out/shown"])
+    still_shown = runner.invoke(app, ["view-image", "--name", "photo.png", "--frames-output", "out/still"])
+    with pytest.raises(ImageDesignError, match="no version 'v9'") as unknown:
+        lib.view_image("loops/sway.gif", version="v9")
+    with pytest.raises(ImageDesignError, match=r"no image named 'fern\.gif'") as missing:
+        lib.view_image("fern.gif")
+
+    assert read is not None
+    assert earlier is not None
+    assert still is not None
+    assert (read.version, read.width, read.height) == (None, 512, 512)
+    assert [(frame.index, frame.duration_ms, frame.path) for frame in read.frames] == [(0, 300, None), (1, 300, None)]
+    assert earlier.version == "v1"
+    assert [(frame.index, frame.duration_ms) for frame in earlier.frames] == [(0, 120), (1, 120), (2, 120)]
+    written = [frame.path for frame in earlier.frames]
+    assert written == [(Path("out/frames") / f"frame-{index}.png").resolve() for index in range(3)]
+    # Each frame is the whole picture as it shows then, and the fake paints each frame another color.
+    colors = set()
+    for path in written:
+        assert path is not None
+        with Image.open(path) as frame:
+            assert (frame.format, frame.size) == ("PNG", (512, 512))
+            colors.add(frame.convert("RGB").getpixel((0, 0)))
+    assert len(colors) == 3
+    assert [(frame.index, frame.duration_ms) for frame in still.frames] == [(0, 0)]
+    assert (still.width, still.height, Path("out/still/frame-0.png").is_file()) == (800, 600, True)
+    assert shown.output.splitlines() == [
+        f"{ROOT / 'loops/sway.gif'} holds v2.",
+        "",
+        "- v1: 512x512, 3 frames, openai",
+        "- v2 (in the file): 512x512, 2 frames, openai",
+        "",
+        "loops/sway.gif: 2 frames of 512x512, 600 ms in all.",
+        "",
+        f"- 0: 300 ms, {Path('out/shown/frame-0.png')}",
+        f"- 1: 300 ms, {Path('out/shown/frame-1.png')}",
+    ]
+    assert still_shown.output.splitlines()[-1] == f"photo.png: 800x600. Its frame: {Path('out/still/frame-0.png')}"
+    assert (unknown.value.reason, missing.value.reason) == ("no-such-version", "no-such-image")
+
+
 def test_the_methods_say_what_each_takes_and_what_is_left_to_set_up(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     ready = lib.list_image_methods()
@@ -217,7 +274,6 @@ def test_the_cli_lists_views_moves_and_deletes_images(images_api: FakeImagesAPI)
     assert listed.output.splitlines() == [
         "- concepts/cactus.png: 1024x1024, holds v1, done",
         "- photo.jpg: 800x600, has no versions yet",
-        "Viewed last: concepts/cactus.png",
     ]
     assert [image["name"] for image in json.loads(as_json.output)["images"]] == ["concepts/cactus.png", "photo.jpg"]
     assert (deleted.exit_code, deleted.output) == (0, "")

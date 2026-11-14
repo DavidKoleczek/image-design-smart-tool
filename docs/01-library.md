@@ -64,7 +64,7 @@ The other parameters:
 - `marks`: Shapes drawn over the image to show what the prompt refers to. They are sent as a separate layer, so the image itself is sent unmarked.
 - `mask`: An image the same size as the image, transparent where the model may make changes. It is sent as a PNG, and works only for edits of still images. Cannot be used with `marks`.
 - `version`: The version to edit. By default, the version in the image's file.
-- `frame`: When the image being edited is an animation, the frame to send.
+- `frame`: When the image being edited is an animation, the frame to send, counting from 0. By default, the first. `view_image` returns an image's frames.
 - `model`: `gpt-image-2.6-sunburst`, the default, or the faster `gpt-image-2.6-flare`.
 - `size`, `quality`, `complexity`, `background`, `compression`: Passed to the API. A parameter you leave out uses the API's default, except `size` on an edit, which defaults to the size of the image being edited, rounded to the nearest size the model accepts. `list_image_methods` returns the values each model accepts.
 - `count`: The number of images to make. Each is saved as its own version, and the first becomes the image's file.
@@ -106,6 +106,14 @@ Each `ImageVersion` records its file, its size, and the request that made it.
 
 Only one run can work on an image at a time. A request for an image that already has a run raises `ImageDesignError`.
 A request that fails or times out is not retried, because it may still have been billed.
+
+A process that waits on a run it started can make sure the run does not outlive it:
+
+```python
+def stopped_by_signals(run: ImageRun) -> AbstractContextManager[None]
+```
+
+While the block runs, every signal that ends the process, such as Ctrl+C or its console closing, cancels the run. The CLI waits on its runs this way.
 
 ### OpenAI API key
 
@@ -309,7 +317,13 @@ These functions work on any image, whichever function made it. None of them call
 
 ```python
 def list_images(directory: Path | None = None, data_directory: Path | None = None) -> ImageListing
-def view_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> ImageSummary
+def view_image(
+    name: str,
+    version: str | None = None,
+    frames_output: Path | None = None,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+) -> ImageView
 def restore_image_version(name: str, version: str, directory: Path | None = None, data_directory: Path | None = None) -> ImageSummary
 def move_image(name: str, new_name: str, directory: Path | None = None, data_directory: Path | None = None) -> ImageSummary
 def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None
@@ -324,13 +338,32 @@ def list_image_methods() -> ImageMethods
 ```
 
 - `list_images` returns every image in the directory with its versions and the status of its last run.
-- `view_image` returns one image and records it as the last one viewed. The app opens on that image.
+- `view_image` returns one image with its versions, and in `viewed` the image's file, or the `version` you pass, frame by frame with how long each frame is shown. A still image has one frame. Pass a folder as `frames_output` to also write each frame there as a PNG named `frame-<index>.png`. Nothing else is written.
 - `restore_image_version` replaces the image's file with an earlier version. For an SVG image, it also restores that version's `image.py`.
 - `move_image` renames an image or moves it to another folder. The image keeps its versions. The new name must keep the extension.
 - `delete_image` deletes an image and everything kept for it. If a run is working on the image, it's stopped first.
 - `cancel_image` stops the run that is working on an image. It can be called from any process.
 - `read_image_activity` returns the history of an image: each request, what the agent did, and how each run ended. Pass the `cursor` from an earlier call as `after` to get only what is new. Each run's `started` event has its request, which names the files the run was given relative to the event's `run_folder`.
 - `list_image_methods` returns the three ways of making an image, whether each is set up on this machine, and the models and options each supports. Set up means installed, and for the OpenAI API that the key is set.
+
+```python
+class ImageView(ImageSummary):
+    viewed: ImageFrames | None  # None when the image has no file that can be read and no version was asked for
+
+
+class ImageFrames(BaseModel):
+    version: str | None  # None for the image's file
+    path: Path
+    width: int
+    height: int
+    frames: list[ImageFrame]
+
+
+class ImageFrame(BaseModel):
+    index: int  # from 0, as `frame` names it in generate_openai_image
+    duration_ms: int  # 0 for a still image
+    path: Path | None  # the PNG written for it, when `frames_output` was passed
+```
 
 An image's file is kept apart from the tool's data for it. With the default `data_directory`, the layout is:
 
@@ -375,6 +408,7 @@ class AppServer:
     data_directory: Path
 
     def open(self, port: int | None = None) -> App: ...
+    def show(self, name: str) -> str: ...
     def close(self) -> None: ...
 ```
 
@@ -382,13 +416,14 @@ class AppServer:
 - `port`: The port for the browser page, on `127.0.0.1`. If you do not give a port, the tool selects a free port. If another program uses the port, `open` raises `ImageDesignError`.
 
 `server` is an MCP SDK low-level server to run over any transport; several at once share the state.
-`open` serves the browser host page on `127.0.0.1` from daemon threads and returns once it listens, or returns the one already open. The page reaches the same server at its own `/mcp` and renders the view behind a sandbox proxy on a second port, a separate origin as the MCP Apps spec requires. `close` stops serving. `App.url` is where to open the page.
+`open` serves the browser host page on `127.0.0.1` from daemon threads and returns once it listens, or returns the one already open. The page reaches the same server at its own `/mcp` and renders the view behind a sandbox proxy on a second port, a separate origin as the MCP Apps spec requires. `close` stops serving. `App.url` is where to open the page. `show` brings an image up in the app: an open app switches to it, and one opened later opens on it.
 
-The server has one tool for an agent, `open_app`. It opens the browser page and returns its URL. It also takes `directory` and `data_directory`, and switches the app to them when the directory can be listed.
+The server has one tool for an agent, `open_app`. It opens the browser page and returns its URL. It also takes `directory` and `data_directory`, and switches the app to them when the directory can be listed, and `name`, an image to bring up as `show` does.
 The other tools are for the view. They are listed only to hosts that render MCP Apps, and marked for the app alone. The view and the resource templates are listed to the same hosts.
 
-- `list_images`, `view_image`, `move_image`, `delete_image`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's directory.
-- `generate_openai_image` and `generate_chatgpt_image` start a run on the app's directory with `detach=True` and `origin="app"`, so the image goes on being made when the app closes. They return the image's name and the run's ID once the run has started. They take the prompt, the name, the version to edit, the model and output options, and what guides the request: `references`, `marks`, and for the OpenAI API a `mask`. Each reference is a `path` the app offers or an `upload`, and the mask is an upload. A started run has copied what it was given, so the uploads it took are cleared, and the result's `references` says where each is offered from now.
+- `list_images`, `view_image`, `move_image`, `delete_image`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's directory. `view_image` writes no frames out, and `list_images` also returns `shown`, the image the app showed last.
+- `show_image` records the image the user is looking at, which the app opens on next time.
+- `generate_openai_image` and `generate_chatgpt_image` start a run on the app's directory with `detach=True` and `origin="app"`, so the image goes on being made when the app closes. They return the image's name and the run's ID once the run has started. They take the prompt, the name, the version to edit, the model and output options, and what guides the request: `references`, `marks`, and for the OpenAI API a `mask`. For the OpenAI API they also take `frame`, `frames`, and `frame_ms`. Each reference is a `path` the app offers or an `upload`, and the mask is an upload. A `path` can have a `frame`, which sends that one frame of an animation as a still image. A started run has copied what it was given, so the uploads it took are cleared, and the result's `references` says where each is offered from now.
 - `preview_openai_image_request` and `preview_chatgpt_image_request` take the same arguments and return the `ImageRequestPreview`.
 - `draw_svg_image` starts a drawing the same way. It takes the prompt, the name, `references`, `marks`, the budgets, `resume_session`, the agent provider, model, and reasoning effort, and `timeout_seconds`.
 - `steer_svg_image` leaves a message for the agent drawing an image, with `references` and `marks`. The message holds copies of what it was given, so the uploads it took are cleared.
@@ -399,14 +434,16 @@ The other tools are for the view. They are listed only to hosts that render MCP 
 - `choose_reference_files` and `choose_reference_folder` ask the user in the platform's own file dialog, which needs Tk in the Python that runs the app.
 - `keep_reference` copies an upload into `app/pins` in the data directory, so a dropped image can be pinned. The copy is cleared once the state is saved without it among the pins.
 - `read_openai_key`, `enter_openai_key`, and `clear_openai_key` are over `openai_api_key_status`, `save_openai_api_key`, and `clear_openai_api_key`. None takes or returns the key. `enter_openai_key` has the user type it into a window on the machine the server runs on, so the key is in no message between the view, its host, and the server.
-- `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, and the pane sizes.
-- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, the agent and budgets for a new drawing, and the pinned references and folders.
+- `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, whether a request's advanced options show, and the pane sizes.
+- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, whether a new image is a still image or an animation, the agent and budgets for a new drawing, and the pinned references and folders. The image the app shows is kept there too, but only `show_image`, `show`, and `open_app` change it.
 
-The view reads images as resources, each as base64. A read is refused unless the listing has that image or version, or the image's activity has that preview.
+The view reads images as resources, each as base64. A read is refused unless the listing has that image or version, the version has that frame, or the image's activity has that preview.
 
 - `image-design://images/{+name}` is an image's file.
 - `image-design://versions/{version}/{+name}` is a version kept for an image, such as `v2`.
 - `image-design://thumbnails/{version}/{+name}` is a WebP of a version that fits 256 by 256 pixels. Use `file` as the version for the image's file.
+- `image-design://frames/{version}/{index}/{+name}` is one frame of a version as a PNG, by its index from 0. Use `file` as the version for the image's file.
+- `image-design://frame-thumbnails/{version}/{index}/{+name}` is a WebP of one frame that fits 256 by 256 pixels.
 - `image-design://previews/{run}/{index}/{+name}` is an in-progress image of a run. `run` is the run's ID, and `index` is the one its `preview` event has.
 - `image-design://references/{+path}` is a WebP that fits 256 by 256 pixels of an image the app offers as a reference, by its path on the machine. It is refused unless the file is an image in the app's directory, pinned, in a folder pinned to show its files, used before, chosen in the file dialog, or kept in the data directory as a version or as a copy of what a run was given. A request's references are held to the same rule.
 

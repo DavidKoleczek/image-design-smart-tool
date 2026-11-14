@@ -1,5 +1,5 @@
 `generate-openai-image` creates or edits an image with an OpenAI image model through the Images API.
-It needs the `openai` extra and an OpenAI API key: `OPENAI_API_KEY` in the environment, or else the key the user saved from the app's settings or with `save_openai_api_key`. Each request is billed to that key, and it is never retried.
+It needs the `openai` extra and an OpenAI API key: `OPENAI_API_KEY` in the environment, or else the key saved with `save_openai_api_key`. Each request is billed to that key, and it is never retried.
 
 A new `--name` creates the image. The name of an image that exists edits it and overwrites its file.
 Every image made is kept as a version in the data directory, so `restore-image-version` can put an earlier one back.
@@ -38,7 +38,8 @@ A sketch drawn in several strokes has the first in `points` and the others, each
 - `--mask`: An image the image's size, transparent where the model may make changes, sent as a PNG. Only for edits of
   still images, and not with `--marks`. The model treats it as guidance.
 - `--version`: The version to edit, such as `v2`. Defaults to the one in the image's file.
-- `--frame`: When the image being edited is an animation, the frame to send, from 0.
+- `--frame`: When the image being edited is an animation, the frame to send, from 0. Defaults to the first.
+  `view-image` lists them.
 - `--model`: `gpt-image-2.6-sunburst`, the default, or the faster `gpt-image-2.6-flare`.
 - `--size`: `WIDTHxHEIGHT`, in multiples of 16. Defaults to the API's choice, and to the image's own size for an edit.
 - `--quality`: `low`, `medium`, `high`, `xhigh`, `max`, or `auto`.

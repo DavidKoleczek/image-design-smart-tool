@@ -62,7 +62,7 @@ image-design cancel-image --name sailboat.svg
 
 ```
 image-design list-images                                         the images in the directory
-image-design view-image --name <name>                            one image and its versions
+image-design view-image --name <name> [--frames-output <dir>]   one image, its versions, and its frames
 image-design restore-image-version --name <name> --version <v>   put an earlier version back
 image-design move-image --name <name> --new-name <name>          rename or move an image
 image-design delete-image --name <name>                          delete an image and its data

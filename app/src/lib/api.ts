@@ -4,6 +4,7 @@ import { AppError } from "@/lib/errors";
 import { app } from "@/lib/host";
 
 const LIST_TOOL = "list_images";
+const SHOW_TOOL = "show_image";
 const VIEW_TOOL = "view_image";
 const MOVE_TOOL = "move_image";
 const DELETE_TOOL = "delete_image";
@@ -38,9 +39,11 @@ const SAVE_STATE_TOOL = "save_app_state";
 const IMAGE_FILE_PREFIX = "image-design://images/";
 const IMAGE_VERSION_PREFIX = "image-design://versions/";
 const IMAGE_THUMBNAIL_PREFIX = "image-design://thumbnails/";
+const IMAGE_FRAME_PREFIX = "image-design://frames/";
+const FRAME_THUMBNAIL_PREFIX = "image-design://frame-thumbnails/";
 const RUN_PREVIEW_PREFIX = "image-design://previews/";
 const REFERENCE_PREFIX = "image-design://references/";
-// In a thumbnail URI, names the image file where a version id would be.
+// In the URI of a thumbnail or a frame, names the image file where a version id would be.
 const FILE = "file";
 
 /** `ImageRunStatus` in schemas.py. */
@@ -144,12 +147,22 @@ export type ImageActivity = {
   cursor: string | null;
 };
 
-/** `ImageListing` in schemas.py. */
+/** The fields of `ImageView` in schemas.py that the view reads. */
+export type ImageView = ImageSummary & {
+  /** The version asked for, else the image's file; null when it has no file that can be read. */
+  viewed: {
+    /** In order. A still image has one. */
+    frames: { index: number; duration_ms: number }[];
+  } | null;
+};
+
+/** `AppImages` in schemas.py. */
 export type ImageListing = {
   directory: string;
   data_directory: string;
   images: ImageSummary[];
-  last_viewed: string | null;
+  /** The image the app showed last; null when it has shown none, or that image is gone. */
+  shown: string | null;
   unreadable: string[];
 };
 
@@ -195,6 +208,10 @@ export type OpenAIImageMethod = MethodSetup & {
   max_images: number;
   max_count: number;
   max_previews: number;
+  /** The fewest and the most frames an animation can have. */
+  frames: [number, number];
+  /** The shortest and the longest a frame can show, in milliseconds. */
+  frame_ms: [number, number];
 };
 
 /** The fields of `IntelligenceModel` in schemas.py that the view reads. */
@@ -246,10 +263,17 @@ export type AppImageRequest = {
   /** Width and height; null for the service's choice, on an edit the image's own size. */
   size: [number, number] | null;
   quality: string;
-  /** The extension a new image's name ends in. */
+  /** The extension a new still image's name ends in. */
   format: string;
   background: string;
   count: number;
+  /** `AppImageKind` in schemas.py: what a new image is. */
+  kind: "image" | "animation";
+  /** A new animation's width and height; null for the service's choice. */
+  frame_size: [number, number] | null;
+  /** How many frames a new animation has, and how long each shows in milliseconds. */
+  frames: number;
+  frame_ms: number;
   /** Null for the service's choice. */
   complexity: string | null;
   compression: number;
@@ -280,8 +304,12 @@ export type SentMark = {
   color: string;
 };
 
-/** A reference as a request names it: a path the app offers, or the upload holding a file the view sent. */
-export type SentReference = { path: string } | { upload: string };
+/**
+ * A reference as a request names it: a path the app offers, with the frame to send when only one frame of an
+ * animation goes, or the upload holding a file the view sent.
+ */
+export type SentReference =
+  { path: string; frame?: number } | { upload: string };
 
 /** `ReferenceEntry` in schemas.py: an image file the app offers as a reference. */
 export type ReferenceEntry = {
@@ -318,6 +346,8 @@ export type ImageRequest =
         prompt: string;
         name: string;
         version?: string;
+        /** The frame of the animation being edited that is sent. */
+        frame?: number;
         model: string;
         size?: [number, number];
         quality: string;
@@ -325,6 +355,9 @@ export type ImageRequest =
         background: string;
         compression?: number;
         count: number;
+        /** For an animation; left out of an edit to keep its own. */
+        frames?: number;
+        frame_ms?: number;
         previews: number;
       };
     }
@@ -431,7 +464,7 @@ async function structuredFrom(
   return result.structuredContent as Record<string, unknown>;
 }
 
-/** The images in the app's directory, in name order, and the one viewed last. */
+/** The images in the app's directory, in name order, and the one the app showed last. */
 export async function listImages(): Promise<ImageListing> {
   const structured = await structuredFrom(LIST_TOOL, {});
   if (!Array.isArray(structured.images)) {
@@ -443,8 +476,19 @@ export async function listImages(): Promise<ImageListing> {
 }
 
 /** Record the image as the one the person is looking at, which the app opens on next time. */
-export async function viewImage(name: string): Promise<ImageSummary> {
-  return (await structuredFrom(VIEW_TOOL, { name })) as ImageSummary;
+export async function showImage(name: string): Promise<void> {
+  await call(SHOW_TOOL, { name });
+}
+
+/** The image, with its file or the version `version` kept for it frame by frame, and how long each frame shows. */
+export async function viewImage(
+  name: string,
+  version: string | null,
+): Promise<ImageView> {
+  return (await structuredFrom(
+    VIEW_TOOL,
+    version === null ? { name } : { name, version },
+  )) as ImageView;
 }
 
 /** Rename the image, or move it to another folder of the directory. */
@@ -588,6 +632,19 @@ export function readImagePicture(
   return version === null
     ? readImage(IMAGE_FILE_PREFIX, name)
     : readImage(IMAGE_VERSION_PREFIX, `${version}/${name}`);
+}
+
+/** One frame of the image's file, or of the version `version` kept for it, as a data URL; with `small`, a thumbnail. */
+export function readImageFrame(
+  name: string,
+  version: string | null,
+  frame: number,
+  small: boolean,
+): Promise<string> {
+  return readImage(
+    small ? FRAME_THUMBNAIL_PREFIX : IMAGE_FRAME_PREFIX,
+    `${version ?? FILE}/${frame}/${name}`,
+  );
 }
 
 /** An in-progress image of a run on the image, by the index its `preview` event has, as a data URL. */

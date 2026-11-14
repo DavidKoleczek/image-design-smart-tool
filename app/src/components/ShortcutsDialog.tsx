@@ -11,6 +11,8 @@ const SHORTCUTS: [string[], string][] = [
   [["+", "-"], "Zoom in or out"],
   [["F"], "Fit"],
   [["C"], "Compare with the version before"],
+  [["Space"], "Play or pause an animation"],
+  [[",", "."], "Previous or next frame"],
   [["/"], "Search images"],
   [["["], "Your images"],
   [["]"], "Request"],

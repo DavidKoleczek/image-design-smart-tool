@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   listImages,
-  viewImage,
+  showImage,
   type ImageListing,
   type ImageSummary,
 } from "@/lib/api";
@@ -15,10 +15,9 @@ type Selection = { image: string } | "new";
 /**
  * The images in the app's directory, polled, and which one is in view.
  *
- * The view opens on the image viewed last, or the first one when none was. After that it changes when the person
- * picks an image or starts a new one, and when the image viewed last changes outside the app, so
- * `image-design view-image` from the host session brings an image up. An image made or changed anywhere else never
- * takes the view.
+ * The view opens on the image the app showed last, or the first one when it showed none. After that it changes when
+ * the person picks an image or starts a new one, and when the server is asked to bring another image up, as `open_app`
+ * from the host session does. An image made or changed anywhere else never takes the view.
  */
 export function useImages(): {
   listing: ImageListing | null;
@@ -26,7 +25,7 @@ export function useImages(): {
   image: ImageSummary | null;
   error: string | null;
   startNew: () => void;
-  /** Bring the image into view, and record it as the one viewed last. */
+  /** Bring the image into view, and record it as the one the app shows. */
   select: (name: string) => void;
   /** List the images now rather than at the next poll, as after a change made here. */
   refresh: () => Promise<void>;
@@ -34,20 +33,20 @@ export function useImages(): {
   const [listing, setListing] = useState<ImageListing | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // The image viewed last as the server last had it; undefined before the first listing.
+  // The image the app shows as the server last had it; undefined before the first listing.
   const followed = useRef<string | null | undefined>(undefined);
   // Counts the picks made here as each starts and as it is recorded. A listing asked for across one may still have
-  // the image viewed before it, so it does not move the view.
+  // the image shown before it, so it does not move the view.
   const picks = useRef(0);
 
   const refresh = useCallback(async () => {
     const asked = picks.current;
     try {
       const fresh = await listImages();
-      if (asked === picks.current && fresh.last_viewed !== followed.current) {
-        followed.current = fresh.last_viewed;
-        if (fresh.last_viewed !== null) {
-          setSelection({ image: fresh.last_viewed });
+      if (asked === picks.current && fresh.shown !== followed.current) {
+        followed.current = fresh.shown;
+        if (fresh.shown !== null) {
+          setSelection({ image: fresh.shown });
         }
       }
       setListing(fresh);
@@ -64,13 +63,13 @@ export function useImages(): {
   const select = useCallback((name: string) => {
     setSelection({ image: name });
     picks.current += 1;
-    viewImage(name)
+    showImage(name)
       .then(
         () => {
           followed.current = name;
         },
         () => {
-          // It stays in view here; only the record of what was viewed last is behind.
+          // It stays in view here; only the record of what the app shows is behind.
         },
       )
       .finally(() => {

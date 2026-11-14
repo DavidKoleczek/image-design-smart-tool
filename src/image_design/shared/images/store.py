@@ -11,7 +11,6 @@ The data directory holds a folder per image, named by the image's id so it stays
     images/<id>/work/           where an agent draws an SVG
     images/<id>/sessions/       the agents' sessions, which a later run can resume
     locks/                      which process is working on which image
-    state.json                  which image was viewed last
 """
 
 from dataclasses import dataclass
@@ -40,7 +39,6 @@ from image_design.schemas import (
     ImageRecord,
     ImageRunRecord,
     ImageRuns,
-    ImagesState,
     ImageSummary,
     ImageVersion,
     ImageVersions,
@@ -60,7 +58,6 @@ RUNS = "runs.json"
 EVENTS = "events.jsonl"
 PROCESS_LOG = "process.log"
 SESSIONS = "sessions"
-STATE = "state.json"
 # Every extension an image's name can end in.
 KEPT_SUFFIXES = (*IMAGE_FORMATS, SVG_SUFFIX)
 GITIGNORE = Path(__file__).with_name("data.gitignore")
@@ -377,16 +374,6 @@ def _summary(
         status=last_run.status if last_run is not None else None,
         last_run=last_run,
     )
-
-
-def read_state(data: Path) -> ImagesState:
-    path = data / STATE
-    return _read(path, ImagesState) if path.is_file() else ImagesState()
-
-
-def write_state(data: Path, state: ImagesState) -> None:
-    make_data_directory(data)
-    write_atomically(data / STATE, state.model_dump_json(indent=2))
 
 
 def remove_empty_folders(folder: Path, root: Path) -> None:

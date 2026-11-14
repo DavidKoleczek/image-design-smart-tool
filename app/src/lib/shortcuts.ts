@@ -16,6 +16,16 @@ function typing(target: EventTarget | null): boolean {
   );
 }
 
+/** Whether Space pressed in `target` presses it, as it does a button, so it is not the app's to take. */
+function pressed(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    target.closest(
+      "button, a, summary, [role=button], [role=radio], [role=switch], [role=tab]",
+    ) !== null
+  );
+}
+
 /** Single keys that act on the app, only while focus is not in a field or a popup, so they never fight typing. */
 export function useShortcuts(shortcuts: Shortcuts) {
   const latest = useRef(shortcuts);
@@ -32,7 +42,8 @@ export function useShortcuts(shortcuts: Shortcuts) {
         event.metaKey ||
         event.altKey ||
         event.isComposing ||
-        typing(event.target)
+        typing(event.target) ||
+        (event.key === " " && pressed(event.target))
       ) {
         return;
       }

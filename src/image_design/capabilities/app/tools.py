@@ -8,8 +8,10 @@ IMAGE_FILE_PREFIX = "image-design://images/"
 IMAGE_VERSION_PREFIX = "image-design://versions/"
 IMAGE_THUMBNAIL_PREFIX = "image-design://thumbnails/"
 RUN_PREVIEW_PREFIX = "image-design://previews/"
+IMAGE_FRAME_PREFIX = "image-design://frames/"
+FRAME_THUMBNAIL_PREFIX = "image-design://frame-thumbnails/"
 REFERENCE_PREFIX = "image-design://references/"
-# In a thumbnail's URI, names the image's file where a version's id would be.
+# In the URI of a thumbnail or a frame, names the image's file where a version's id would be.
 FILE = "file"
 APP_ONLY = {"ui": {"resourceUri": VIEW_URI, "visibility": ["app"]}}
 IMAGE_NAME = {"type": "string", "description": "The image's path in the directory, such as concepts/cactus.png"}
@@ -30,6 +32,10 @@ OPEN_APP = Tool(
                 "description": "Where the tool keeps the versions and runs of those images. Omit it for .agents in "
                 "the directory.",
             },
+            "name": {
+                "type": "string",
+                "description": "An image to bring up, by its path in the directory. An open app switches to it.",
+            },
         },
     },
     _meta={"ui": {"resourceUri": VIEW_URI}},
@@ -37,7 +43,7 @@ OPEN_APP = Tool(
 LIST_IMAGES = Tool(
     name="list_images",
     description="The images in the app's directory, in name order, with their versions and how their last runs went, "
-    "and the one viewed last. Called by the view.",
+    "and the one the app showed last. Called by the view.",
     input_schema={"type": "object", "properties": {}},
     _meta=APP_ONLY,
 )
@@ -76,11 +82,24 @@ SAVE_STATE = Tool(
     },
     _meta=APP_ONLY,
 )
+SHOW_IMAGE = Tool(
+    name="show_image",
+    description="Record the image the person is looking at, which the app opens on next time. Called by the view.",
+    input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
+    _meta=APP_ONLY,
+)
 VIEW_IMAGE = Tool(
     name="view_image",
-    description="Record an image as the one the person is looking at, and return it with its versions. Called by "
-    "the view.",
-    input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
+    description="An image with its versions, and its file or one of its versions frame by frame, with how long each "
+    "frame shows. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": IMAGE_NAME,
+            "version": {"type": "string", "description": "The version to view, such as v2. Omit it for the file"},
+        },
+        "required": ["name"],
+    },
     _meta=APP_ONLY,
 )
 MOVE_IMAGE = Tool(
@@ -152,9 +171,16 @@ REFERENCE_PATH = {"type": "string", "description": "An image file's path on this
 UPLOAD = {"type": "string", "description": "An upload's id: 16 to 64 lowercase hex digits the view makes up"}
 REFERENCES = {
     "type": "array",
-    "items": {"type": "object", "properties": {"path": REFERENCE_PATH, "upload": UPLOAD}},
+    "items": {
+        "type": "object",
+        "properties": {
+            "path": REFERENCE_PATH,
+            "frame": {"type": "integer", "minimum": 0, "description": "With `path`, the frame of an animation to send"},
+            "upload": UPLOAD,
+        },
+    },
     "description": "Other images to send with the prompt, in order. Each is a `path` the app offers as a reference, "
-    "or the `upload` holding a file sent with `upload_file`",
+    "with a `frame` to send one frame of an animation, or the `upload` holding a file sent with `upload_file`",
 }
 MARKS = {
     "type": "array",
@@ -172,6 +198,11 @@ OPENAI_REQUEST = {
             "type": "string",
             "description": "The upload holding a PNG the image's size, transparent where the model may make changes",
         },
+        "frame": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "When the image being edited is an animation, the frame to send. Omit it for the first",
+        },
         "model": {"type": "string", "description": "An OpenAI image model's ID. Omit it for the default"},
         "size": {
             "type": "array",
@@ -185,6 +216,11 @@ OPENAI_REQUEST = {
         "background": {"type": "string"},
         "compression": {"type": "integer", "description": "0 to 100, for a .jpg or .webp"},
         "count": {"type": "integer", "description": "How many images to make. Each is kept as a version"},
+        "frames": {"type": "integer", "description": "For a .gif, how many frames. Omit it on an edit to keep its own"},
+        "frame_ms": {
+            "type": "integer",
+            "description": "For a .gif, how long each frame shows. Omit it on an edit to keep its own",
+        },
         "previews": {"type": "integer", "description": "In-progress images to ask for, with a count of 1"},
     },
     "required": ["prompt", "name"],
@@ -396,6 +432,7 @@ CLEAR_OPENAI_KEY = Tool(
 )
 VIEW_TOOLS = [
     LIST_IMAGES,
+    SHOW_IMAGE,
     VIEW_IMAGE,
     MOVE_IMAGE,
     DELETE_IMAGE,
@@ -447,6 +484,17 @@ RUN_PREVIEW = ResourceTemplate(
     description="An in-progress image of a run on an image, by the run's id and the index its `preview` event has, as "
     "base64, for the app's view.",
 )
+IMAGE_FRAME = ResourceTemplate(
+    name="Image frame",
+    uri_template=f"{IMAGE_FRAME_PREFIX}{{version}}/{{index}}/{{+name}}",
+    description=f"One frame of a version of an image, or of its file when the version is `{FILE}`, by its index from "
+    "0, as a PNG in base64, for the app's view.",
+)
+FRAME_THUMBNAIL = ResourceTemplate(
+    name="Frame thumbnail",
+    uri_template=f"{FRAME_THUMBNAIL_PREFIX}{{version}}/{{index}}/{{+name}}",
+    description="A small WebP of one frame, named as a frame is, as base64, for the app's view.",
+)
 REFERENCE = ResourceTemplate(
     name="Reference",
     uri_template=f"{REFERENCE_PREFIX}{{+path}}",
@@ -454,4 +502,4 @@ REFERENCE = ResourceTemplate(
     "the app's directory, one that is pinned, in a folder pinned to show its files, used before, chosen in the file "
     "dialog, or kept for an image: a version, or a copy of what a run was given. As base64, for the app's view.",
 )
-IMAGE_RESOURCES = [IMAGE_FILE, IMAGE_VERSION, IMAGE_THUMBNAIL, RUN_PREVIEW, REFERENCE]
+IMAGE_RESOURCES = [IMAGE_FILE, IMAGE_VERSION, IMAGE_THUMBNAIL, IMAGE_FRAME, FRAME_THUMBNAIL, RUN_PREVIEW, REFERENCE]

@@ -105,6 +105,7 @@ INTELLIGENCE_MODELS: tuple[IntelligenceModel, ...] = (
     _model("codex", "gpt-6-astra", "GPT-6 Astra"),
     _model("claude", "claude-opus-5-5", "Claude Opus 5.5"),
     _model("claude", "claude-sonnet-5-5", "Claude Sonnet 5.5"),
+    _model("claude", "claude-fable-5-2", "Claude Fable 5.2"),
 )
 
 
@@ -300,21 +301,14 @@ class ImageSummary(BaseModel):
 
 
 class ImageListing(BaseModel):
-    """Every image in a directory, in name order, and the one viewed last."""
+    """Every image in a directory, in name order."""
 
     directory: Path
     data_directory: Path
     images: list[ImageSummary]
-    last_viewed: str | None = Field(description="None when nothing was viewed, or that image is gone")
     unreadable: list[str] = Field(
         default_factory=list, description="Why each image whose data cannot be read was left out"
     )
-
-
-class ImagesState(BaseModel):
-    """state.json in a data directory: what was last done with the images there."""
-
-    last_viewed: str | None = None
 
 
 ImageRequestRole = Literal["source", "marked-copy", "reference", "marks", "mask"]
@@ -360,6 +354,47 @@ class ImageActivity(BaseModel):
     status: ImageRunStatus | None = Field(description="The last run's status; None when it has had no run")
     cursor: str | None = Field(
         description="Pass as `after` to get only what happens from here on; None when the image has had no run"
+    )
+
+
+class ImageFrame(BaseModel):
+    """One frame of an image, or of one of its versions."""
+
+    index: int = Field(description="From 0, as `frame` names it in a request that edits the image")
+    duration_ms: int = Field(description="How long it shows; 0 for a still image, and where the file gives none")
+    path: Path | None = Field(default=None, description="The PNG written for it, when the frames were written out")
+
+
+class ImageFrames(BaseModel):
+    """The image's file, or one of its versions, frame by frame: one frame for a still image."""
+
+    version: str | None = Field(description="The version; None for the image's file")
+    path: Path = Field(description="Its file")
+    width: int
+    height: int
+    frames: list[ImageFrame]
+
+    def describe(self, name: str) -> str:
+        """The frames as text, a line for each, for a person or an agent to read."""
+        count = len(self.frames)
+        what = f"{name} {self.version}" if self.version else name
+        if count == 1:
+            head = f"{what}: {self.width}x{self.height}."
+            path = self.frames[0].path
+            return head if path is None else f"{head} Its frame: {path}"
+        total = sum(frame.duration_ms for frame in self.frames)
+        lines = [f"{what}: {count} frames of {self.width}x{self.height}, {total} ms in all.", ""]
+        for frame in self.frames:
+            written = f", {frame.path}" if frame.path is not None else ""
+            lines.append(f"- {frame.index}: {frame.duration_ms} ms{written}")
+        return "\n".join(lines)
+
+
+class ImageView(ImageSummary):
+    """An image, its versions, and how its last run went, with its file or one of its versions frame by frame."""
+
+    viewed: ImageFrames | None = Field(
+        description="The version asked for, else the image's file; None when it has no file, or one that cannot be read"
     )
 
 
@@ -616,6 +651,7 @@ def _with_default(values: list[str], default: str) -> str:
 ThemePreference = Literal["system", "light", "dark"]
 AppMethod = Literal["model", "svg"]
 ImagesView = Literal["details", "grid"]
+AppImageKind = Literal["image", "animation"]
 
 
 class PaneLayout(BaseModel):
@@ -655,9 +691,15 @@ class AppImageRequest(BaseModel):
         default=None, description="None for the service's choice, and on an edit the size of the image being edited"
     )
     quality: OpenAIImageQuality = "auto"
-    format: str = Field(default=".png", description="The extension a new image's name ends in")
+    format: str = Field(default=".png", description="The extension a new still image's name ends in")
     background: OpenAIImageBackground = "auto"
     count: int = Field(default=1, ge=1)
+    kind: AppImageKind = Field(default="image", description="What a new image is: a still image, or an animation")
+    frame_size: tuple[int, int] | None = Field(
+        default=None, description="A new animation's size; None for the service's choice"
+    )
+    frames: int = Field(default=8, ge=1, description="How many frames a new animation has")
+    frame_ms: int = Field(default=200, ge=1, description="How long each frame of a new animation shows")
     complexity: OpenAIImageComplexity | None = Field(default=None, description="None for the service's choice")
     compression: int = Field(default=100, ge=0, le=100, description="For a .jpg or .webp")
     codex_model: str | None = Field(
@@ -734,6 +776,17 @@ class AppState(BaseModel):
     )
     pins: list[Path] = Field(default_factory=list, description="The image files pinned as references, newest first")
     folders: list[AppFolder] = Field(default_factory=list, description="The folders pinned to find references in")
+    shown: str | None = Field(
+        default=None,
+        description="The image the app showed last, which it opens on. `show_image` and `open_app` set it, and a "
+        "save keeps it as it is",
+    )
+
+
+class AppImages(ImageListing):
+    """The images as the app lists them: every image in its directory, and the one it showed last."""
+
+    shown: str | None = Field(description="None when the app has shown none, or that image is gone")
 
 
 # endregion

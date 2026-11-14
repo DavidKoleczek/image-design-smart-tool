@@ -9,6 +9,7 @@ import type {
   SentReference,
 } from "@/lib/api";
 import type { CanvasMode } from "@/lib/canvas";
+import { framePicture, type Picture } from "@/lib/pictures";
 import type { Reference } from "@/lib/references";
 import type { Shown } from "@/lib/viewed";
 
@@ -24,6 +25,10 @@ export const DEFAULT_REQUEST: AppImageRequest = {
   format: ".png",
   background: "auto",
   count: 1,
+  kind: "image",
+  frame_size: null,
+  frames: 8,
+  frame_ms: 200,
   complexity: null,
   compression: 100,
   codex_model: null,
@@ -37,29 +42,65 @@ export const SIZES: { label: string; size: [number, number] }[] = [
   { label: "Portrait", size: [1024, 1536] },
 ];
 
+/** The sizes offered for an animation, whose frames are smaller than a still image. */
+export const FRAME_SIZES: { label: string; size: [number, number] }[] = [
+  { label: "Square", size: [512, 512] },
+  { label: "Landscape", size: [768, 512] },
+  { label: "Portrait", size: [512, 768] },
+];
+
 // In-progress images are asked for whenever the API sends them, so the image forms in the viewport.
 const PREVIEWS = 2;
 const NEW_NAME = "new-image";
-const ANIMATION = ".gif";
+/** The extension of an animation, which only the OpenAI API makes and changes. */
+export const ANIMATION = ".gif";
 /** The extension of a drawing, which only the SVG method makes and changes. */
 export const DRAWING = ".svg";
 // The formats with no transparency, and those that take a compression level.
-const OPAQUE = [".jpg"];
+const OPAQUE = [".jpg", ANIMATION];
 const COMPRESSED = [".jpg", ".webp"];
 
 export function isDrawing(name: string): boolean {
   return extensionOf(name) === DRAWING;
 }
 
+export function isAnimation(name: string): boolean {
+  return extensionOf(name) === ANIMATION;
+}
+
+/** What a request makes: a still image, or an animation. */
+export type Kind = AppImageRequest["kind"];
+
+/**
+ * What a request to `model` makes: what the person `picked` for the image in view, and until they pick, what that
+ * image is. A new image is what was picked last. Only the OpenAI API makes an animation.
+ */
+export function kindOf(
+  image: ImageSummary | null,
+  picked: Kind | null,
+  options: AppImageRequest,
+  model: string | null,
+): Kind {
+  if (model === CHATGPT) {
+    return "image";
+  }
+  if (image === null) {
+    return options.kind;
+  }
+  return picked ?? (isAnimation(image.name) ? "animation" : "image");
+}
+
 /**
  * Whether a request on `image` by `method` makes a new image from it rather than changing it, since the method cannot
- * change a file of its type: an image model on a drawing, ChatGPT on an image that is not a PNG, or SVG on a raster.
+ * change a file of its type, or the request makes another type: an image model on a drawing, ChatGPT on an image that
+ * is not a PNG, SVG on a raster, an animation of a still image, or a still image of one frame of an animation.
  */
 export function makesNew(
   image: ImageSummary,
   method: AppMethod,
   model: string | null,
   methods: ImageMethods,
+  kind: Kind,
 ): boolean {
   if (method === "svg") {
     return !isDrawing(image.name);
@@ -67,7 +108,8 @@ export function makesNew(
   return (
     isDrawing(image.name) ||
     (model === CHATGPT &&
-      !methods.chatgpt.formats.includes(extensionOf(image.name)))
+      !methods.chatgpt.formats.includes(extensionOf(image.name))) ||
+    (kind === "animation") !== isAnimation(image.name)
   );
 }
 
@@ -139,9 +181,16 @@ export type Resolved = {
   model: string;
   /** The extension the image's name ends in: the image's own on an edit. */
   format: string;
+  kind: Kind;
   size: [number, number] | null;
   background: string;
   count: number;
+  /**
+   * For an animation, how many frames it has and how long each shows; null to keep those of the animation being
+   * edited, and for a still image.
+   */
+  frames: number | null;
+  frameMs: number | null;
   /** Null where the format takes none. */
   compression: number | null;
   codexModel: string;
@@ -153,9 +202,16 @@ export type Resolved = {
 export function resolve(
   options: AppImageRequest,
   methods: ImageMethods,
+  /** The image the request changes; null for a new image, also one made from the image in view. */
   image: ImageSummary | null,
-  /** The size asked of an edit of `image`; a new image takes the size picked last. */
-  editSize: [number, number] | null,
+  /** What a new image is: a still image, or an animation. An image being changed stays what it is. */
+  kind: Kind,
+  /** What was asked of an edit of `image`; a new image takes what was picked last. */
+  edit: {
+    size: [number, number] | null;
+    frames: number | null;
+    frameMs: number | null;
+  },
 ): Resolved {
   const model = pickedModel(options, methods);
   const method = model === CHATGPT ? "chatgpt" : "openai";
@@ -164,10 +220,17 @@ export function resolve(
     ? extensionOf(image.name)
     : method === "chatgpt"
       ? methods.chatgpt.formats[0]
-      : offered.includes(options.format)
-        ? options.format
-        : offered[0];
+      : kind === "animation"
+        ? ANIMATION
+        : offered.includes(options.format)
+          ? options.format
+          : offered[0];
+  const animated = format === ANIMATION;
   const transparency = !OPAQUE.includes(format);
+  const [fewest, most] = methods.openai.frames;
+  const [shortest, longest] = methods.openai.frame_ms;
+  const within = (value: number, low: number, high: number) =>
+    Math.min(high, Math.max(low, value));
   const { chatgpt } = methods;
   const codexModel =
     chatgpt.models.find((each) => each.id === options.codex_model) ??
@@ -177,17 +240,32 @@ export function resolve(
     method,
     model,
     format,
+    kind: animated ? "animation" : "image",
     size:
-      SIZES.find(({ size }) => same(size, image ? editSize : options.size))
-        ?.size ?? null,
+      (animated ? FRAME_SIZES : SIZES).find(({ size }) =>
+        same(
+          size,
+          image ? edit.size : animated ? options.frame_size : options.size,
+        ),
+      )?.size ?? null,
     background:
       options.background === "transparent" && !transparency
         ? "auto"
         : options.background,
     count:
-      method === "openai" && format !== ANIMATION
+      method === "openai" && !animated
         ? Math.min(options.count, methods.openai.max_count)
         : 1,
+    frames: !animated
+      ? null
+      : image
+        ? edit.frames && within(edit.frames, fewest, most)
+        : within(options.frames, fewest, most),
+    frameMs: !animated
+      ? null
+      : image
+        ? edit.frameMs && within(edit.frameMs, shortest, longest)
+        : within(options.frame_ms, shortest, longest),
     compression: COMPRESSED.includes(format) ? options.compression : null,
     codexModel: codexModel?.id ?? chatgpt.default_model,
     reasoningEffort:
@@ -261,8 +339,15 @@ export function typedName(typed: string, formats: string[]): string {
     : name;
 }
 
-/** An image in view, and what of it shows. */
-export type Source = { image: ImageSummary; shown: Shown };
+/**
+ * An image in view, and what of it shows. Of an animation a request sends one `frame`, which is null for anything
+ * else.
+ */
+export type Source = {
+  image: ImageSummary;
+  shown: Shown;
+  frame: number | null;
+};
 
 /**
  * What the request is for: an image in view, or a new image and the name it will have without its extension. A new
@@ -277,6 +362,33 @@ export function sourcePath(source: Source): string {
   return source.shown.version && !source.shown.file
     ? source.shown.version.file
     : source.image.path;
+}
+
+/** What a request sends of an image in view, to show: the frame it sends of an animation, or what shows of it. */
+export function sourcePicture(source: Source, small = false): Picture | null {
+  const picture = source.shown.picture;
+  if (picture === null) {
+    return null;
+  }
+  return source.frame === null
+    ? { ...picture, small }
+    : framePicture(picture, source.frame, small);
+}
+
+/** The name, without its extension, of a new image made from an image in view: a still of one frame says which. */
+export function nameFrom(source: Source, kind: Kind | null): string {
+  const name = stem(source.image.name);
+  return source.frame !== null && kind === "image"
+    ? `${name}-frame-${source.frame + 1}`
+    : name;
+}
+
+/** The image a new one is made from, as the first of the references it is sent with. */
+export function sourceReference(source: Source): SentReference {
+  return {
+    path: sourcePath(source),
+    ...(source.frame !== null ? { frame: source.frame } : {}),
+  };
 }
 
 /** Whether the request sends an image in view, as the image it edits or as the one a new image is made from. */
@@ -362,7 +474,7 @@ export function requestOf(
   guide: SentGuide,
 ): ImageRequest {
   const references = target.from
-    ? [{ path: sourcePath(target.from) }, ...guide.references]
+    ? [sourceReference(target.from), ...guide.references]
     : guide.references;
   const guides = {
     ...(references.length > 0 ? { references } : {}),
@@ -396,6 +508,7 @@ export function requestOf(
       prompt,
       name,
       ...version,
+      ...(target.image && target.frame !== null ? { frame: target.frame } : {}),
       ...guides,
       ...(guide.mask !== null ? { mask: guide.mask } : {}),
       model: resolved.model,
@@ -407,9 +520,11 @@ export function requestOf(
         ? { compression: resolved.compression }
         : {}),
       count: resolved.count,
+      ...(resolved.frames !== null ? { frames: resolved.frames } : {}),
+      ...(resolved.frameMs !== null ? { frame_ms: resolved.frameMs } : {}),
       // The API sends none with several images, or for an animation.
       previews:
-        resolved.count === 1 && resolved.format !== ANIMATION
+        resolved.count === 1 && resolved.kind === "image"
           ? Math.min(PREVIEWS, methods.openai.max_previews)
           : 0,
     },

@@ -79,6 +79,7 @@ import {
 } from "@/lib/drawing";
 import { describe } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
+import { useSourceFrame } from "@/lib/frames";
 import { sentMark } from "@/lib/marks";
 import { versionPicture } from "@/lib/pictures";
 import { earlierPrompts } from "@/lib/prompts";
@@ -93,6 +94,7 @@ import {
 import {
   DRAWING,
   freeName,
+  sourcePicture,
   stem,
   typedName,
   type Problem,
@@ -161,9 +163,7 @@ function DrawTarget({
         {source ? (
           <>
             <Thumb
-              picture={
-                source.shown.picture && { ...source.shown.picture, small: true }
-              }
+              picture={sourcePicture(source, true)}
               shape={source.shown}
               className="size-11"
             />
@@ -895,11 +895,13 @@ export function DrawPane({
 
   const typed = newDraft.name ?? freeName(listing, DRAWING);
   const editing = image !== null && image.name.toLowerCase().endsWith(DRAWING);
+  // Of an animation, the frame picked is what the agent is shown.
+  const frame = useSourceFrame(image, shown, mode);
   const from: Source | null =
-    image && shown && !editing ? { image, shown } : null;
+    image && shown && !editing ? { image, shown, frame } : null;
   const target: Target =
     image && shown && editing
-      ? { image, shown }
+      ? { image, shown, frame: null }
       : from
         ? {
             image: null,

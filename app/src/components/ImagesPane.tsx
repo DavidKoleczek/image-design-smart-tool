@@ -276,6 +276,7 @@ export function ImagesPane({
   listing,
   creating,
   search,
+  onNew,
   ...picking
 }: Picking & {
   listing: ImageListing | null;
@@ -283,6 +284,7 @@ export function ImagesPane({
   creating: boolean;
   /** The search field, so a key can put focus in it. */
   search: RefObject<HTMLInputElement | null>;
+  onNew: () => void;
 }) {
   const [query, setQuery] = useState("");
   const { settings } = useSettings();
@@ -323,25 +325,34 @@ export function ImagesPane({
           </Button>
         </Tooltip>
       </header>
-      <label className="m-2 flex h-7 shrink-0 items-center gap-2 rounded-sm border border-line-control bg-field pr-1.5 pl-2 transition-[background-color,border-color] focus-within:border-ink focus-within:bg-panel">
-        <Icon name="search" className="text-ink-muted" />
-        <input
-          ref={search}
-          value={query}
-          placeholder="Search images"
-          aria-label="Search images"
-          spellCheck={false}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              setQuery("");
-              event.currentTarget.blur();
-            }
-          }}
-          className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-ink-muted"
-        />
-        <Kbd>/</Kbd>
-      </label>
+      <div className="m-2 flex shrink-0 items-center gap-1.5">
+        <Tooltip content="New image" keys="N">
+          <Button variant="secondary" aria-label="New image" onClick={onNew}>
+            <Icon name="add" />
+            {/* The pane can be dragged narrower than the label and the search field need. */}
+            <span className="hidden @3xs:inline">New image</span>
+          </Button>
+        </Tooltip>
+        <label className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-sm border border-line-control bg-field pr-1.5 pl-2 transition-[background-color,border-color] focus-within:border-ink focus-within:bg-panel">
+          <Icon name="search" className="text-ink-muted" />
+          <input
+            ref={search}
+            value={query}
+            placeholder="Search"
+            aria-label="Search images"
+            spellCheck={false}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setQuery("");
+                event.currentTarget.blur();
+              }
+            }}
+            className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-ink-muted"
+          />
+          <Kbd>/</Kbd>
+        </label>
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
         {grid ? (
           <Grid root={root} pending={pending} {...picking} />

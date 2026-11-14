@@ -30,13 +30,20 @@ type CanvasState = {
 /** What guides the next request on one image: its marks, and how much of its mask is painted. */
 export type Guides = {
   marks: Mark[];
+  /** For an animation, the frame the marks were drawn on, which is the frame they say something about. */
+  frame: number | null;
   /** The number of the mark picked on the canvas. */
   selected: number | null;
   /** The share of the image the mask covers; 0 when nothing is painted. */
   painted: number;
 };
 
-const NO_GUIDES: Guides = { marks: [], selected: null, painted: 0 };
+const NO_GUIDES: Guides = {
+  marks: [],
+  frame: null,
+  selected: null,
+  painted: 0,
+};
 const listeners = new Set<() => void>();
 let state: CanvasState = {
   mode: "markup",
@@ -126,11 +133,22 @@ export function guidesOf(name: string): Guides {
   return guides.get(name) ?? NO_GUIDES;
 }
 
-/** Add a mark to the image's, and return its number. */
-export function addMark(name: string, mark: NewMark): number {
-  const marks = guidesOf(name).marks;
+/**
+ * Add a mark to the image's, and return its number. The first mark on an animation is drawn on `frame`, and those
+ * after it join it there.
+ */
+export function addMark(
+  name: string,
+  mark: NewMark,
+  frame: number | null = null,
+): number {
+  const { marks, frame: marked } = guidesOf(name);
   const id = marks.length + 1;
-  setGuides(name, { marks: [...marks, { ...mark, id }], selected: id });
+  setGuides(name, {
+    marks: [...marks, { ...mark, id }],
+    frame: marks.length === 0 ? frame : marked,
+    selected: id,
+  });
   return id;
 }
 
@@ -148,16 +166,19 @@ export function updateMark(
 
 /** Remove a mark. Those after it move up a number, so the numbers stay the marks' places. */
 export function removeMark(name: string, id: number) {
+  const { marks, frame } = guidesOf(name);
+  const left = marks
+    .filter((mark) => mark.id !== id)
+    .map((mark, index) => ({ ...mark, id: index + 1 }));
   setGuides(name, {
-    marks: guidesOf(name)
-      .marks.filter((mark) => mark.id !== id)
-      .map((mark, index) => ({ ...mark, id: index + 1 })),
+    marks: left,
+    frame: left.length === 0 ? null : frame,
     selected: null,
   });
 }
 
 export function clearMarks(name: string) {
-  setGuides(name, { marks: [], selected: null });
+  setGuides(name, { marks: [], frame: null, selected: null });
 }
 
 export function selectMark(name: string, id: number | null) {

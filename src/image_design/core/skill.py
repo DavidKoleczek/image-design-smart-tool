@@ -57,7 +57,7 @@ CAPABILITIES = (
     ),
     Capability(
         "view-image",
-        "Show one image and its versions, and record it as the image viewed last.",
+        "Show one image and its versions, its frames and how long each shows, and write the frames out as PNGs.",
         model_backed=False,
         skill="capabilities/manage_images/skills/skill_view_image.md",
     ),

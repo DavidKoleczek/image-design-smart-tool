@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import threading
@@ -36,9 +37,11 @@ from pydantic import ValidationError
 from image_design.capabilities.app import library, uploads
 from image_design.capabilities.app.resources import (
     IMAGE_TYPES,
+    is_frame_resource,
     is_image_resource,
     is_preview_resource,
     is_reference_resource,
+    read_frame_resource,
     read_image_resource,
     read_preview_resource,
     read_reference_resource,
@@ -50,6 +53,7 @@ from image_design.capabilities.app.settings import (
     read_app_state,
     save_app_settings,
     save_app_state,
+    show_image,
 )
 from image_design.capabilities.app.tools import (
     CANCEL_IMAGE,
@@ -60,9 +64,11 @@ from image_design.capabilities.app.tools import (
     DRAW_SVG,
     ENTER_OPENAI_KEY,
     EXPORT_SVG,
+    FRAME_THUMBNAIL,
     GENERATE_CHATGPT,
     GENERATE_OPENAI,
     IMAGE_FILE,
+    IMAGE_FRAME,
     IMAGE_RESOURCES,
     IMAGE_THUMBNAIL,
     IMAGE_VERSION,
@@ -84,6 +90,7 @@ from image_design.capabilities.app.tools import (
     RUN_PREVIEW,
     SAVE_SETTINGS,
     SAVE_STATE,
+    SHOW_IMAGE,
     STEER_SVG,
     UPLOAD_FILE,
     VIEW,
@@ -92,17 +99,20 @@ from image_design.capabilities.app.tools import (
     VIEW_URI,
 )
 from image_design.schemas import (
+    AppImages,
     ImageActivity,
     ImageDesignError,
     ImageListing,
     ImageMethods,
     ImageRequestPreview,
     ImageSummary,
+    ImageView,
     Mark,
     OpenAIKeyStatus,
     ReferenceEntry,
     UsedReference,
 )
+from image_design.shared.images import pictures
 from image_design.shared.images.runs import ImageRun
 from image_design.shared.images.store import IMAGES, directories
 
@@ -136,7 +146,7 @@ class AppServer:
         directory: Path | None,
         data_directory: Path | None,
         list_images: Callable[[Path, Path], ImageListing],
-        view_image: Callable[[str, Path, Path], ImageSummary],
+        view_image: Callable[[str, str | None, Path | None, Path, Path], ImageView],
         move_image: Callable[[str, str, Path, Path], ImageSummary],
         delete_image: Callable[[str, Path, Path], None],
         restore_image_version: Callable[[str, str, Path, Path], ImageSummary],
@@ -221,6 +231,15 @@ class AppServer:
                 self._app = serve_app(self.server, port)
             return self._app
 
+    def show(self, name: str) -> str:
+        """Bring the image up in the app: an open app switches to it, and one opened later opens on it.
+
+        Returns its name as the directory has it, raising when there is no such image.
+        """
+        found = self._view_image(name, None, None, self.directory, self.data_directory).name
+        show_image(found, self.data_directory)
+        return found
+
     def close(self) -> None:
         """Stop serving the browser host page, if it was opened, and clear the uploads no request took."""
         with self._lock:
@@ -255,7 +274,7 @@ class AppServer:
             if params.uri == VIEW_URI:
                 contents = TextResourceContents(uri=VIEW_URI, mime_type=APP_MIME_TYPE, text=view())
                 return ReadResourceResult(contents=[contents])
-            if is_image_resource(params.uri) or is_preview_resource(params.uri):
+            if is_image_resource(params.uri) or is_preview_resource(params.uri) or is_frame_resource(params.uri):
                 return ReadResourceResult(contents=[await asyncio.to_thread(self._image_resource, params.uri)])
             if is_reference_resource(params.uri):
                 return ReadResourceResult(contents=[await asyncio.to_thread(self._reference_resource, params.uri)])
@@ -265,7 +284,8 @@ class AppServer:
             INVALID_PARAMS,
             f"'{params.uri}' is not a resource of this server. It has {VIEW_URI}, each image's file at "
             f"{IMAGE_FILE.uri_template}, its versions at {IMAGE_VERSION.uri_template}, small copies of them at "
-            f"{IMAGE_THUMBNAIL.uri_template}, the in-progress images of its runs at {RUN_PREVIEW.uri_template}, and "
+            f"{IMAGE_THUMBNAIL.uri_template}, their frames at {IMAGE_FRAME.uri_template} and small copies of those at "
+            f"{FRAME_THUMBNAIL.uri_template}, the in-progress images of its runs at {RUN_PREVIEW.uri_template}, and "
             f"small copies of the references it offers at {REFERENCE.uri_template}.",
         )
 
@@ -279,6 +299,8 @@ class AppServer:
         return self._read_by(uri, self._list())
 
     def _read_by(self, uri: str, listing: ImageListing) -> BlobResourceContents:
+        if is_frame_resource(uri):
+            return read_frame_resource(uri, listing)
         if not is_preview_resource(uri):
             return read_image_resource(uri, listing)
 
@@ -336,20 +358,35 @@ class AppServer:
             request["mask"] = uploads.staged(request["mask"])
         return {**request, "directory": self.directory, "data_directory": self.data_directory}
 
-    def _reference(self, reference: dict[str, str]) -> Path:
+    def _reference(self, reference: dict[str, Any]) -> Path:
         if "upload" in reference:
             return uploads.staged(reference["upload"])
-        return self._as_reference(Path(reference["path"]))
+        path = self._as_reference(Path(reference["path"]))
+        if "frame" not in reference:
+            return path
+        # One frame of an animation goes as a still of its own, which waits as an upload does.
+        upload, frame = _frame_upload(reference), reference["frame"]
+        reel = pictures.reel(path)
+        if not isinstance(frame, int) or not 0 <= frame < reel.count:
+            raise ImageDesignError(
+                f"{path.name} has {reel.count} frame(s), so frame {frame!r} does not exist. Send a frame from 0 to "
+                f"{reel.count - 1}.",
+                "invalid-request",
+            )
+        self._uploads.add(upload)
+        # Named by the frame's place counting from 1, as the app shows it.
+        return uploads.stage(upload, f"{path.stem}-frame-{frame + 1}.png", reel.png(frame))
 
     def _took(self, arguments: dict[str, Any], run: ImageRun) -> list[Path]:
         """Remember the references a started run was given as used here, and clear the uploads it took, which the
         run has copied into its own folder. Returns where each reference is offered from now, in order."""
         given: list[UsedReference] = []
         for number, reference in enumerate(arguments.get("references") or [], 1):
-            if "upload" not in reference:
+            upload = _upload_of(reference)
+            if upload is None:
                 given.append(UsedReference(name=Path(reference["path"]).name, path=Path(reference["path"])))
                 continue
-            name = uploads.staged(reference["upload"]).name
+            name = uploads.staged(upload).name
             copies = sorted((run.folder / "runs" / run.run_id / "inputs").glob(f"reference-{number}.*"))
             if copies:
                 given.append(UsedReference(name=name, path=copies[0]))
@@ -359,8 +396,8 @@ class AppServer:
 
     def _clear_taken(self, arguments: dict[str, Any]) -> None:
         """Clear the uploads a request took, once what it started has copied them."""
-        taken = [reference["upload"] for reference in arguments.get("references") or [] if "upload" in reference]
-        for upload in [*taken, *([arguments["mask"]] if "mask" in arguments else [])]:
+        taken = [_upload_of(reference) for reference in arguments.get("references") or []]
+        for upload in [*filter(None, taken), *([arguments["mask"]] if "mask" in arguments else [])]:
             uploads.clear(upload)
             self._uploads.discard(upload)
 
@@ -421,12 +458,14 @@ class AppServer:
         folder = self._last_folder
         return folder if folder is not None and folder.is_dir() else self.directory
 
-    def _list(self) -> ImageListing:
-        directory = self.directory
-        listing = self._list_images(directory, self.data_directory)
+    def _list(self) -> AppImages:
+        directory, data = self.directory, self.data_directory
+        listing = self._list_images(directory, data)
         # A listing that took long enough for `open_app` to switch directory is not the one to read files by.
         self._listing = listing if directory == self.directory else None
-        return listing
+        shown = read_app_state(data).shown
+        known = any(image.name == shown for image in listing.images)
+        return AppImages(**dict(listing), shown=shown if known else None)
 
     async def _call_tool_or_explain(
         self, ctx: ServerRequestContext[Any], params: CallToolRequestParams
@@ -452,14 +491,21 @@ class AppServer:
         if params.name == LIST_IMAGES.name:
             listing = await asyncio.to_thread(self._list)
             return _structured(listing.model_dump(mode="json"))
+        if params.name == SHOW_IMAGE.name:
+            await asyncio.to_thread(show_image, arguments["name"], self.data_directory)
+            return _text(f"The app shows {arguments['name']}.")
         if params.name == VIEW_IMAGE.name:
-            image = await asyncio.to_thread(self._view_image, arguments["name"], self.directory, self.data_directory)
+            image = await asyncio.to_thread(
+                self._view_image, arguments["name"], arguments.get("version"), None, self.directory, self.data_directory
+            )
             return _structured(image.model_dump(mode="json"))
         if params.name == MOVE_IMAGE.name:
             image = await asyncio.to_thread(
                 self._move_image, arguments["name"], arguments["new_name"], self.directory, self.data_directory
             )
             self._listing = None
+            if read_app_state(self.data_directory).shown == arguments["name"]:
+                await asyncio.to_thread(show_image, image.name, self.data_directory)
             return _structured(image.model_dump(mode="json"))
         if params.name == DELETE_IMAGE.name:
             await asyncio.to_thread(self._delete_image, arguments["name"], self.directory, self.data_directory)
@@ -580,6 +626,8 @@ class AppServer:
             await asyncio.to_thread(self._list_images, root, data)
             self.directory, self.data_directory = root, data
             self._listing = None
+        name = arguments.get("name")
+        shown = await asyncio.to_thread(self.show, name) if name is not None else None
         app = await asyncio.to_thread(self.open)
         embedded = client_supports_apps(ctx)
         answer = (params.input_responses or {}).get(OPEN_REQUEST)
@@ -604,7 +652,8 @@ class AppServer:
             where = f"The user opened the app at {app.url}."
         else:
             where = f"Give the user this URL to open the app: {app.url}"
-        return _text(f"{where} It shows the images in {self.directory}.")
+        showing = f", with {shown} in view" if shown is not None else ""
+        return _text(f"{where} It shows the images in {self.directory}{showing}.")
 
 
 def _text(text: str) -> CallToolResult:
@@ -615,6 +664,20 @@ def _structured(structured: dict[str, Any]) -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(structured))], structured_content=structured
     )
+
+
+def _upload_of(reference: dict[str, Any]) -> str | None:
+    """The upload a request's reference waits in: the one the view sent, or the one made for a frame; None for a file
+    sent from where it is."""
+    if "upload" in reference:
+        return reference["upload"]
+    return _frame_upload(reference) if "frame" in reference else None
+
+
+def _frame_upload(reference: dict[str, Any]) -> str:
+    """The upload one frame of a file waits in: the same one each time, so a request previewed and then sent keeps one
+    copy, which each of them writes afresh."""
+    return hashlib.sha256(f"{reference['path']}:{reference['frame']}".encode()).hexdigest()[:32]
 
 
 def _mark(number: int, mark: Any) -> Mark:

@@ -435,8 +435,6 @@ def list_images(
     for summary in listing.images:
         facts = [fact for fact in (_dimensions(summary), _holds(summary), summary.status) if fact]
         typer.echo(f"- {summary.name}: {', '.join(facts)}")
-    if listing.last_viewed is not None:
-        typer.echo(f"Viewed last: {listing.last_viewed}")
     for problem in listing.unreadable:
         typer.echo(f"Left out: {problem}", err=True)
 
@@ -444,13 +442,33 @@ def list_images(
 @app.command()
 def view_image(
     name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    version: Annotated[
+        str | None,
+        typer.Option("--version", help="The version to view frame by frame; the one in the image's file when omitted."),
+    ] = None,
+    frames_output: Annotated[
+        Path | None,
+        typer.Option("--frames-output", help="A folder to write each frame to, as frame-<index>.png."),
+    ] = None,
     directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
     data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
-    """One image and its versions, recorded as the image viewed last. Deterministic."""
-    summary = lib.view_image(name=name, directory=directory, data_directory=data_directory)
-    typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
+    """One image and its versions, and with --frames-output its frames as PNGs. Deterministic."""
+    view = lib.view_image(
+        name=name, version=version, frames_output=frames_output, directory=directory, data_directory=data_directory
+    )
+    if json:
+        typer.echo(view.model_dump_json(indent=2))
+        return
+    lines = [_describe(view)]
+    viewed = view.viewed
+    if viewed is not None and (len(viewed.frames) > 1 or version is not None or frames_output is not None):
+        for frame in viewed.frames:
+            if frame.path is not None:
+                frame.path = Path(_shown(frame.path))
+        lines.extend(["", viewed.describe(view.name)])
+    typer.echo("\n".join(lines))
 
 
 @app.command()
@@ -538,12 +556,17 @@ def app_(
     port: Annotated[int | None, typer.Option(help="The port to bind; a free one is chosen when omitted.")] = None,
     directory: Annotated[Path | None, typer.Option("--directory", help=APP_DIRECTORY_HELP)] = None,
     data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    name: Annotated[
+        str | None, typer.Option("--name", help="An image to open on, by its path in the directory.")
+    ] = None,
 ) -> None:
     """Serve the app in a browser page on this machine and print its URL.
 
     Keeps serving until Ctrl+C. Exits 1 with the cause and remedy when the port is held.
     """
     app_server = lib.app_server(directory=directory, data_directory=data_directory)
+    if name is not None:
+        app_server.show(name)
     typer.echo(app_server.open(port).url)
     with contextlib.suppress(KeyboardInterrupt):
         while True:

@@ -27,6 +27,7 @@ PROTOCOL_VERSION = "2025-11-25"
 MCP_APPS_HOST = {"extensions": {EXTENSION_ID: {"mimeTypes": [APP_MIME_TYPE]}}}
 VIEW_TOOLS = (
     "list_images",
+    "show_image",
     "view_image",
     "move_image",
     "delete_image",
@@ -59,6 +60,8 @@ IMAGE_RESOURCES = (
     "image-design://images/{+name}",
     "image-design://versions/{version}/{+name}",
     "image-design://thumbnails/{version}/{+name}",
+    "image-design://frames/{version}/{index}/{+name}",
+    "image-design://frame-thumbnails/{version}/{index}/{+name}",
     "image-design://previews/{run}/{index}/{+name}",
     "image-design://references/{+path}",
 )

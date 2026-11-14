@@ -3,16 +3,19 @@ import { useCallback, useState } from "react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
 import { Notice } from "@/components/ui/notice";
+import { Timeline } from "@/components/Timeline";
 import { ToolStrip } from "@/components/ToolStrip";
 import { Versions } from "@/components/Versions";
 import { Viewport } from "@/components/Viewport";
 import type { ImageListing, ImageSummary, ImageVersion } from "@/lib/api";
-import type { CanvasMode } from "@/lib/canvas";
+import { useGuides, type CanvasMode } from "@/lib/canvas";
+import { useDurations, usePlayback } from "@/lib/frames";
 import { previewPicture } from "@/lib/pictures";
 import type { Runs } from "@/lib/runs";
 import type { Shown } from "@/lib/viewed";
 
-// Under this height, as inline in a host, the versions start folded to their header, so the image has the room.
+// Under this height, as inline in a host, the versions start folded to their header, and so does an animation's
+// timeline, so the image has the room.
 const SHORT = 540;
 
 /** The size a run was asked for, when it was asked for one: an image's size, or a drawing's canvas. */
@@ -86,6 +89,19 @@ export function Canvas({
       : null;
   const asked = typeof run?.request.count === "number" ? run.request.count : 1;
   const pending = run ? Math.max(0, asked - run.versions.length) : 0;
+  const whole = shown?.picture ?? null;
+  const animated = shown !== null && shown.frames > 1 && whole !== null;
+  const playback = usePlayback(image?.name ?? "", whole?.key ?? null, animated);
+  const durations = useDurations(whole, animated);
+  const guides = useGuides(image?.name ?? "", whole?.key ?? null);
+  // A request starts from one frame of an animation, so its marks are on one frame: the one the first was drawn on.
+  const marked =
+    animated && mode === "markup" && guides.marks.length > 0
+      ? guides.frame
+      : null;
+  const elsewhere =
+    marked !== null && (playback.playing || playback.frame !== marked);
+  const roomy = height === 0 || height >= SHORT;
   return (
     <section
       ref={section}
@@ -100,7 +116,11 @@ export function Canvas({
               mode={tools}
               blocked={
                 blocked ??
-                (run && !steering ? "A request is working on this image" : null)
+                (run && !steering
+                  ? "A request is working on this image"
+                  : elsewhere && marked !== null
+                    ? `The marks are on frame ${marked + 1}`
+                    : null)
               }
             />
             <Viewport
@@ -110,15 +130,35 @@ export function Canvas({
               before={before}
               live={live}
               mode={mode}
+              animation={
+                animated
+                  ? {
+                      frame: Math.min(playback.frame, shown.frames - 1),
+                      playing: playback.playing,
+                      marked,
+                    }
+                  : null
+              }
             />
           </div>
+          {animated && (
+            <Timeline
+              key={`timeline:${image.name}`}
+              of={whole}
+              count={shown.frames}
+              playback={playback}
+              durations={durations}
+              marked={marked}
+              open={roomy}
+            />
+          )}
           <Versions
             key={`versions:${image.name}`}
             image={image}
             shown={shown}
             runs={runs}
             pending={pending}
-            open={versionsOpen ?? (height === 0 || height >= SHORT)}
+            open={versionsOpen ?? roomy}
             onOpenChange={setVersionsOpen}
             onView={onView}
             onRestored={onChanged}

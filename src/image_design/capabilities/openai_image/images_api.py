@@ -62,7 +62,7 @@ def preflight() -> None:
         raise ImageDesignError(
             "generate_openai_image needs an OpenAI API key. Create one at https://platform.openai.com/api-keys, then "
             f"set it in the {key.KEY_VARIABLE} environment variable before running the tool, or save it once with "
-            "`save_openai_api_key` or from the app's settings.",
+            "`save_openai_api_key`.",
             "not-set-up",
         )
 

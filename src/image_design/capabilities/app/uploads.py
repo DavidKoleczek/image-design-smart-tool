@@ -1,4 +1,5 @@
-"""Files the app's view sends up for a request: a reference dropped or pasted into it, or the mask painted in it."""
+"""Files that wait for a request to take them: a reference dropped or pasted into the app's view, the mask painted
+in it, or one frame of an animation the app sends as a still."""
 
 import base64
 import binascii
@@ -49,6 +50,18 @@ def receive(upload: str, name: str, offset: int, data: str) -> int:
         return target.stat().st_size
     except OSError as error:
         raise ImageDesignError(f"Could not keep the upload {name}: {error}. Add the file again.", "bad-upload") from None
+
+
+def stage(upload: str, name: str, content: bytes) -> Path:
+    """Keep `content` as the file the upload holds, for something the app makes for a request to take, and return
+    the file."""
+    folder = _folder(upload)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_bytes(content)
+    except OSError as error:
+        raise ImageDesignError(f"Could not keep {name} for the request: {error}. Send it again.", "bad-upload") from None
+    return folder / name
 
 
 def staged(upload: str) -> Path:

@@ -119,17 +119,20 @@ export function TopBar({
           ]}
         />
       )}
-      {breakpoint === "wide" ? (
+      {/* Your images has the button beside its search field while it shows. */}
+      {breakpoint === "wide" && !panes.images ? (
         <Button variant="secondary" size="sm" onClick={onNew}>
           <Icon name="add" />
           New image
         </Button>
       ) : (
-        <Tooltip content="New image" keys="N">
-          <Button size="sm" icon aria-label="New image" onClick={onNew}>
-            <Icon name="add" />
-          </Button>
-        </Tooltip>
+        breakpoint !== "wide" && (
+          <Tooltip content="New image" keys="N">
+            <Button size="sm" icon aria-label="New image" onClick={onNew}>
+              <Icon name="add" />
+            </Button>
+          </Tooltip>
+        )
       )}
       {breakpoint === "wide" && <Divider />}
       {breakpoint === "wide" && (

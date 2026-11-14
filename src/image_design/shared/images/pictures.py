@@ -24,7 +24,6 @@ MAX_EDGE = 3840
 MAX_RATIO = 3
 MIN_PIXELS = 655_360
 MAX_PIXELS = 8_294_400
-THUMBNAIL_QUALITY = 80
 
 
 class Picture(NamedTuple):
@@ -92,14 +91,50 @@ def read(path: Path) -> Picture:
     return picture
 
 
+class Reel:
+    """The frames of an image Pillow reads, a still one having a single frame.
+
+    It reads from memory, so the file is free to be replaced meanwhile. Reaching a frame decodes every frame before
+    it, and the place is kept, so frames read in order are each decoded once.
+    """
+
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+        self._image = Image.open(BytesIO(content))
+        self.count: int = getattr(self._image, "n_frames", 1)
+
+    def png(self, index: int) -> bytes:
+        """The frame as a PNG with transparency, at the image's size."""
+        buffer = BytesIO()
+        self.frame(index).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def duration_ms(self, index: int) -> int:
+        """How long the frame shows; 0 for a still image, and for a frame whose file gives none."""
+        self._image.seek(index)
+        return int(self._image.info.get("duration") or 0)
+
+    def frame(self, index: int) -> Image.Image:
+        """The frame as an RGBA image of its own, which changing leaves the reel as it is."""
+        self._image.seek(index)
+        return self._image.convert("RGBA")
+
+
+def reel(path: Path) -> Reel:
+    """The frames of the image at `path`, raising when it is not a file Pillow can read."""
+    if not path.is_file():
+        raise ImageDesignError(f"{path} is not a file. Pass the path of an image that exists.", "no-such-file")
+    try:
+        return Reel(path.read_bytes())
+    except (UnidentifiedImageError, OSError):
+        raise ImageDesignError(
+            f"{path} is not an image the tool can read frames of. Pass an image file, such as a GIF, PNG, or WebP."
+        ) from None
+
+
 def frame_png(path: Path, index: int = 0) -> bytes:
     """One frame of the image at `path`, as a PNG; the image itself for a still one."""
-    with Image.open(path) as image:
-        image.seek(index)
-        frame = image.convert("RGBA")
-    buffer = BytesIO()
-    frame.save(buffer, format="PNG")
-    return buffer.getvalue()
+    return Reel(path.read_bytes()).png(index)
 
 
 def sendable(path: Path) -> tuple[bytes, str]:
@@ -126,28 +161,6 @@ def png(path: Path) -> bytes:
         return resvg_py.svg_to_bytes(svg_path=str(path), resources_dir=str(path.parent))
     except ValueError as error:
         raise ImageDesignError(f"{path} is an SVG that could not be rendered: {error}. Fix the SVG.") from None
-
-
-def thumbnail(path: Path, edge: int) -> bytes:
-    """The image at `path` as a WebP that fits a square `edge` pixels on a side; the first frame of an animation.
-
-    An SVG is rendered at that size rather than shrunk, so a small drawing stays sharp.
-    """
-    try:
-        if path.suffix.lower() in SVG_SUFFIXES:
-            picture = read(path)
-            zoom = edge / max(picture.width, picture.height)
-            source = BytesIO(svg_png(path.read_bytes(), path.parent, zoom))
-        else:
-            source = BytesIO(path.read_bytes())
-        with Image.open(source) as image:
-            small = image.convert("RGBA")
-        small.thumbnail((edge, edge))
-        buffer = BytesIO()
-        small.save(buffer, format="WEBP", quality=THUMBNAIL_QUALITY)
-    except (UnidentifiedImageError, OSError) as error:
-        raise ImageDesignError(f"{path} could not be read as an image: {error}.") from None
-    return buffer.getvalue()
 
 
 def transparent(content: bytes) -> bool:

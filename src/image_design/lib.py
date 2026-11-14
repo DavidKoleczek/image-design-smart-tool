@@ -32,6 +32,7 @@ from image_design.schemas import (
     ImageMethods,
     ImageRequestPreview,
     ImageSummary,
+    ImageView,
     IntelligenceModels,
     Manifest,
     Mark,
@@ -402,9 +403,28 @@ def list_images(directory: Path | None = None, data_directory: Path | None = Non
     return manage_images.list_images(directory, data_directory)
 
 
-def view_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> ImageSummary:
-    """One image and its versions. Records it as the image viewed last, which the app opens on."""
-    return manage_images.view_image(name, directory, data_directory)
+def view_image(
+    name: str,
+    version: str | None = None,
+    frames_output: Path | None = None,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+) -> ImageView:
+    """One image and its versions, with its file or one of its versions frame by frame. A still image has one frame.
+
+    Args:
+        name: The image's path in `directory`.
+        version: The version to view frame by frame, such as v2; the image's file when None.
+        frames_output: A folder to write each frame of what is viewed to as a PNG, named `frame-<index>.png`. It is
+            made if need be.
+        directory: Where images are kept; `.image-design` in the working directory when None.
+        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+
+    Returns:
+        The image's summary, and in `viewed` the size of what is viewed and its frames in order, each with how long it
+        shows. A frame's `index` is what `frame` names in `generate_openai_image`.
+    """
+    return manage_images.view_image(name, version, frames_output, directory, data_directory)
 
 
 def move_image(
@@ -511,9 +531,10 @@ def app_server(directory: Path | None = None, data_directory: Path | None = None
     Serve `AppServer.server` over any MCP transport. `AppServer.open` serves the browser host page, which renders the
     view for agents that cannot embed it and reaches the same server at its own `/mcp`. `AppServer.close` stops it.
 
-    The app shows the images in `AppServer.directory`, which `open_app` can switch. How the person set up the app,
-    such as its theme and pane sizes, is theirs in every directory, kept in `app-settings.json` in their config
-    directory. What they last picked for a directory's images is kept in `app/app.json` in its data directory.
+    The app shows the images in `AppServer.directory`, which `open_app` can switch, and `AppServer.show` or
+    `open_app` brings an image up in it. How the person set up the app, such as its theme and pane sizes, is theirs
+    in every directory, kept in `app-settings.json` in their config directory. What they last picked for a
+    directory's images is kept in `app/app.json` in its data directory.
 
     Args:
         directory: Where the images the app shows are kept; `.image-design` in the working directory when omitted.

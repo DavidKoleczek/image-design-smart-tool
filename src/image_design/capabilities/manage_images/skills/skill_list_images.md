@@ -21,11 +21,10 @@ listing = list_images()
 
 ## Result
 
-One line per image: its size, which version its file holds, and the status of its last run. Then the image viewed last.
+One line per image: its size, which version its file holds, and the status of its last run.
 
 ```
 - concepts/cactus.png: 1024x1024, holds v2, done
 - photo.jpg: 800x600, has no versions yet
 - sailboat.svg: 512x512, holds v1, running
-Viewed last: concepts/cactus.png
 ```

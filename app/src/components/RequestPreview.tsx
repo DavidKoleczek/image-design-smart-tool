@@ -12,15 +12,14 @@ import {
   previewImageRequest,
   type ImageRequest,
   type ImageRequestPreview,
-  type ImageSummary,
 } from "@/lib/api";
 import { describe } from "@/lib/errors";
 import { methodLabel } from "@/lib/format";
 import type { Mark } from "@/lib/marks";
 import { usePicture } from "@/lib/pictures";
 import { fileName, type Reference } from "@/lib/references";
+import { sourcePicture, type Source } from "@/lib/request";
 import { cn } from "@/lib/utils";
-import type { Shown } from "@/lib/viewed";
 
 type Sent = ImageRequestPreview["images"][number];
 
@@ -80,14 +79,11 @@ function MarksTile({
   copy,
 }: {
   marks: Mark[];
-  source: { image: ImageSummary; shown: Shown };
+  source: Source;
   /** Whether they are drawn on a copy of the source rather than sent beside it. */
   copy: boolean;
 }) {
-  const picture = source.shown.picture;
-  const { url } = usePicture(
-    copy && picture ? { ...picture, small: true } : null,
-  );
+  const { url } = usePicture(copy ? sourcePicture(source, true) : null);
   return (
     <MarksPicture
       marks={marks}
@@ -99,16 +95,29 @@ function MarksTile({
   );
 }
 
+/** What a request sends of an image in view, by name: the version that shows, and of an animation the frame. */
+function sourceName(source: Source): string {
+  return [
+    source.image.name,
+    source.shown.version?.id,
+    source.frame !== null && `frame ${source.frame + 1}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 /** What the library worked out the request would send: the images in order, the parameters, and the prompt. */
 function Preview({
   preview,
   source,
+  from,
   references,
   marks,
   mask,
 }: Guides & {
   preview: ImageRequestPreview;
-  source: { image: ImageSummary; shown: Shown } | null;
+  source: Source | null;
+  from: Source | null;
 }) {
   const numbered = preview.images.filter(
     (image) => !BESIDE.includes(image.role),
@@ -127,17 +136,21 @@ function Preview({
           <p className="text-caption text-ink-muted">None</p>
         )}
         {preview.images.map((image, index) => {
-          const own = image.role === "source" && source;
+          // The image a new one is made from goes first among the references.
+          const own =
+            image.role === "source"
+              ? source
+              : image.role === "reference" && sent.indexOf(image) === 0
+                ? from
+                : null;
           const reference =
-            image.role === "reference"
-              ? (references[sent.indexOf(image)] ?? null)
+            image.role === "reference" && !own
+              ? (references[sent.indexOf(image) - (from ? 1 : 0)] ?? null)
               : null;
           const marked =
             (image.role === "marks" || image.role === "marked-copy") && source;
           const name = own
-            ? [source.image.name, source.shown.version?.id]
-                .filter(Boolean)
-                .join(" ")
+            ? sourceName(own)
             : reference
               ? reference.name
               : image.path && image.role !== "mask"
@@ -147,13 +160,8 @@ function Preview({
             <div key={index} className="flex min-w-0 items-center gap-2.5">
               {own ? (
                 <Thumb
-                  picture={
-                    source.shown.picture && {
-                      ...source.shown.picture,
-                      small: true,
-                    }
-                  }
-                  shape={source.shown}
+                  picture={sourcePicture(own, true)}
+                  shape={own.shown}
                   className="size-10"
                 />
               ) : reference ? (
@@ -215,6 +223,7 @@ export function RequestPreview({
   open,
   request,
   source,
+  from,
   references,
   marks,
   mask,
@@ -225,7 +234,9 @@ export function RequestPreview({
   /** The request to preview; null while the dialog is closed. */
   request: ImageRequest | null;
   /** The image the request edits and what of it shows, which stands for the source among the images. */
-  source: { image: ImageSummary; shown: Shown } | null;
+  source: Source | null;
+  /** The image in view a new image is made from, which is sent as the first reference. */
+  from: Source | null;
   onClose: () => void;
   onGenerate: () => void;
 }) {
@@ -273,6 +284,7 @@ export function RequestPreview({
           <Preview
             preview={preview}
             source={source}
+            from={from}
             references={references}
             marks={marks}
             mask={mask}

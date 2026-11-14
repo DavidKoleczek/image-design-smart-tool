@@ -10,12 +10,27 @@ export type Draft = {
    * an edit that quietly took the size of some other image would come out cropped or stretched.
    */
   size: [number, number] | null;
+  /**
+   * For an image in view, what a request on it makes, a still image or an animation; null for what the image is. It
+   * is not what was picked last either, so an image is not animated, or an animation flattened, without being asked.
+   */
+  kind: "image" | "animation" | null;
+  /** For an animation being edited, how many frames and how long each shows; null to keep its own. */
+  frames: number | null;
+  frameMs: number | null;
 };
 
 /** The key the new image's draft is kept under, which no image's name can be. */
 export const NEW_IMAGE = "";
 
-const EMPTY: Draft = { prompt: "", name: null, size: null };
+const EMPTY: Draft = {
+  prompt: "",
+  name: null,
+  size: null,
+  kind: null,
+  frames: null,
+  frameMs: null,
+};
 const listeners = new Set<() => void>();
 // Kept apart from the pane that shows them, so a draft outlives the pane closing and the image going out of view.
 const drafts = new Map<string, Draft>();

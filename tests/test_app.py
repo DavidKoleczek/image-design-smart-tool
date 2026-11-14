@@ -26,6 +26,7 @@ from image_design.capabilities.app.tools import VIEW_URI
 from image_design.capabilities.openai_image import generate
 from image_design.schemas import (
     AppImageRequest,
+    AppImages,
     AppLayout,
     AppSettings,
     AppState,
@@ -35,6 +36,7 @@ from image_design.schemas import (
     ImageMethods,
     ImageRequestPreview,
     ImageSummary,
+    ImageView,
     PaneLayout,
     ReferenceEntry,
     ReferenceLibrary,
@@ -262,24 +264,39 @@ async def test_the_view_views_restores_moves_and_deletes_images_and_reads_their_
 ) -> None:
     await made("A paper-cut cactus.", "cactus.png")
     await made("Make it bloom.", "cactus.png")
+    (Path(".image-design") / "photo.png").write_bytes(picture(800, 600, "#336699"))
     app_server = open_app()
 
     async with Client(f"{app_server.open().url}/mcp") as client:
-        viewed = await client.call_tool("view_image", {"name": "cactus.png"})
-        listed = await client.call_tool("list_images", {})
+        first = await client.call_tool("list_images", {})
+        opened = await client.call_tool("open_app", {"name": "CACTUS.png"})
+        # A view saving what it picked, read before the image was brought up, leaves the image as it is.
+        await client.call_tool("save_app_state", {"state": {"method": "svg"}})
+        brought_up = await client.call_tool("list_images", {})
+        missing = await client.call_tool("open_app", {"name": "fern.png"})
+        await client.call_tool("show_image", {"name": "photo.png"})
+        picked = await client.call_tool("list_images", {})
+        await client.call_tool("show_image", {"name": "cactus.png"})
+        viewed = await client.call_tool("view_image", {"name": "cactus.png", "version": "v1"})
         restored = await client.call_tool("restore_image_version", {"name": "cactus.png", "version": "v1"})
         history = await client.call_tool("read_image_activity", {"name": "cactus.png"})
         cursor = (history.structured_content or {})["cursor"]
         since = await client.call_tool("read_image_activity", {"name": "cactus.png", "after": cursor})
         converted = await client.call_tool("move_image", {"name": "cactus.png", "new_name": "cactus.jpg"})
         moved = await client.call_tool("move_image", {"name": "cactus.png", "new_name": "plants/cactus.png"})
+        followed = await client.call_tool("list_images", {})
         deleted = await client.call_tool("delete_image", {"name": "plants/cactus.png"})
         gone = await client.call_tool("view_image", {"name": "plants/cactus.png"})
         emptied = await client.call_tool("list_images", {})
 
     activity = ImageActivity.model_validate(history.structured_content)
-    assert ImageSummary.model_validate(viewed.structured_content).current == "v2"
-    assert ImageListing.model_validate(listed.structured_content).last_viewed == "cactus.png"
+    assert AppImages.model_validate(first.structured_content).shown is None
+    assert "with cactus.png in view." in text_of(opened)
+    assert AppImages.model_validate(brought_up.structured_content).shown == "cactus.png"
+    assert missing.structured_content == {"reason": "no-such-image", "image": "fern.png"}
+    assert AppImages.model_validate(picked.structured_content).shown == "photo.png"
+    view = ImageView.model_validate(viewed.structured_content)
+    assert (view.current, view.viewed and view.viewed.version) == ("v2", "v1")
     assert ImageSummary.model_validate(restored.structured_content).current == "v1"
     assert [event.data["prompt"] for event in activity.events if event.kind == "started"] == [
         "A paper-cut cactus.",
@@ -289,9 +306,11 @@ async def test_the_view_views_restores_moves_and_deletes_images_and_reads_their_
     assert converted.structured_content == {"reason": "invalid-name", "image": "cactus.png"}
     summary = ImageSummary.model_validate(moved.structured_content)
     assert (summary.name, [version.id for version in summary.versions]) == ("plants/cactus.png", ["v1", "v2"])
+    assert AppImages.model_validate(followed.structured_content).shown == "plants/cactus.png"
     assert not deleted.is_error
     assert gone.structured_content == {"reason": "no-such-image", "image": "plants/cactus.png"}
-    assert ImageListing.model_validate(emptied.structured_content).images == []
+    emptied_listing = AppImages.model_validate(emptied.structured_content)
+    assert ([image.name for image in emptied_listing.images], emptied_listing.shown) == (["photo.png"], None)
 
 
 async def test_the_view_reads_an_image_s_file_its_versions_and_small_copies_of_them_and_no_other_file(
@@ -354,6 +373,88 @@ async def test_the_view_reads_an_image_s_file_its_versions_and_small_copies_of_t
     assert "has no version 'v9'. Its versions: v1, v2." in refused[2]
     assert "no image named 'missing.png'" in refused[3]
     assert "is not a resource of this server" in refused[4]
+
+
+async def test_the_view_reads_an_animation_frame_by_frame_and_sends_one_frame_of_it(
+    open_app: Callable[..., lib.AppServer],
+    images_api: FakeImagesAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(uploads, "UPLOADS", tmp_path / "uploads")
+    run = await lib.generate_openai_image("A cactus swaying.", name="loops/sway.gif", frames=3, frame_ms=120)
+    assert (await run.result()).status == "done"
+    edit = await lib.generate_openai_image("Sway further.", name="loops/sway.gif", frames=2, frame_ms=300)
+    assert (await edit.result()).status == "done"
+    app_server = open_app()
+
+    def color(contents: object) -> tuple[str | None, tuple[int, int], object]:
+        assert isinstance(contents, BlobResourceContents)
+        with Image.open(BytesIO(base64.b64decode(contents.blob))) as image:
+            return contents.mime_type, image.size, image.convert("RGB").getpixel((0, 0))
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        listing = ImageListing.model_validate((await client.call_tool("list_images", {})).structured_content)
+        [sway] = listing.images
+        frames = ((await client.call_tool("view_image", {"name": "loops/sway.gif"})).structured_content or {})["viewed"]
+        earlier = await client.call_tool("view_image", {"name": "loops/sway.gif", "version": "v1"})
+        # Out of order, as when a frame is picked on the timeline.
+        read = [
+            color((await client.read_resource(f"image-design://frames/v1/{index}/loops/sway.gif")).contents[0])
+            for index in (2, 0, 1)
+        ]
+        [small] = (await client.read_resource("image-design://frame-thumbnails/file/1/loops/sway.gif")).contents
+        refused: list[str] = []
+        for uri in (
+            "image-design://frames/file/2/loops/sway.gif",
+            "image-design://frames/v9/0/loops/sway.gif",
+            "image-design://frames/file/0/missing.gif",
+        ):
+            with pytest.raises(MCPError) as failure:
+                await client.read_resource(uri)
+            refused.append(str(failure.value))
+        request = {"prompt": "Only the top sways.", "name": "loops/sway.gif"}
+        marked = await client.call_tool(
+            "preview_openai_image_request",
+            {**request, "frame": 1, "marks": [{"shape": "box", "points": [[0.1, 0.1], [0.4, 0.4]]}]},
+        )
+        longer = await client.call_tool("preview_openai_image_request", {**request, "frames": 6, "frame_ms": 80})
+        still = await client.call_tool(
+            "preview_openai_image_request",
+            {"prompt": "As a poster.", "name": "poster.png", "references": [{"path": str(sway.path), "frame": 1}]},
+        )
+        beyond = await client.call_tool(
+            "preview_openai_image_request",
+            {"prompt": "As a poster.", "name": "poster.png", "references": [{"path": str(sway.path), "frame": 5}]},
+        )
+
+    assert [(frame["index"], frame["duration_ms"], frame["path"]) for frame in frames["frames"]] == [
+        (0, 300, None),
+        (1, 300, None),
+    ]
+    assert len((earlier.structured_content or {})["viewed"]["frames"]) == 3
+    assert [(kind, size) for kind, size, _ in read] == [("image/png", (512, 512))] * 3
+    assert len({pixel for _, _, pixel in read}) == 3
+    assert color(small)[:2] == ("image/webp", (256, 256))
+    assert "has 2 frame(s), so there is no frame at that index" in refused[0]
+    assert "has no version 'v9'" in refused[1]
+    assert "no image named 'missing.gif'" in refused[2]
+    kept = ImageRequestPreview.model_validate(marked.structured_content)
+    asked = ImageRequestPreview.model_validate(longer.structured_content)
+    poster = ImageRequestPreview.model_validate(still.structured_content)
+    # An edit of an animation keeps its own length unless the request says another.
+    assert (kept.parameters["frame_count"], kept.parameters["frame_duration_ms"]) == (2, 300)
+    assert [image.role for image in kept.images] == ["source", "marks"]
+    assert (asked.parameters["frame_count"], asked.parameters["frame_duration_ms"]) == (6, 80)
+    [sent] = poster.images
+    assert (sent.role, sent.path is not None and sent.path.name) == ("reference", "sway-frame-2.png")
+    assert sent.path is not None
+    with Image.open(sent.path) as frame:
+        assert (frame.format, frame.size) == ("PNG", (512, 512))
+    assert beyond.structured_content == {"reason": "invalid-request", "image": None}
+    # The frame made for a request no one sent goes when the app closes.
+    app_server.close()
+    assert not sent.path.exists()
 
 
 async def test_the_view_reads_what_each_method_takes_and_previews_a_request_without_sending_it(

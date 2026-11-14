@@ -34,6 +34,7 @@ import {
   type CanvasMode,
 } from "@/lib/canvas";
 import { dimensions } from "@/lib/format";
+import { pausePlayback, showFrame } from "@/lib/frames";
 import {
   clampPoint,
   MARK_COLORS,
@@ -45,17 +46,23 @@ import {
   type NewMark,
   type Point,
 } from "@/lib/marks";
-import { usePicture, versionPicture, type Picture } from "@/lib/pictures";
+import {
+  framePicture,
+  usePicture,
+  versionPicture,
+  type Picture,
+} from "@/lib/pictures";
 import { useShortcuts } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import type { Shown } from "@/lib/viewed";
 
 const RULER = 20;
 // What a fitted image leaves free of the viewport, across and down: a share of it, so a small viewport gives the
-// image more of its room, within these bounds. The least down still fits the label above the image.
+// image more of its room, within these bounds. The least down still fits the label above the image, and the most
+// keeps that label clear of the tools over the viewport's corner.
 const FIT_ROOM = {
   x: { share: 0.1, min: 32, max: 96 },
-  y: { share: 0.16, min: 60, max: 112 },
+  y: { share: 0.2, min: 60, max: 120 },
 };
 const LABEL = 22;
 const LABEL_SHIFT = 8;
@@ -218,7 +225,8 @@ const FITTED: View = { zoom: null, x: 0, y: 0 };
  * The image in view between its rulers, over the checkerboard where it is transparent. It starts fitted; a wheel
  * zooms on the pointer and a drag moves it. Compare shows the version before in its place. While a run works on
  * the image, what the image's file holds gives way to the run's latest in-progress image. In a mode, the marks or
- * the mask that guide the next request are drawn over it with the tool picked.
+ * the mask that guide the next request are drawn over it with the tool picked. An animation shows one frame at a
+ * time, and its marks only on the frame they were drawn on.
  */
 export function Viewport({
   image,
@@ -226,6 +234,7 @@ export function Viewport({
   before,
   live,
   mode,
+  animation,
 }: {
   image: ImageSummary;
   shown: Shown;
@@ -241,6 +250,11 @@ export function Viewport({
   } | null;
   /** What is drawn over the image to guide a request; null when it can take neither marks nor a mask. */
   mode: CanvasMode | null;
+  /**
+   * For an animation: the frame that shows, whether it plays, and the frame the marks for the next request are on,
+   * if it has any.
+   */
+  animation: { frame: number; playing: boolean; marked: number | null } | null;
 }) {
   const [box, setBox] = useState({ width: 0, height: 0 });
   const [view, setView] = useState(FITTED);
@@ -262,9 +276,21 @@ export function Viewport({
   // What the run makes lands in the image's file, so it forms where that shows, and not over another version.
   const forming = live !== null && shown.file && compared === null;
   const preview = forming ? live.preview : null;
+  // Of an animation, the frame in turn. The version before shows its own frame at that place, or its last.
+  const frameOf = (of: Picture, frames: number) =>
+    animation && frames > 1
+      ? framePicture(of, Math.min(animation.frame, frames - 1))
+      : of;
   const picture = compared
-    ? versionPicture(image, compared)
-    : (preview ?? shown.picture);
+    ? frameOf(versionPicture(image, compared), compared.frames)
+    : (preview ?? (shown.picture && frameOf(shown.picture, shown.frames)));
+  // The marks sit on one frame of an animation, so they show and are drawn only there, and not while it plays.
+  const elsewhere =
+    animation !== null &&
+    animation.marked !== null &&
+    (animation.playing || animation.frame !== animation.marked)
+      ? animation.marked
+      : null;
   // An image with no file yet takes the size the run was asked for.
   const blank = forming && shown.width === null;
   const width =
@@ -281,6 +307,7 @@ export function Viewport({
     mode !== null &&
     url !== null &&
     compared === null &&
+    elsewhere === null &&
     (live === null || live.steering)
       ? mode
       : null;
@@ -447,6 +474,10 @@ export function Viewport({
     const inside =
       point[0] >= 0 && point[0] <= 1 && point[1] >= 0 && point[1] <= 1;
     if (event.button === 0 && inside && drawing) {
+      // A mark belongs to the frame it is drawn on, so the animation holds on that frame.
+      if (animation?.playing) {
+        pausePlayback(image.name);
+      }
       window.clearTimeout(pause.current);
       const open = sketch.current;
       const joins =
@@ -558,8 +589,9 @@ export function Viewport({
     }
     setDraft(null);
     const mark = finished(draft, current.start);
+    const frame = animation?.frame ?? null;
     if (mark.shape !== "sketch") {
-      addMark(image.name, mark);
+      addMark(image.name, mark, frame);
       return;
     }
     if (current.join !== null) {
@@ -570,7 +602,7 @@ export function Viewport({
           : joined,
       );
     } else if (mark.strokes[0].length > SKETCH_POINTS) {
-      const id = addMark(image.name, mark);
+      const id = addMark(image.name, mark, frame);
       sketch.current = { id, count: id, color: mark.color };
     }
     pause.current = window.setTimeout(closeSketch, SKETCH_PAUSE_MS);
@@ -896,6 +928,19 @@ export function Viewport({
               Clear all
             </Button>
           )}
+        </div>
+      )}
+      {elsewhere !== null && (
+        <div
+          onPointerDown={(event) => event.stopPropagation()}
+          className="absolute top-8 left-8 z-30 flex min-h-8 cursor-default items-center gap-2 rounded-md border border-line bg-panel px-2 py-[3px]"
+        >
+          <span className="text-label text-ink-muted">
+            Marks are on frame {elsewhere + 1}
+          </span>
+          <Button size="sm" onClick={() => showFrame(image.name, elsewhere)}>
+            Go to frame
+          </Button>
         </div>
       )}
       {guiding === "mask" && (

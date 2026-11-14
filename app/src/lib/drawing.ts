@@ -9,7 +9,12 @@ import type {
   SentMark,
   SentReference,
 } from "@/lib/api";
-import { DRAWING, sourcePath, type Source, type Target } from "@/lib/request";
+import {
+  DRAWING,
+  sourceReference,
+  type Source,
+  type Target,
+} from "@/lib/request";
 
 /** `AppSvgRequest()` in schemas.py, for when the state cannot be read. */
 export const DEFAULT_SVG: AppSvgRequest = {
@@ -158,7 +163,7 @@ export function drawOf(
   marks: SentMark[],
 ): DrawRequest {
   const sent = target.from
-    ? [{ path: sourcePath(target.from) }, ...references]
+    ? [sourceReference(target.from), ...references]
     : references;
   const { canvas, ...rest }: Partial<Budgets> = target.image
     ? changed

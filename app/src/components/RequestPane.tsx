@@ -25,6 +25,7 @@ import {
   type ImageMethods,
   type ImageSummary,
 } from "@/lib/api";
+import { useDurations, useSourceFrame } from "@/lib/frames";
 import {
   clearGuides,
   clearMask,
@@ -45,7 +46,6 @@ import {
   clearReferences,
   imageFiles,
   sentReferences,
-  type Reference,
   settleReferences,
   uploadMask,
   useReferences,
@@ -53,9 +53,12 @@ import {
 import {
   CHATGPT,
   CHATGPT_LABEL,
+  FRAME_SIZES,
   freeName,
+  kindOf,
   makesNew,
   modelLabel,
+  nameFrom,
   pickedModel,
   problemOf,
   referenceRoom,
@@ -63,12 +66,13 @@ import {
   resolve,
   sendsSource,
   SIZES,
-  sourcePath,
-  stem,
+  sourcePicture,
   stillFormats,
   typedName,
+  type Kind,
   type Resolved,
   type SentGuide,
+  type Source,
   type Target,
 } from "@/lib/request";
 import type { Runs } from "@/lib/runs";
@@ -79,9 +83,11 @@ import { cn } from "@/lib/utils";
 import type { Shown } from "@/lib/viewed";
 
 const BY_CHATGPT = "Chosen by ChatGPT";
-const ONLY_CHATGPT = "Only with ChatGPT";
 const KEEPS_FORMAT = "An edit keeps the image's format";
 const NO_TRANSPARENCY = "JPEG has no transparency";
+const AS_GIF = "An animation is saved as a GIF";
+const OPAQUE_ANIMATION = "An animation has no transparent background";
+const ONE_ANIMATION = "A request makes one animation";
 const AUTO = "auto";
 // In the model list, opens the dialog about the key rather than picking a model.
 const SET_KEY = "set-openai-key";
@@ -160,7 +166,7 @@ function TargetBlock({
         {source && shown ? (
           <>
             <Thumb
-              picture={shown.picture && { ...shown.picture, small: true }}
+              picture={sourcePicture(source, true)}
               shape={shown}
               className="size-11"
             />
@@ -171,6 +177,9 @@ function TargetBlock({
                   {shown.version && <span>{shown.version.id}</span>}
                   {shown.width !== null && shown.height !== null && (
                     <span>{dimensions(shown.width, shown.height)}</span>
+                  )}
+                  {source.frame !== null && (
+                    <span>frame {source.frame + 1}</span>
                   )}
                 </span>
               ) : (
@@ -263,42 +272,79 @@ function TargetBlock({
   );
 }
 
-/** What the image comes out as. An option the picked model or the image's format does not take is greyed out. */
+/**
+ * What the image comes out as. An option the picked model, the image's format, or an animation does not take is
+ * greyed out.
+ */
 function Output({
   options,
   resolved,
   methods,
   target,
+  onKind,
 }: {
   options: AppImageRequest;
   resolved: Resolved;
   methods: ImageMethods;
   target: Target;
+  /** Pick what the request makes: a still image, or an animation. */
+  onKind: (kind: Kind) => void;
 }) {
   const { advanced } = useSettings().settings;
   const { openai, chatgpt } = methods;
   const byChatGPT = resolved.method === "chatgpt" ? BY_CHATGPT : undefined;
-  const onlyChatGPT = resolved.method === "chatgpt" ? undefined : ONLY_CHATGPT;
   const source = target.image ? target.shown : null;
+  const animated = resolved.kind === "animation";
+  const sizes = animated ? FRAME_SIZES : SIZES;
   const size = resolved.size ? resolved.size.join("x") : AUTO;
+  // An animation being edited keeps its own length until another is set, so that is what the fields start on.
+  const kept = animated && source !== null && source.frames > 1;
+  const durations = useDurations(source?.picture ?? null, kept);
+  const within = (value: number, [low, high]: [number, number]) =>
+    Math.min(high, Math.max(low, value));
+  const frames =
+    resolved.frames ??
+    within(kept ? source.frames : options.frames, openai.frames);
+  const frameMs =
+    resolved.frameMs ??
+    within(durations?.[0] ?? options.frame_ms, openai.frame_ms);
   const codexModel = chatgpt.models.find(
     (model) => model.id === resolved.codexModel,
   );
   return (
     <div className="flex flex-col gap-2">
-      <Row label="Size" off={byChatGPT}>
+      <Row label="Type">
+        <Segmented<Kind>
+          label="Type"
+          size="sm"
+          full
+          className="flex-1"
+          value={resolved.kind}
+          onChange={onKind}
+          options={[
+            { value: "image", label: "Image" },
+            {
+              value: "animation",
+              label: "Animation",
+              disabled:
+                byChatGPT && `${CHATGPT_LABEL} does not make animations`,
+            },
+          ]}
+        />
+      </Row>
+      <Row label={animated ? "Frame size" : "Size"} off={byChatGPT}>
         <Select
-          label="Size"
+          label={animated ? "Frame size" : "Size"}
           value={size}
           disabled={byChatGPT !== undefined}
           onChange={(picked) => {
             const size =
-              SIZES.find((each) => each.size.join("x") === picked)?.size ??
+              sizes.find((each) => each.size.join("x") === picked)?.size ??
               null;
             if (target.image) {
               updateDraft(target.image.name, { size });
             } else {
-              update({ size });
+              update(animated ? { frame_size: size } : { size });
             }
           }}
           items={[
@@ -310,7 +356,7 @@ function Output({
                   ? dimensions(source.width, source.height)
                   : undefined,
             },
-            ...SIZES.map((each) => ({
+            ...sizes.map((each) => ({
               value: each.size.join("x"),
               label: each.label,
               aside: dimensions(...each.size),
@@ -318,6 +364,40 @@ function Output({
           ]}
         />
       </Row>
+      {animated && (
+        <>
+          <Row label="Frames">
+            <ValueField
+              label="Count"
+              className="flex-1"
+              value={frames}
+              min={openai.frames[0]}
+              max={openai.frames[1]}
+              onChange={(frames) =>
+                target.image
+                  ? updateDraft(target.image.name, { frames })
+                  : update({ frames })
+              }
+            />
+          </Row>
+          <Row label="Frame time">
+            <ValueField
+              label="Each"
+              className="flex-1"
+              value={frameMs}
+              min={openai.frame_ms[0]}
+              max={openai.frame_ms[1]}
+              step={10}
+              unit="ms"
+              onChange={(frameMs) =>
+                target.image
+                  ? updateDraft(target.image.name, { frameMs })
+                  : update({ frame_ms: frameMs })
+              }
+            />
+          </Row>
+        </>
+      )}
       <Row label="Quality" off={byChatGPT}>
         <Select
           label="Quality"
@@ -341,12 +421,14 @@ function Output({
           options={stillFormats(methods).map((format) => ({
             value: format,
             label: FORMATS[format] ?? format.slice(1).toUpperCase(),
-            disabled: target.image
-              ? KEEPS_FORMAT
-              : (byChatGPT ??
-                (format === ".jpg" && options.background === "transparent"
-                  ? NO_TRANSPARENCY
-                  : undefined)),
+            disabled: animated
+              ? AS_GIF
+              : target.image
+                ? KEEPS_FORMAT
+                : (byChatGPT ??
+                  (format === ".jpg" && options.background === "transparent"
+                    ? NO_TRANSPARENCY
+                    : undefined)),
           }))}
         />
       </Row>
@@ -380,22 +462,27 @@ function Output({
             disabled:
               background === "opaque"
                 ? byChatGPT
-                : background === "transparent" &&
-                    target.image &&
-                    !resolved.transparency
-                  ? NO_TRANSPARENCY
-                  : undefined,
+                : background === "transparent" && animated
+                  ? OPAQUE_ANIMATION
+                  : background === "transparent" &&
+                      target.image &&
+                      !resolved.transparency
+                    ? NO_TRANSPARENCY
+                    : undefined,
           }))}
         />
       </Row>
-      <Row label="Images" off={byChatGPT}>
+      <Row
+        label="Images"
+        off={byChatGPT ?? (animated ? ONE_ANIMATION : undefined)}
+      >
         <ValueField
           label="Count"
           className="flex-1"
           value={resolved.count}
           min={1}
           max={openai.max_count}
-          disabled={byChatGPT !== undefined}
+          disabled={byChatGPT !== undefined || animated}
           onChange={(count) => update({ count })}
         />
       </Row>
@@ -455,32 +542,34 @@ function Output({
               onChange={(compression) => update({ compression })}
             />
           </Row>
-          <Row label="Codex model" off={onlyChatGPT}>
-            <Select
-              label="Codex model"
-              value={resolved.codexModel}
-              disabled={onlyChatGPT !== undefined}
-              onChange={(codex_model) => update({ codex_model })}
-              items={chatgpt.models.map((model) => ({
-                value: model.id,
-                label: model.label,
-              }))}
-            />
-          </Row>
-          <Row label="Reasoning" off={onlyChatGPT}>
-            <Select
-              label="Reasoning effort"
-              value={resolved.reasoningEffort}
-              disabled={onlyChatGPT !== undefined}
-              onChange={(reasoning_effort) => update({ reasoning_effort })}
-              items={(
-                codexModel?.reasoning_efforts ?? [resolved.reasoningEffort]
-              ).map((effort) => ({
-                value: effort,
-                label: QUALITIES[effort] ?? titled(effort),
-              }))}
-            />
-          </Row>
+          {resolved.method === "chatgpt" && (
+            <>
+              <Row label="Codex model">
+                <Select
+                  label="Codex model"
+                  value={resolved.codexModel}
+                  onChange={(codex_model) => update({ codex_model })}
+                  items={chatgpt.models.map((model) => ({
+                    value: model.id,
+                    label: model.label,
+                  }))}
+                />
+              </Row>
+              <Row label="Reasoning">
+                <Select
+                  label="Reasoning effort"
+                  value={resolved.reasoningEffort}
+                  onChange={(reasoning_effort) => update({ reasoning_effort })}
+                  items={(
+                    codexModel?.reasoning_efforts ?? [resolved.reasoningEffort]
+                  ).map((effort) => ({
+                    value: effort,
+                    label: QUALITIES[effort] ?? titled(effort),
+                  }))}
+                />
+              </Row>
+            </>
+          )}
         </>
       )}
     </div>
@@ -552,21 +641,6 @@ function MaskSection({
   );
 }
 
-/** The image a new one is made from, as the first of the references it is sent with. */
-function sourceReference(from: {
-  image: ImageSummary;
-  shown: Shown;
-}): Reference {
-  return {
-    id: "source",
-    name: from.image.name,
-    path: sourcePath(from),
-    upload: null,
-    thumb: null,
-    state: "ready",
-  };
-}
-
 /** The request to an image model: what it is for, the prompt, what comes out, and Generate, or Stop while it works. */
 function RequestForm({
   methods,
@@ -597,6 +671,7 @@ function RequestForm({
   const draft = useDraft(key);
   const references = useReferences(key);
   const guides = useGuides(key, shown?.picture?.key ?? null);
+  const frame = useSourceFrame(image, shown, mode);
   const [open, setOpen] = useState({
     prompt: true,
     mask: true,
@@ -612,31 +687,38 @@ function RequestForm({
     mask: { upload: string; url: string } | null;
   } | null>(null);
 
-  // A model that cannot change the image in view makes a new image from it, which takes what a new image is picked.
+  const model = pickedModel(options, methods);
+  const kind = kindOf(image, draft.kind, options, model);
+  // A request that cannot change the image in view, or that makes another type of image, makes a new image from it,
+  // which takes what a new image is picked.
   const crossing =
-    image !== null &&
-    makesNew(image, "model", pickedModel(options, methods), methods);
-  const resolved = resolve(
-    options,
-    methods,
-    crossing ? null : image,
-    draft.size,
-  );
+    image !== null && makesNew(image, "model", model, methods, kind);
+  // An animation of one frame has no length of its own for an edit to keep.
+  const long = shown !== null && shown.frames > 1;
+  const resolved = resolve(options, methods, crossing ? null : image, kind, {
+    size: draft.size,
+    frames: draft.frames ?? (long ? null : options.frames),
+    frameMs: draft.frameMs ?? (long ? null : options.frame_ms),
+  });
   const typed = draft.name ?? freeName(listing, resolved.format);
-  const target: Target =
-    image && shown
-      ? crossing
-        ? {
-            image: null,
-            name: freeName(listing, resolved.format, stem(image.name)),
-            from: { image, shown },
-          }
-        : { image, shown }
-      : {
+  const source: Source | null = image && shown ? { image, shown, frame } : null;
+  const target: Target = source
+    ? crossing
+      ? {
           image: null,
-          name: typedName(typed, stillFormats(methods)),
-          from: null,
-        };
+          name: freeName(
+            listing,
+            resolved.format,
+            nameFrom(source, resolved.kind),
+          ),
+          from: source,
+        }
+      : source
+    : {
+        image: null,
+        name: typedName(typed, methods.openai.formats),
+        from: null,
+      };
   // Only the guide of the mode the canvas is in goes out, since a request takes marks or a mask and not both.
   const marks = image && mode === "markup" ? guides.marks : [];
   const masked = image !== null && mode === "mask" && guides.painted > 0;
@@ -839,6 +921,11 @@ function RequestForm({
             resolved={resolved}
             methods={methods}
             target={target}
+            onKind={(picked) =>
+              image
+                ? updateDraft(key, { kind: picked })
+                : update({ kind: picked })
+            }
           />
         </Section>
       </div>
@@ -935,11 +1022,8 @@ function RequestForm({
             : null
         }
         source={target.image ? target : null}
-        references={
-          target.from
-            ? [sourceReference(target.from), ...references]
-            : references
-        }
+        from={target.from ?? null}
+        references={references}
         marks={marks}
         mask={previewing?.mask?.url ?? null}
         onClose={() => setPreviewing(null)}
