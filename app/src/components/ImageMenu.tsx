@@ -20,6 +20,12 @@ import { baseName } from "@/lib/tree";
 export type ImageActions = {
   onRename: (name: string) => void;
   onDelete: (name: string) => void;
+  /** Start a new image with this one as its first reference. */
+  onUseInNew: (name: string) => void;
+  /** Add this image to the references of the request being written. */
+  onAddReference: (name: string) => void;
+  /** The image that request edits, which cannot be a reference to itself; none for a new image. */
+  source: string | null;
 };
 
 /** What the image menu holds, for menus that list it among other things. */
@@ -27,9 +33,21 @@ export function ImageMenuItems({
   name,
   onRename,
   onDelete,
+  onUseInNew,
+  onAddReference,
+  source,
 }: ImageActions & { name: string }) {
   return (
     <>
+      <MenuItem onClick={() => onUseInNew(name)}>
+        <Icon name="add" />
+        Use in a new image
+      </MenuItem>
+      <MenuItem disabled={name === source} onClick={() => onAddReference(name)}>
+        <Icon name="attach" />
+        Add as a reference
+      </MenuItem>
+      <MenuSeparator />
       <MenuItem onClick={() => onRename(name)}>
         <Icon name="rename" />
         Rename or move

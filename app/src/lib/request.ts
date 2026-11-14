@@ -4,7 +4,11 @@ import type {
   ImageMethods,
   ImageRequest,
   ImageSummary,
+  SentMark,
+  SentReference,
 } from "@/lib/api";
+import type { CanvasMode } from "@/lib/canvas";
+import type { Reference } from "@/lib/references";
 import type { Shown } from "@/lib/viewed";
 
 /** What the model picker calls ChatGPT, which chooses the image model itself. */
@@ -40,6 +44,30 @@ const DRAWING = ".svg";
 // The formats with no transparency, and those that take a compression level.
 const OPAQUE = [".jpg"];
 const COMPRESSED = [".jpg", ".webp"];
+
+/** Why the canvas cannot guide a request to `model` one way, with marks or with a mask; null when it can. */
+export function guideBlock(
+  kind: CanvasMode,
+  image: ImageSummary | null,
+  shown: Shown | null,
+  model: string | null,
+): string | null {
+  if (!image || !shown || shown.width === null) {
+    return "Needs a source image";
+  }
+  if (kind === "mask") {
+    if (extensionOf(image.name) === DRAWING) {
+      return "A drawing does not take a mask";
+    }
+    if (model === CHATGPT) {
+      return `${CHATGPT_LABEL} does not take a mask`;
+    }
+    if (shown.frames > 1) {
+      return "An animation does not take a mask";
+    }
+  }
+  return null;
+}
 
 /** A name's extension, lowercased, with its dot. */
 export function extensionOf(name: string): string {
@@ -136,6 +164,29 @@ export function resolve(
   };
 }
 
+/** What the picked model is called. */
+export function modelLabel(resolved: Resolved, methods: ImageMethods): string {
+  return resolved.method === "chatgpt"
+    ? CHATGPT_LABEL
+    : (methods.openai.models.find((model) => model.id === resolved.model)
+        ?.label ?? resolved.model);
+}
+
+/**
+ * How many references the request can take: the images the model takes, less the image being edited and, where the
+ * marks go on a copy of it, that copy.
+ */
+export function referenceRoom(
+  resolved: Resolved,
+  methods: ImageMethods,
+  editing: boolean,
+  marked: boolean,
+): number {
+  const taken =
+    (editing ? 1 : 0) + (resolved.method === "chatgpt" && marked ? 1 : 0);
+  return Math.max(0, methods[resolved.method].max_images - taken);
+}
+
 function same(a: [number, number] | null, b: [number, number] | null): boolean {
   return a !== null && b !== null && a[0] === b[0] && a[1] === b[1];
 }
@@ -184,6 +235,9 @@ export function problemOf(
   resolved: Resolved,
   methods: ImageMethods,
   listing: ImageListing | null,
+  references: Reference[],
+  /** How many references the request can take. */
+  room: number,
 ): Problem | null {
   const method = methods[resolved.method];
   const loud = (text: string): Problem => ({ text, quiet: false });
@@ -215,8 +269,30 @@ export function problemOf(
       return loud("Another image already has that name.");
     }
   }
+  const failed = references.find((reference) => reference.state === "failed");
+  if (failed) {
+    return loud(
+      `${failed.name} did not reach the app. Remove it and add it again.`,
+    );
+  }
+  if (references.length > room) {
+    return loud(
+      `${modelLabel(resolved, methods)} takes ${method.max_images} images in a request, counting the image being edited${resolved.method === "chatgpt" ? " and its marked copy" : ""}. Remove a reference.`,
+    );
+  }
+  if (references.some((reference) => reference.state === "uploading")) {
+    return { text: "A reference is still being added.", quiet: true };
+  }
   return prompt.trim() === "" ? { text: "Write a prompt.", quiet: true } : null;
 }
+
+/** What guides a request besides its prompt, as the tools take it. */
+export type SentGuide = {
+  references: SentReference[];
+  marks: SentMark[];
+  /** The upload holding the mask; null for none. */
+  mask: string | null;
+};
 
 /** The request as the library takes it. */
 export function requestOf(
@@ -225,7 +301,12 @@ export function requestOf(
   options: AppImageRequest,
   resolved: Resolved,
   methods: ImageMethods,
+  guide: SentGuide,
 ): ImageRequest {
+  const guides = {
+    ...(guide.references.length > 0 ? { references: guide.references } : {}),
+    ...(guide.marks.length > 0 ? { marks: guide.marks } : {}),
+  };
   const name = target.image
     ? target.image.name
     : `${target.name}${resolved.format}`;
@@ -241,6 +322,7 @@ export function requestOf(
         prompt,
         name,
         ...version,
+        ...guides,
         transparent: resolved.background === "transparent",
         model: resolved.codexModel,
         reasoning_effort: resolved.reasoningEffort,
@@ -253,6 +335,8 @@ export function requestOf(
       prompt,
       name,
       ...version,
+      ...guides,
+      ...(guide.mask !== null ? { mask: guide.mask } : {}),
       model: resolved.model,
       ...(resolved.size ? { size: resolved.size } : {}),
       quality: options.quality,

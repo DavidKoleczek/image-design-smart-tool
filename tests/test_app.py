@@ -7,8 +7,10 @@ from pathlib import Path
 import re
 from typing import Any
 from urllib.error import HTTPError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from conftest import MemoryKeyring
 import detached_openai
 from fake_openai import FakeImagesAPI, picture
 from mcp import Client, MCPError
@@ -18,6 +20,7 @@ import pytest
 
 from image_design import lib
 from image_design.capabilities.app import server as server_module
+from image_design.capabilities.app import uploads
 from image_design.capabilities.app.tools import VIEW_URI
 from image_design.capabilities.openai_image import generate
 from image_design.schemas import (
@@ -32,6 +35,8 @@ from image_design.schemas import (
     ImageRequestPreview,
     ImageSummary,
     PaneLayout,
+    ReferenceEntry,
+    ReferenceLibrary,
 )
 
 TIMEOUT_SECONDS = 5
@@ -387,6 +392,164 @@ async def test_the_view_reads_what_each_method_takes_and_previews_a_request_with
     assert (len(images_api.requests), cactus.status, len(cactus.versions)) == (1, "done", 1)
 
 
+async def upload(client: Client, upload_id: str, name: str, content: bytes, piece: int = 4096) -> int:
+    received = 0
+    for offset in range(0, len(content), piece):
+        data = base64.b64encode(content[offset : offset + piece]).decode("ascii")
+        sent = await client.call_tool(
+            "upload_file", {"upload": upload_id, "name": name, "offset": offset, "data": data}
+        )
+        received = (sent.structured_content or {})["received"]
+    return received
+
+
+async def test_the_view_guides_a_request_with_uploads_marks_and_the_references_the_app_offers(
+    open_app: Callable[..., lib.AppServer],
+    images_api: FakeImagesAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(uploads, "UPLOADS", tmp_path / "uploads")
+    await made("A paper-cut cactus.", "cactus.png")
+    await made("A paper-cut fern.", "fern.png")
+    folder = tmp_path / "moodboard"
+    folder.mkdir()
+    (folder / "palette.png").write_bytes(picture(640, 480, "#ff0000"))
+    (folder / "notes.txt").write_text("Not an image.", encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere.png"
+    elsewhere.write_bytes(picture(64, 64, "#00ff00"))
+    chosen = tmp_path / "chosen.png"
+    chosen.write_bytes(picture(32, 32, "#0000ff"))
+    app_server = open_app()
+    monkeypatch.setattr(app_server, "_choose_files", lambda directory, title: [chosen])
+    monkeypatch.setattr(app_server, "_choose_folder", lambda directory, title: folder)
+    dropped = picture(800, 600, "#123456")
+    mask = Image.new("RGBA", (1024, 1024), (0, 0, 0, 255))
+    mask.paste((0, 0, 0, 0), (100, 100, 400, 400))
+    painted = BytesIO()
+    mask.save(painted, format="PNG")
+    edit = {"prompt": "Make it bloom.", "name": "cactus.png"}
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        listing = ImageListing.model_validate((await client.call_tool("list_images", {})).structured_content)
+        fern = next(image for image in listing.images if image.name == "fern.png")
+        received = await upload(client, "a" * 32, "dropped.png", dropped)
+        await upload(client, "b" * 32, "mask.png", painted.getvalue())
+        bad = [
+            await client.call_tool("upload_file", {"upload": "nope", "name": "a.png", "offset": 0, "data": ""}),
+            await client.call_tool("upload_file", {"upload": "c" * 32, "name": "../a.png", "offset": 0, "data": ""}),
+            await client.call_tool("upload_file", {"upload": "a" * 32, "name": "other.png", "offset": 0, "data": ""}),
+        ]
+        picked_folder = await client.call_tool("choose_reference_folder", {})
+        state = (await client.call_tool("read_app_state", {})).structured_content or {}
+        kept = ReferenceEntry.model_validate(
+            (await client.call_tool("keep_reference", {"upload": "a" * 32})).structured_content
+        )
+        kept_content = kept.path.read_bytes()
+        pinned = {**state, "pins": [str(kept.path)], "folders": [{"path": str(folder), "shows": "files"}]}
+        await client.call_tool("save_app_state", {"state": pinned})
+        in_folder = await client.call_tool("list_reference_folder", {"path": str(folder)})
+        not_pinned = await client.call_tool("list_reference_folder", {"path": str(tmp_path)})
+        picked = await client.call_tool("choose_reference_files", {})
+        library = ReferenceLibrary.model_validate(
+            (await client.call_tool("read_reference_library", {})).structured_content
+        )
+        references = [
+            {"upload": "a" * 32},
+            {"path": str(kept.path)},
+            {"path": str(folder / "palette.png")},
+            {"path": str(chosen)},
+            {"path": str(fern.path)},
+        ]
+        sketch = {"shape": "sketch", "points": [[0.1, 0.1], [0.2, 0.2]], "strokes": [[[0.5, 0.5], [0.6, 0.6]]]}
+        marked = await client.call_tool(
+            "preview_chatgpt_image_request", {**edit, "references": references[:3], "marks": [sketch]}
+        )
+        masked = await client.call_tool(
+            "preview_openai_image_request", {**edit, "references": references, "mask": "b" * 32}
+        )
+        outside = await client.call_tool(
+            "preview_openai_image_request", {**edit, "references": [{"path": str(elsewhere)}]}
+        )
+        [small] = (await client.read_resource(f"image-design://references/{quote(str(chosen), safe='')}")).contents
+        with pytest.raises(MCPError) as unread:
+            await client.read_resource(f"image-design://references/{quote(str(elsewhere), safe='')}")
+        await client.call_tool("save_app_state", {"state": {**pinned, "pins": []}})
+        unpinned = await client.call_tool("read_reference_library", {})
+
+    assert received == len(dropped)
+    assert [each.structured_content for each in bad] == [{"reason": "bad-upload", "image": None}] * 3
+    assert picked_folder.structured_content == {"path": str(folder)}
+    assert (kept.name, kept.width, kept.height, kept_content) == ("dropped.png", 800, 600, dropped)
+    assert kept.path.is_relative_to(app_server.data_directory / "app" / "pins")
+    assert (in_folder.structured_content or {})["entries"] == [
+        {"name": "palette.png", "path": str(folder / "palette.png"), "width": 640, "height": 480}
+    ]
+    assert not_pinned.structured_content == {"reason": "missing-folder", "image": None}
+    assert [entry["path"] for entry in (picked.structured_content or {})["entries"]] == [str(chosen)]
+    assert ([entry.path for entry in library.pinned], library.used) == ([kept.path], [])
+    with_marks = ImageRequestPreview.model_validate(marked.structured_content)
+    with_mask = ImageRequestPreview.model_validate(masked.structured_content)
+    assert [image.role for image in with_marks.images] == [
+        "source",
+        "marked-copy",
+        "reference",
+        "reference",
+        "reference",
+    ]
+    assert with_marks.added is not None
+    assert with_marks.added.count("Mark ") == 1
+    assert [(image.role, image.path) for image in with_mask.images[1:]] == [
+        ("reference", tmp_path / "uploads" / ("a" * 32) / "dropped.png"),
+        ("reference", kept.path),
+        ("reference", folder / "palette.png"),
+        ("reference", chosen),
+        ("reference", fern.path),
+        ("mask", tmp_path / "uploads" / ("b" * 32) / "mask.png"),
+    ]
+    assert outside.structured_content == {"reason": "not-a-reference", "image": None}
+    assert isinstance(small, BlobResourceContents)
+    assert small.mime_type == "image/webp"
+    assert "is not an image the app offers as a reference" in str(unread.value)
+    assert ReferenceLibrary.model_validate(unpinned.structured_content).pinned == []
+    assert not kept.path.exists()
+    # Closing the app clears the uploads no request took.
+    app_server.close()
+    assert not (tmp_path / "uploads" / ("a" * 32)).exists()
+    assert len(images_api.requests) == 2
+
+
+async def test_the_view_has_the_key_typed_on_the_machine_and_never_sees_it(
+    open_app: Callable[..., lib.AppServer],
+    credential_store: MemoryKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    app_server = open_app(tmp_path / "images")
+    answers: list[str | None] = [None, "sk-test-typed"]
+    monkeypatch.setattr(app_server, "_ask_secret", lambda title, label: answers.pop(0))
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        results = [
+            await client.call_tool("read_openai_key", {}),
+            await client.call_tool("enter_openai_key", {}),
+            await client.call_tool("enter_openai_key", {"key": "sk-test-argument"}),
+            await client.call_tool("list_image_methods", {}),
+            await client.call_tool("clear_openai_key", {}),
+        ]
+
+    none, cancelled, entered, methods, cleared = (result.structured_content or {} for result in results)
+    assert none == {"source": None, "saved": False}
+    assert cancelled == {"source": None, "saved": False, "entered": False}
+    assert entered == {"source": "saved", "saved": True, "entered": True}
+    assert methods["openai"]["ready"] is True
+    assert cleared == {"source": None, "saved": False}
+    # Neither what was typed nor anything passed as an argument is in any answer.
+    assert "sk-test" not in "".join(text_of(result) for result in results)
+    assert credential_store.kept == {}
+
+
 @pytest.mark.detached
 async def test_the_view_starts_a_run_in_a_process_of_its_own_reads_its_previews_and_stops_one(
     open_app: Callable[..., lib.AppServer], images_api: FakeImagesAPI, monkeypatch: pytest.MonkeyPatch
@@ -423,14 +586,29 @@ async def test_the_view_starts_a_run_in_a_process_of_its_own_reads_its_previews_
                 await client.read_resource(uri)
             refused.append(str(failure.value))
         monkeypatch.setattr(generate, "BACKGROUND_COMMAND", detached_openai.command("hang"))
-        await client.call_tool("generate_openai_image", {"prompt": "Make it bloom.", "name": "cactus.png"})
+        palette = picture(64, 64, "#ff0000")
+        await upload(client, "d" * 32, "palette.png", palette)
+        guided = await client.call_tool(
+            "generate_openai_image",
+            {"prompt": "Make it bloom.", "name": "cactus.png", "references": [{"upload": "d" * 32}]},
+        )
+        library = ReferenceLibrary.model_validate(
+            (await client.call_tool("read_reference_library", {})).structured_content
+        )
+        [used] = (
+            await client.read_resource(f"image-design://references/{quote(str(library.used[0].path), safe='')}")
+        ).contents
         busy = await client.call_tool("generate_openai_image", {"prompt": "Make it wilt.", "name": "cactus.png"})
         working = await asyncio.wait_for(image(client, running=True), DETACHED_TIMEOUT_SECONDS)
         stopping = await client.call_tool("cancel_image", {"name": "cactus.png"})
         stopped = await asyncio.wait_for(image(client, running=False), DETACHED_TIMEOUT_SECONDS)
 
     previews = [event for event in history.events if event.kind == "preview"]
-    assert started.structured_content == {"name": "cactus.png", "run_id": created.last_run and created.last_run.id}
+    assert started.structured_content == {
+        "name": "cactus.png",
+        "run_id": created.last_run and created.last_run.id,
+        "references": [],
+    }
     assert (created.status, created.width, created.height) == ("done", 1536, 1024)
     assert created.last_run is not None
     assert (created.last_run.origin, created.last_run.pid != os.getpid()) == ("app", True)
@@ -444,6 +622,12 @@ async def test_the_view_starts_a_run_in_a_process_of_its_own_reads_its_previews_
     assert "Run 'another-run' on cactus.png has no preview '1'" in refused[1]
     assert "no image named 'missing.png'" in refused[2]
     assert busy.is_error
+    # The run copied the upload into its own folder, which is where it is offered from once the upload is cleared.
+    assert [(entry.name, entry.path.read_bytes()) for entry in library.used] == [("palette.png", palette)]
+    assert library.used[0].path.is_relative_to(app_server.data_directory)
+    assert (guided.structured_content or {})["references"] == [str(library.used[0].path)]
+    assert not (uploads.UPLOADS / ("d" * 32)).exists()
+    assert isinstance(used, BlobResourceContents)
     assert working.last_run is not None
     assert working.last_run.prompt == "Make it bloom."
     assert not stopping.is_error

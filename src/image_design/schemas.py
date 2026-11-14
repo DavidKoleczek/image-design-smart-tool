@@ -151,6 +151,10 @@ class Mark(BaseModel):
         description="Fractions of the image's width and height from its top left: two opposite corners for a circle "
         "or a box, the tail and then the head for an arrow, and each point along a sketch",
     )
+    strokes: list[list[tuple[Fraction, Fraction]]] = Field(
+        default_factory=list,
+        description="For a sketch drawn in several strokes, each stroke after the first, which `points` is",
+    )
     color: str = Field(default="red", description="A CSS color name or a hex code")
     note: str = ""
 
@@ -471,6 +475,16 @@ DEFAULT_CHATGPT_REASONING_EFFORT: ReasoningEffort = "low"
 # region: Image methods
 
 
+class OpenAIKeyStatus(BaseModel):
+    """Where the OpenAI API key comes from. The key itself is never part of it."""
+
+    source: Literal["environment", "saved"] | None = Field(
+        description="What requests are sent with: the OPENAI_API_KEY environment variable, which wins, or the key "
+        "saved in the platform's credential store; None when there is no key"
+    )
+    saved: bool = Field(description="Whether a key is saved, also when the environment's is the one used")
+
+
 class ImageMethodSetup(BaseModel):
     """Whether a way of making images can run on this machine, and the names it makes."""
 
@@ -653,6 +667,48 @@ class AppImageRequest(BaseModel):
     )
 
 
+AppFolderShows = Literal["files", "dialog"]
+
+
+class AppFolder(BaseModel):
+    """A folder the person pinned in the app to find references in."""
+
+    path: Path
+    shows: AppFolderShows = Field(
+        default="files",
+        description="`files` lists its images in the app, and `dialog` opens the platform's file dialog in it",
+    )
+
+
+class ReferenceEntry(BaseModel):
+    """An image file the app offers as a reference."""
+
+    name: str
+    path: Path
+    width: int | None = Field(description="None for a drawing, which has no size in pixels, or a file not read")
+    height: int | None
+
+
+class ReferenceLibrary(BaseModel):
+    """The references the app offers besides the images in its directory, of what is still there."""
+
+    pinned: list[ReferenceEntry]
+    used: list[ReferenceEntry] = Field(description="What requests sent from the app were given, newest first")
+
+
+class UsedReference(BaseModel):
+    """A reference a request sent from the app was given: the name it had, and where the file is now."""
+
+    name: str
+    path: Path
+
+
+class UsedReferences(BaseModel):
+    """app/used.json in a data directory: what requests sent from the app were given as references."""
+
+    used: list[UsedReference] = Field(default_factory=list, description="Newest first")
+
+
 class AppState(BaseModel):
     """app/app.json in a data directory: what the person last picked in the app for the images there."""
 
@@ -663,6 +719,8 @@ class AppState(BaseModel):
     closed_folders: list[str] = Field(
         default_factory=list, description="The folders closed in Your images, by their paths with forward slashes"
     )
+    pins: list[Path] = Field(default_factory=list, description="The image files pinned as references, newest first")
+    folders: list[AppFolder] = Field(default_factory=list, description="The folders pinned to find references in")
 
 
 # endregion

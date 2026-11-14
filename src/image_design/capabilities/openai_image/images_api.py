@@ -2,13 +2,13 @@
 
 import base64
 from importlib.util import find_spec
-import os
 from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from image_design.capabilities.openai_image import key
 from image_design.core.skill import DISTRIBUTION, repository_url
 from image_design.schemas import (
     ImageDesignError,
@@ -24,7 +24,6 @@ from image_design.shared.images.runs import RunOutput
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-KEY_VARIABLE = "OPENAI_API_KEY"
 MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}
 KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_.*-]+")
 
@@ -59,10 +58,11 @@ def preflight() -> None:
             f"or `uv add {source}` in a project that uses the library.",
             "not-set-up",
         )
-    if not os.environ.get(KEY_VARIABLE):
+    if key.find() is None:
         raise ImageDesignError(
-            f"generate_openai_image needs an OpenAI API key in the {KEY_VARIABLE} environment variable. Create one at "
-            "https://platform.openai.com/api-keys and set it before running the tool.",
+            "generate_openai_image needs an OpenAI API key. Create one at https://platform.openai.com/api-keys, then "
+            f"set it in the {key.KEY_VARIABLE} environment variable before running the tool, or save it once with "
+            "`save_openai_api_key` or from the app's settings.",
             "not-set-up",
         )
 
@@ -91,7 +91,7 @@ def client(timeout_seconds: int) -> "AsyncOpenAI":
     from openai import AsyncOpenAI
 
     # A request is never sent twice, since one that failed or timed out may still have been billed.
-    return AsyncOpenAI(max_retries=0, timeout=timeout_seconds)
+    return AsyncOpenAI(api_key=key.find(), max_retries=0, timeout=timeout_seconds)
 
 
 async def send(request: ApiRequest, model: OpenAIImageModel, timeout_seconds: int, output: RunOutput) -> None:
@@ -176,7 +176,7 @@ def _refused(status: int | None, body: object, message: str) -> str:
     about = f", about {param}" if param else ""
     code = f" ({status}{about})" if status else ""
     hint = {
-        401: f" Check the key in {KEY_VARIABLE}.",
+        401: f" Check the key in {key.KEY_VARIABLE}, or the saved key when that is not set.",
         403: " Check that the key's project can use this model.",
         429: " Wait and try again, or check the project's usage limits.",
     }.get(status or 0, " Change what it names and try again.")

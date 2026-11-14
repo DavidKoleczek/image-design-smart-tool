@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Notice } from "@/components/ui/notice";
 import { describe } from "@/lib/errors";
 import { connect } from "@/lib/host";
+import { loadKey } from "@/lib/key";
 import { loadMethods } from "@/lib/methods";
 import { loadSettings } from "@/lib/settings";
 import { loadAppState } from "@/lib/state";
@@ -15,7 +16,7 @@ const root = createRoot(document.getElementById("root")!);
 
 try {
   await connect();
-  await Promise.all([loadSettings(), loadAppState(), loadMethods()]);
+  await Promise.all([loadSettings(), loadAppState(), loadMethods(), loadKey()]);
   root.render(
     <StrictMode>
       <TooltipProvider>

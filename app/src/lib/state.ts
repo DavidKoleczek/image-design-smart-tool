@@ -9,6 +9,8 @@ const DEFAULT_STATE: AppState = {
   method: "model",
   request: DEFAULT_REQUEST,
   closed_folders: [],
+  pins: [],
+  folders: [],
 };
 
 const store = keep<AppState>({
@@ -24,6 +26,9 @@ export const loadAppState = store.load;
 
 /** Change what is picked at once, and save it for the app's directory once the person stops changing it. */
 export const updateAppState = store.update;
+
+/** Save a change still waiting, and wait until the server has it. */
+export const flushAppState = store.flush;
 
 /** Read it again once the app shows another directory, whose picks are its own. */
 export function followDirectory(dataDirectory: string | null) {

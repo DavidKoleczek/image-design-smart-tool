@@ -6,13 +6,45 @@ import {
   type PointerEvent,
 } from "react";
 
+import { MarkLine, MarkList } from "@/components/Marks";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { LoadingMark } from "@/components/ui/loading-mark";
 import { Notice } from "@/components/ui/notice";
 import { Tooltip } from "@/components/ui/tooltip";
+import { ValueField } from "@/components/ui/value-field";
 import type { ImageSummary, ImageVersion } from "@/lib/api";
+import {
+  addMark,
+  BRUSH,
+  clearMarks,
+  clearMask,
+  MARK_TOOLS,
+  maskCanvas,
+  measureMask,
+  paintMask,
+  removeMark,
+  selectMark,
+  setBrush,
+  setColor,
+  setTool,
+  updateMark,
+  useCanvas,
+  useGuides,
+  type CanvasMode,
+} from "@/lib/canvas";
 import { dimensions } from "@/lib/format";
+import {
+  clampPoint,
+  MARK_COLORS,
+  markBox,
+  moveMark,
+  type Mark,
+  type MarkColor,
+  type MarkShape,
+  type NewMark,
+  type Point,
+} from "@/lib/marks";
 import { usePicture, versionPicture, type Picture } from "@/lib/pictures";
 import { useShortcuts } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
@@ -37,6 +69,76 @@ const TICK_ROOM = 56;
 const UNKNOWN_SIZE = 1024;
 // How much one notch of a wheel, and one pixel of a pinch, zooms.
 const WHEEL = { notch: 0.0015, pinch: 0.01, line: 33 };
+// A sketch is usually several strokes. Strokes keep joining the same mark until the pen has rested this long.
+const SKETCH_PAUSE_MS = 1500;
+// A press that barely moves makes a mark of a size of its own rather than one too small to see, as shares of the image.
+const CLICKED = { least: 0.015, box: 0.16, arrow: 0.1, least_arrow: 0.02 };
+const SMALLEST = 0.01;
+// A stroke shorter than this is a slip of the hand, not the start of a sketch.
+const SKETCH_POINTS = 3;
+const CORNERS = ["tl", "tr", "bl", "br"] as const;
+
+type Drag =
+  | { kind: "pan"; x: number; y: number; from: View }
+  | { kind: "draw"; start: Point; join: number | null }
+  | { kind: "paint"; last: Point }
+  | { kind: "move"; id: number; last: Point }
+  | { kind: "resize"; id: number; fixed: Point };
+
+/** The mark a drag from `start` to `to` draws. */
+function drawn(
+  shape: MarkShape,
+  color: MarkColor,
+  start: Point,
+  to: Point,
+): NewMark {
+  if (shape === "arrow") {
+    return { shape, color, tail: start, head: to };
+  }
+  if (shape === "sketch") {
+    return { shape, color, strokes: [[start]] };
+  }
+  return {
+    shape,
+    color,
+    x: Math.min(start[0], to[0]),
+    y: Math.min(start[1], to[1]),
+    w: Math.abs(to[0] - start[0]),
+    h: Math.abs(to[1] - start[1]),
+  };
+}
+
+/** A mark as it is kept once drawn: one from a press that barely moved gets a size it can be seen at. */
+function finished(mark: NewMark, start: Point): NewMark {
+  if (
+    (mark.shape === "circle" || mark.shape === "box") &&
+    (mark.w < CLICKED.least || mark.h < CLICKED.least)
+  ) {
+    const [x, y] = clampPoint([
+      start[0] - CLICKED.box / 2,
+      start[1] - CLICKED.box / 2,
+    ]);
+    return {
+      ...mark,
+      x: Math.min(x, 1 - CLICKED.box),
+      y: Math.min(y, 1 - CLICKED.box),
+      w: CLICKED.box,
+      h: CLICKED.box,
+    };
+  }
+  if (
+    mark.shape === "arrow" &&
+    Math.hypot(mark.head[0] - mark.tail[0], mark.head[1] - mark.tail[1]) <
+      CLICKED.least_arrow
+  ) {
+    return {
+      ...mark,
+      tail: clampPoint([start[0] - CLICKED.arrow, start[1] + CLICKED.arrow]),
+      head: start,
+    };
+  }
+  return mark;
+}
 
 /** A ruler along the top or left edge, in the image's pixels, with a tick at each of its edges. */
 function Ruler({
@@ -115,25 +217,39 @@ const FITTED: View = { zoom: null, x: 0, y: 0 };
 /**
  * The image in view between its rulers, over the checkerboard where it is transparent. It starts fitted; a wheel
  * zooms on the pointer and a drag moves it. Compare shows the version before in its place. While a run works on
- * the image, what the image's file holds gives way to the run's latest in-progress image.
+ * the image, what the image's file holds gives way to the run's latest in-progress image. In a mode, the marks or
+ * the mask that guide the next request are drawn over it with the tool picked.
  */
 export function Viewport({
   image,
   shown,
   before,
   live,
+  mode,
 }: {
   image: ImageSummary;
   shown: Shown;
   before: ImageVersion | null;
   /** While a run works on the image: its latest in-progress image, and the size it was asked for, if any. */
   live: { preview: Picture | null; size: [number, number] | null } | null;
+  /** What is drawn over the image to guide a request; null when it can take neither marks nor a mask. */
+  mode: CanvasMode | null;
 }) {
   const [box, setBox] = useState({ width: 0, height: 0 });
   const [view, setView] = useState(FITTED);
   const [compare, setCompare] = useState(false);
   const [panning, setPanning] = useState(false);
-  const drag = useRef<{ x: number; y: number; from: View } | null>(null);
+  const [draft, setDraft] = useState<NewMark | null>(null);
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const drag = useRef<Drag | null>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  // The sketch still taking strokes: its number, and how many marks there were when it was made.
+  const sketch = useRef<{ id: number; count: number; color: MarkColor } | null>(
+    null,
+  );
+  const pause = useRef<number | undefined>(undefined);
+  const { tool, color, brush } = useCanvas();
+  const guides = useGuides(image.name, shown.picture?.key ?? null);
 
   const compared = compare ? before : null;
   // What the run makes lands in the image's file, so it forms where that shows, and not over another version.
@@ -152,6 +268,39 @@ export function Viewport({
   const id = compared ? compared.id : (shown.version?.id ?? null);
   const { url, error } = usePicture(picture);
   const vector = image.name.toLowerCase().endsWith(".svg");
+  // Marks and the mask are drawn on what the next request edits, so not on the version before or an image forming.
+  const guiding =
+    mode !== null && url !== null && compared === null && live === null
+      ? mode
+      : null;
+  const marks = guiding === "markup" ? guides.marks : [];
+  const selected = marks.find((mark) => mark.id === guides.selected) ?? null;
+  const selectedBox = selected ? markBox(selected) : null;
+  const active =
+    guiding === "markup"
+      ? tool === "brush" || tool === "eraser"
+        ? "select"
+        : tool
+      : guiding === "mask"
+        ? tool === "brush" || tool === "eraser"
+          ? tool
+          : "pan"
+        : "pan";
+  const drawing = (MARK_TOOLS as readonly string[]).includes(active);
+  const painting = active === "brush" || active === "eraser";
+
+  const closeSketch = () => {
+    window.clearTimeout(pause.current);
+    sketch.current = null;
+  };
+  // Another tool, color, or mode ends the sketch that was taking strokes.
+  useEffect(
+    () => () => {
+      window.clearTimeout(pause.current);
+      sketch.current = null;
+    },
+    [tool, color, mode],
+  );
 
   const fit =
     width > 0 && height > 0 && box.width > 0
@@ -180,7 +329,9 @@ export function Viewport({
     geometry.current = { zoom, left, top, box, width, height, fit };
   });
 
+  const hostElement = useRef<HTMLDivElement | null>(null);
   const host = useCallback((element: HTMLDivElement | null) => {
+    hostElement.current = element;
     if (!element) {
       return;
     }
@@ -243,6 +394,7 @@ export function Viewport({
     }));
   const fitIt = () => setView(FITTED);
   const toggleCompare = () => before && setCompare((on) => !on);
+  const deleteSelected = () => selected && removeMark(image.name, selected.id);
 
   useShortcuts({
     f: fitIt,
@@ -250,30 +402,228 @@ export function Viewport({
     "+": () => zoomBy(ZOOM.button),
     "=": () => zoomBy(ZOOM.button),
     "-": () => zoomBy(1 / ZOOM.button),
+    delete: deleteSelected,
+    backspace: deleteSelected,
+    escape: () => selectMark(image.name, null),
   });
+
+  /** Where on the image the pointer is, as shares of its width and height, which are outside 0 to 1 beside it. */
+  const pointOf = (event: { clientX: number; clientY: number }): Point => {
+    const rect = stage.current?.getBoundingClientRect();
+    return rect && rect.width > 0
+      ? [
+          (event.clientX - rect.left) / rect.width,
+          (event.clientY - rect.top) / rect.height,
+        ]
+      : [-1, -1];
+  };
+
+  const hold = (event: PointerEvent<Element>) => {
+    // Capture can be refused when the pointer is already gone; the drag then simply ends where it is.
+    try {
+      hostElement.current?.setPointerCapture(event.pointerId);
+    } catch {
+      // Nothing to hold on to.
+    }
+  };
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 && event.button !== 1) {
       return;
     }
-    event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { x: event.clientX, y: event.clientY, from: view };
+    hold(event);
+    const point = pointOf(event);
+    const inside =
+      point[0] >= 0 && point[0] <= 1 && point[1] >= 0 && point[1] <= 1;
+    if (event.button === 0 && inside && drawing) {
+      window.clearTimeout(pause.current);
+      const open = sketch.current;
+      const joins =
+        active === "sketch" &&
+        open !== null &&
+        open.color === color &&
+        guides.marks.length === open.count &&
+        guides.marks.some(
+          (mark) => mark.id === open.id && mark.shape === "sketch",
+        );
+      drag.current = {
+        kind: "draw",
+        start: point,
+        join: joins && open ? open.id : null,
+      };
+      setDraft(drawn(active as MarkShape, color, point, point));
+      return;
+    }
+    if (event.button === 0 && inside && painting) {
+      drag.current = { kind: "paint", last: point };
+      paintMask(
+        maskCanvas(image.name, width, height),
+        point,
+        point,
+        brush,
+        width,
+        active === "eraser",
+      );
+      return;
+    }
+    if (guiding === "markup") {
+      selectMark(image.name, null);
+    }
+    drag.current = {
+      kind: "pan",
+      x: event.clientX,
+      y: event.clientY,
+      from: view,
+    };
     setPanning(true);
   };
+
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    const from = drag.current;
-    if (from) {
+    if (painting) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      setCursor({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+    }
+    const current = drag.current;
+    if (!current) {
+      return;
+    }
+    if (current.kind === "pan") {
       setView({
-        ...from.from,
-        x: from.from.x + event.clientX - from.x,
-        y: from.from.y + event.clientY - from.y,
+        ...current.from,
+        x: current.from.x + event.clientX - current.x,
+        y: current.from.y + event.clientY - current.y,
       });
+      return;
+    }
+    const point = pointOf(event);
+    const held = clampPoint(point);
+    if (current.kind === "draw") {
+      setDraft((mark) =>
+        mark === null
+          ? null
+          : mark.shape === "sketch"
+            ? { ...mark, strokes: [[...mark.strokes[0], held]] }
+            : drawn(mark.shape, mark.color, current.start, held),
+      );
+    } else if (current.kind === "paint") {
+      paintMask(
+        maskCanvas(image.name, width, height),
+        current.last,
+        point,
+        brush,
+        width,
+        active === "eraser",
+      );
+      current.last = point;
+    } else if (current.kind === "move") {
+      const [dx, dy] = [point[0] - current.last[0], point[1] - current.last[1]];
+      current.last = point;
+      updateMark(image.name, current.id, (mark) => moveMark(mark, dx, dy));
+    } else {
+      const [fx, fy] = current.fixed;
+      updateMark(image.name, current.id, (mark) =>
+        mark.shape === "circle" || mark.shape === "box"
+          ? {
+              ...mark,
+              x: Math.min(fx, held[0]),
+              y: Math.min(fy, held[1]),
+              w: Math.max(SMALLEST, Math.abs(held[0] - fx)),
+              h: Math.max(SMALLEST, Math.abs(held[1] - fy)),
+            }
+          : mark,
+      );
     }
   };
+
   const endDrag = () => {
+    const current = drag.current;
     drag.current = null;
     setPanning(false);
+    if (current?.kind === "paint") {
+      measureMask(image.name);
+    }
+    if (current?.kind !== "draw" || draft === null) {
+      return;
+    }
+    setDraft(null);
+    const mark = finished(draft, current.start);
+    if (mark.shape !== "sketch") {
+      addMark(image.name, mark);
+      return;
+    }
+    if (current.join !== null) {
+      const stroke = mark.strokes[0];
+      updateMark(image.name, current.join, (joined) =>
+        joined.shape === "sketch"
+          ? { ...joined, strokes: [...joined.strokes, stroke] }
+          : joined,
+      );
+    } else if (mark.strokes[0].length > SKETCH_POINTS) {
+      const id = addMark(image.name, mark);
+      sketch.current = { id, count: id, color: mark.color };
+    }
+    pause.current = window.setTimeout(closeSketch, SKETCH_PAUSE_MS);
   };
+
+  const startMove = (mark: Mark) => (event: PointerEvent<SVGPathElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.stopPropagation();
+    hold(event);
+    drag.current = { kind: "move", id: mark.id, last: pointOf(event) };
+    selectMark(image.name, mark.id);
+  };
+
+  const startResize =
+    (corner: (typeof CORNERS)[number]) =>
+    (event: PointerEvent<HTMLSpanElement>) => {
+      if (!selected || !selectedBox) {
+        return;
+      }
+      event.stopPropagation();
+      hold(event);
+      // The corner across from the one held stays where it is.
+      const fixed: Point = [
+        corner.includes("l") ? selectedBox.x + selectedBox.w : selectedBox.x,
+        corner.includes("t") ? selectedBox.y + selectedBox.h : selectedBox.y,
+      ];
+      drag.current = { kind: "resize", id: selected.id, fixed };
+    };
+
+  /** Pick a mark from the list, and bring it into view when the canvas is zoomed past it. */
+  const showMark = (mark: Mark) => {
+    const area = markBox(mark);
+    const x = left + (area.x + area.w / 2) * width * zoom;
+    const y = top + (area.y + area.h / 2) * height * zoom;
+    const seen =
+      x > RULER + 24 &&
+      x < box.width - 24 &&
+      y > RULER + 24 &&
+      y < box.height - 24;
+    selectMark(image.name, mark.id);
+    setTool("select");
+    if (!seen) {
+      setView((current) => ({
+        ...current,
+        x: current.x + (RULER + box.width) / 2 - x,
+        y: current.y + (RULER + box.height) / 2 - y,
+      }));
+    }
+  };
+
+  const maskHost = useCallback(
+    (element: HTMLDivElement | null) => {
+      if (!element) {
+        return;
+      }
+      const canvas = maskCanvas(image.name, width, height);
+      canvas.className = "block size-full";
+      element.appendChild(canvas);
+      return () => canvas.remove();
+    },
+    [image.name, width, height],
+  );
 
   // A name whose only runs made nothing is not a failure of its own: how the last run ended is said elsewhere.
   const unmade =
@@ -295,11 +645,17 @@ export function Viewport({
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
+      onPointerLeave={() => setCursor(null)}
       // A press of the wheel would otherwise start the browser's own scrolling.
       onMouseDown={(event) => event.button === 1 && event.preventDefault()}
       className={cn(
-        "relative min-h-0 flex-1 touch-none overflow-hidden bg-canvas select-none",
-        width > 0 && (panning ? "cursor-grabbing" : "cursor-grab"),
+        "relative min-h-0 min-w-0 flex-1 touch-none overflow-hidden bg-canvas select-none",
+        width > 0 &&
+          (panning
+            ? "cursor-grabbing"
+            : active === "pan"
+              ? "cursor-grab"
+              : "cursor-default"),
       )}
     >
       <div
@@ -358,10 +714,13 @@ export function Viewport({
             )}
           </div>
           <div
+            ref={stage}
             style={{ left, top, width: width * zoom, height: height * zoom }}
             className={cn(
               "absolute grid place-items-center outline outline-line",
               url ? "checker" : "bg-panel",
+              drawing && "cursor-crosshair",
+              painting && "cursor-none",
             )}
           >
             {url ? (
@@ -386,6 +745,71 @@ export function Viewport({
                 </span>
               )
             )}
+            {guiding === "mask" && (
+              <div
+                ref={maskHost}
+                className="pointer-events-none absolute inset-0 opacity-55"
+              />
+            )}
+            {guiding === "markup" && (
+              <svg
+                width={width * zoom}
+                height={height * zoom}
+                className="pointer-events-none absolute inset-0 overflow-visible"
+              >
+                {marks.map((mark) => (
+                  <MarkLine
+                    key={mark.id}
+                    mark={mark}
+                    width={width * zoom}
+                    height={height * zoom}
+                    onPress={active === "select" ? startMove(mark) : undefined}
+                  />
+                ))}
+                {draft && (
+                  <MarkLine
+                    mark={draft}
+                    width={width * zoom}
+                    height={height * zoom}
+                  />
+                )}
+              </svg>
+            )}
+            {selected && selectedBox && (
+              <div
+                style={{
+                  left: selectedBox.x * width * zoom - 1,
+                  top: selectedBox.y * height * zoom - 1,
+                  width: selectedBox.w * width * zoom + 2,
+                  height: selectedBox.h * height * zoom + 2,
+                }}
+                className="pointer-events-none absolute z-10 border border-accent-ink"
+              >
+                {(selected.shape === "circle" || selected.shape === "box") &&
+                  CORNERS.map((corner) => (
+                    <span
+                      key={corner}
+                      onPointerDown={startResize(corner)}
+                      className={cn(
+                        "pointer-events-auto absolute size-[7px] border border-accent-ink bg-panel",
+                        corner.includes("t") ? "-top-1" : "-bottom-1",
+                        corner.includes("l") ? "-left-1" : "-right-1",
+                        corner === "tl" || corner === "br"
+                          ? "cursor-nwse-resize"
+                          : "cursor-nesw-resize",
+                      )}
+                    />
+                  ))}
+                {selectedBox.w > 0.02 && (
+                  <span className="absolute bottom-[-22px] left-1/2 -translate-x-1/2 bg-accent px-1.5 py-px mono-annotation whitespace-nowrap text-on-accent">
+                    {dimensions(
+                      Math.round(selectedBox.w * width),
+                      Math.round(selectedBox.h * height),
+                    )}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </>
       )}
@@ -403,6 +827,100 @@ export function Viewport({
           No image has been made for this name yet. Generate again, or delete
           it.
         </Notice>
+      )}
+      {painting && cursor && (
+        <span
+          aria-hidden
+          style={{
+            left: cursor.x,
+            top: cursor.y,
+            width: brush * zoom,
+            height: brush * zoom,
+          }}
+          className="ring-white/70 pointer-events-none absolute z-20 -translate-1/2 rounded-full border border-ink ring-1"
+        />
+      )}
+      {guiding === "markup" && (
+        <div
+          onPointerDown={(event) => event.stopPropagation()}
+          className="absolute top-8 left-8 z-30 flex min-h-8 cursor-default items-center gap-2 rounded-md border border-line bg-panel px-2 py-[3px]"
+        >
+          <span className="text-label text-ink-muted">
+            {selected ? `Mark ${selected.id}` : "Mark color"}
+          </span>
+          {MARK_COLORS.map((each) => (
+            <Tooltip key={each.id} content={each.id}>
+              <button
+                type="button"
+                aria-label={each.id}
+                aria-pressed={(selected?.color ?? color) === each.id}
+                style={{ background: each.hex }}
+                onClick={() => {
+                  setColor(each.id);
+                  if (selected) {
+                    updateMark(image.name, selected.id, (mark) => ({
+                      ...mark,
+                      color: each.id,
+                    }));
+                  }
+                }}
+                className="size-3.5 shrink-0 rounded-sm border border-line-control aria-pressed:outline-2 aria-pressed:outline-offset-1 aria-pressed:outline-ink"
+              />
+            </Tooltip>
+          ))}
+          {selected && (
+            <Tooltip content="Delete mark" keys="Del">
+              <Button
+                size="sm"
+                icon
+                aria-label="Delete mark"
+                onClick={deleteSelected}
+              >
+                <Icon name="delete" />
+              </Button>
+            </Tooltip>
+          )}
+          {!selected && marks.length > 1 && (
+            <Button size="sm" onClick={() => clearMarks(image.name)}>
+              Clear all
+            </Button>
+          )}
+        </div>
+      )}
+      {guiding === "mask" && (
+        <div
+          onPointerDown={(event) => event.stopPropagation()}
+          className="absolute top-8 left-8 z-30 flex min-h-8 cursor-default items-center gap-2 rounded-md border border-line bg-panel px-2 py-[3px]"
+        >
+          <ValueField
+            label="Brush"
+            className="w-37"
+            value={brush}
+            min={BRUSH.min}
+            max={BRUSH.max}
+            step={BRUSH.step}
+            unit="px"
+            onChange={setBrush}
+          />
+          <Button
+            size="sm"
+            disabled={guides.painted === 0}
+            onClick={() => clearMask(image.name)}
+          >
+            Clear mask
+          </Button>
+        </div>
+      )}
+      {guiding === "markup" && url && marks.length > 0 && (
+        <MarkList
+          marks={marks}
+          selected={guides.selected}
+          url={url}
+          width={width}
+          height={height}
+          onShow={showMark}
+          onDelete={(mark) => removeMark(image.name, mark.id)}
+        />
       )}
       <div
         onPointerDown={(event) => event.stopPropagation()}

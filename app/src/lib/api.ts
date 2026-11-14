@@ -19,6 +19,15 @@ const PREVIEW_TOOLS = {
   chatgpt: "preview_chatgpt_image_request",
 };
 const CANCEL_TOOL = "cancel_image";
+const UPLOAD_TOOL = "upload_file";
+const LIBRARY_TOOL = "read_reference_library";
+const FOLDER_TOOL = "list_reference_folder";
+const CHOOSE_FILES_TOOL = "choose_reference_files";
+const CHOOSE_FOLDER_TOOL = "choose_reference_folder";
+const KEEP_TOOL = "keep_reference";
+const READ_KEY_TOOL = "read_openai_key";
+const ENTER_KEY_TOOL = "enter_openai_key";
+const CLEAR_KEY_TOOL = "clear_openai_key";
 const READ_SETTINGS_TOOL = "read_app_settings";
 const SAVE_SETTINGS_TOOL = "save_app_settings";
 const READ_STATE_TOOL = "read_app_state";
@@ -27,6 +36,7 @@ const IMAGE_FILE_PREFIX = "image-design://images/";
 const IMAGE_VERSION_PREFIX = "image-design://versions/";
 const IMAGE_THUMBNAIL_PREFIX = "image-design://thumbnails/";
 const RUN_PREVIEW_PREFIX = "image-design://previews/";
+const REFERENCE_PREFIX = "image-design://references/";
 // In a thumbnail URI, names the image file where a version id would be.
 const FILE = "file";
 
@@ -80,6 +90,8 @@ export type ImageRun = {
 export type ImageSummary = {
   /** The image's path in the directory, with forward slashes. */
   name: string;
+  /** The image's file, on the machine the app runs on. */
+  path: string;
   /** Of the image's file; null when it has none, or one that cannot be read. */
   width: number | null;
   height: number | null;
@@ -167,6 +179,8 @@ export type OpenAIImageMethod = MethodSetup & {
   qualities: string[];
   complexities: string[];
   backgrounds: string[];
+  /** The images a request can send, counting the image being edited. */
+  max_images: number;
   max_count: number;
   max_previews: number;
 };
@@ -184,6 +198,8 @@ export type ChatGPTImageMethod = MethodSetup & {
   models: IntelligenceModel[];
   default_model: string;
   default_reasoning_effort: string;
+  /** The images a request can send, counting the image being edited and its marked copy. */
+  max_images: number;
 };
 
 /** `ImageMethods` in schemas.py. */
@@ -212,11 +228,50 @@ export type AppImageRequest = {
   reasoning_effort: string | null;
 };
 
+/** `Mark` in schemas.py, as a request sends one: its points are fractions of the image from its top left. */
+export type SentMark = {
+  shape: "circle" | "box" | "arrow" | "sketch";
+  points: [number, number][];
+  /** For a sketch of several strokes, each stroke after the first. */
+  strokes?: [number, number][][];
+  color: string;
+};
+
+/** A reference as a request names it: a path the app offers, or the upload holding a file the view sent. */
+export type SentReference = { path: string } | { upload: string };
+
+/** `ReferenceEntry` in schemas.py: an image file the app offers as a reference. */
+export type ReferenceEntry = {
+  name: string;
+  path: string;
+  /** Null for a drawing, or a file that could not be read. */
+  width: number | null;
+  height: number | null;
+};
+
+/** `ReferenceLibrary` in schemas.py. */
+export type ReferenceLibrary = {
+  pinned: ReferenceEntry[];
+  /** What requests sent from the app were given, newest first. */
+  used: ReferenceEntry[];
+};
+
+/** `AppFolder` in schemas.py: a pinned folder, which lists its images in the app or opens the file dialog in it. */
+export type AppFolder = { path: string; shows: "files" | "dialog" };
+
+/** What guides a request besides its prompt. */
+type RequestGuides = {
+  references?: SentReference[];
+  marks?: SentMark[];
+};
+
 /** What the request tools take, as `generate_openai_image` and `generate_chatgpt_image` in lib.py name them. */
 export type ImageRequest =
   | {
       method: "openai";
-      arguments: {
+      arguments: RequestGuides & {
+        /** The upload holding the mask. */
+        mask?: string;
         prompt: string;
         name: string;
         version?: string;
@@ -232,7 +287,7 @@ export type ImageRequest =
     }
   | {
       method: "chatgpt";
-      arguments: {
+      arguments: RequestGuides & {
         prompt: string;
         name: string;
         version?: string;
@@ -265,12 +320,17 @@ export type AppState = {
   request: AppImageRequest;
   /** The folders closed in Your images, by their paths. */
   closed_folders: string[];
+  /** The image files pinned as references, by their paths, newest first. */
+  pins: string[];
+  folders: AppFolder[];
 };
 
 // Deleting an image first stops a run working on it, which the server waits on for up to 15 seconds.
 const DELETE_TIMEOUT_MS = 30_000;
 // A run starts in a process of its own, and with ChatGPT an agent starts in that, before the tool answers.
 const START_TIMEOUT_MS = 120_000;
+// A window that asks the person for something stays open for as long as they take to answer it.
+const DIALOG_TIMEOUT_MS = 3_600_000;
 
 function textOf(result: CallToolResult): string {
   return result.content
@@ -372,15 +432,23 @@ export async function listImageMethods(): Promise<ImageMethods> {
   return (await structuredFrom(METHODS_TOOL, {})) as ImageMethods;
 }
 
-/** Start creating or editing an image. It answers once the run has started, with the image's name and the run's id. */
+/** What a started request answers with. */
+export type StartedRequest = {
+  name: string;
+  run_id: string;
+  /** Where each reference it was given is offered from now, in order: an upload it took, from the run's own copy. */
+  references: string[];
+};
+
+/** Start creating or editing an image. It answers once the run has started. */
 export async function generateImage(
   request: ImageRequest,
-): Promise<{ name: string; run_id: string }> {
+): Promise<StartedRequest> {
   return (await structuredFrom(
     GENERATE_TOOLS[request.method],
     request.arguments,
     START_TIMEOUT_MS,
-  )) as { name: string; run_id: string };
+  )) as StartedRequest;
 }
 
 /** What the request would send, worked out by the library without sending it. */
@@ -432,6 +500,104 @@ export function readRunPreview(
   index: number,
 ): Promise<string> {
   return readImage(RUN_PREVIEW_PREFIX, `${run}/${index}/${name}`);
+}
+
+/** A small copy of an image the app offers as a reference, by its path on the machine the app runs on. */
+export async function readReference(path: string): Promise<string> {
+  const uri = `${REFERENCE_PREFIX}${encodeURIComponent(path)}`;
+  const result = await app.readServerResource({ uri });
+  const content = result.contents[0];
+  if (!content || !("blob" in content)) {
+    throw new AppError(`${uri} came back without its file.`);
+  }
+  return `data:${content.mimeType ?? "image/webp"};base64,${content.blob}`;
+}
+
+/** Send a piece of a file for a request to take, and learn how much of the file has arrived. */
+export async function uploadPiece(
+  upload: string,
+  name: string,
+  offset: number,
+  data: string,
+): Promise<number> {
+  const structured = await structuredFrom(UPLOAD_TOOL, {
+    upload,
+    name,
+    offset,
+    data,
+  });
+  return structured.received as number;
+}
+
+/** What the person pinned, and what requests sent from the app were given before. */
+export async function readReferenceLibrary(): Promise<ReferenceLibrary> {
+  return (await structuredFrom(LIBRARY_TOOL, {})) as ReferenceLibrary;
+}
+
+/** The images in a folder pinned to show its files. */
+export async function listReferenceFolder(
+  path: string,
+): Promise<ReferenceEntry[]> {
+  const structured = await structuredFrom(FOLDER_TOOL, { path });
+  return structured.entries as ReferenceEntry[];
+}
+
+/** Ask the person for image files in their platform's file dialog, opened in `folder` when given. */
+export async function chooseReferenceFiles(
+  folder: string | null,
+): Promise<ReferenceEntry[]> {
+  const structured = await structuredFrom(
+    CHOOSE_FILES_TOOL,
+    folder === null ? {} : { folder },
+    DIALOG_TIMEOUT_MS,
+  );
+  return structured.entries as ReferenceEntry[];
+}
+
+/** Ask the person for a folder to pin in their platform's folder dialog; null when they cancel. */
+export async function chooseReferenceFolder(): Promise<string | null> {
+  const structured = await structuredFrom(
+    CHOOSE_FOLDER_TOOL,
+    {},
+    DIALOG_TIMEOUT_MS,
+  );
+  return structured.path as string | null;
+}
+
+/** Keep an uploaded image with the app's state, so it can be pinned. */
+export async function keepReference(upload: string): Promise<ReferenceEntry> {
+  return (await structuredFrom(KEEP_TOOL, { upload })) as ReferenceEntry;
+}
+
+/** `OpenAIKeyStatus` in schemas.py: where the OpenAI API key comes from. The key itself never reaches the view. */
+export type OpenAIKeyStatus = {
+  /** What requests are sent with: the environment's key, which wins, or the saved one; null for no key. */
+  source: "environment" | "saved" | null;
+  /** Whether a key is saved, also when the environment's is the one used. */
+  saved: boolean;
+};
+
+export async function readOpenAIKey(): Promise<OpenAIKeyStatus> {
+  return (await structuredFrom(READ_KEY_TOOL, {})) as OpenAIKeyStatus;
+}
+
+/**
+ * Have the person type their key into a window on the machine the server runs on, which saves it there. It answers
+ * once they have, with whether they entered one.
+ */
+export async function enterOpenAIKey(): Promise<
+  OpenAIKeyStatus & { entered: boolean }
+> {
+  return (await structuredFrom(
+    ENTER_KEY_TOOL,
+    {},
+    DIALOG_TIMEOUT_MS,
+  )) as OpenAIKeyStatus & { entered: boolean };
+}
+
+/** Forget the saved key. */
+export async function clearOpenAIKey(): Promise<OpenAIKeyStatus> {
+  return (await structuredFrom(CLEAR_KEY_TOOL, {})) as OpenAIKeyStatus;
 }
 
 /** How the person set up the app, the same in every directory. */

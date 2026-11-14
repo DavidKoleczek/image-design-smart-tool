@@ -38,6 +38,15 @@ VIEW_TOOLS = (
     "preview_openai_image_request",
     "preview_chatgpt_image_request",
     "cancel_image",
+    "upload_file",
+    "read_reference_library",
+    "list_reference_folder",
+    "choose_reference_files",
+    "choose_reference_folder",
+    "keep_reference",
+    "read_openai_key",
+    "enter_openai_key",
+    "clear_openai_key",
     "read_app_settings",
     "save_app_settings",
     "read_app_state",
@@ -48,6 +57,7 @@ IMAGE_RESOURCES = (
     "image-design://versions/{version}/{+name}",
     "image-design://thumbnails/{version}/{+name}",
     "image-design://previews/{run}/{index}/{+name}",
+    "image-design://references/{+path}",
 )
 
 

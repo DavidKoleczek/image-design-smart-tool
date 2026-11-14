@@ -30,3 +30,4 @@ Listed only to hosts that render MCP Apps.
 - `image-design://versions/{version}/{+name}`: a version kept for an image, such as `v2`.
 - `image-design://thumbnails/{version}/{+name}`: a small WebP of a version, or of the image's file when the version is `file`.
 - `image-design://previews/{run}/{index}/{+name}`: an in-progress image of a run, by the run's ID and the index its `preview` event has.
+- `image-design://references/{+path}`: a small WebP of an image the app offers as a reference, by its path on this machine.

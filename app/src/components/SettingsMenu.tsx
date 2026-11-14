@@ -14,6 +14,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { Tooltip } from "@/components/ui/tooltip";
 import { APP_NAME, DOCUMENTATION, VERSION } from "@/lib/brand";
 import { app } from "@/lib/host";
+import { openKeyDialog } from "@/lib/key";
 import { resetLayout, updateSettings, useSettings } from "@/lib/settings";
 
 const ROW =
@@ -64,6 +65,9 @@ export function SettingsMenu({ onShortcuts }: { onShortcuts: () => void }) {
         <PopoverClose className={ROW} onClick={onShortcuts}>
           <span className="flex-1">Keyboard shortcuts</span>
           <Kbd>?</Kbd>
+        </PopoverClose>
+        <PopoverClose className={ROW} onClick={openKeyDialog}>
+          OpenAI API key
         </PopoverClose>
         <button type="button" className={ROW} onClick={resetLayout}>
           Reset layout

@@ -19,6 +19,10 @@ def require_marks(marks: list[Mark]) -> None:
                 f"Mark {number} is a {mark.shape} with {len(mark.points)} points. A {mark.shape} takes exactly two: "
                 + ("its tail, then its head." if mark.shape == "arrow" else "two opposite corners.")
             )
+        if mark.shape in TWO_POINT_SHAPES and mark.strokes:
+            raise ImageDesignError(
+                f"Mark {number} is a {mark.shape} with strokes, which only a sketch has. Leave out its strokes."
+            )
         try:
             ImageColor.getrgb(mark.color)
         except ValueError:
@@ -35,7 +39,7 @@ def layer(marks: list[Mark], width: int, height: int) -> bytes:
     stroke = max(3, round(min(width, height) / 120))
     for mark in marks:
         color = ImageColor.getrgb(mark.color)
-        points = [(x * (width - 1), y * (height - 1)) for x, y in mark.points]
+        points = _placed(mark.points, width, height)
         match mark.shape:
             case "circle":
                 draw.ellipse(_box(points), outline=color, width=stroke)
@@ -51,7 +55,13 @@ def layer(marks: list[Mark], width: int, height: int) -> bytes:
                     end = (head_x + length * math.cos(barb), head_y + length * math.sin(barb))
                     draw.line([(head_x, head_y), end], fill=color, width=stroke)
             case "sketch":
-                draw.line(points, fill=color, width=stroke, joint="curve")
+                for line in (points, *(_placed(more, width, height) for more in mark.strokes)):
+                    if len(set(line)) == 1:
+                        # A stroke that never moved is a dot, which a line of no length would not draw.
+                        (x, y), radius = line[0], stroke / 2
+                        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
+                    else:
+                        draw.line(line, fill=color, width=stroke, joint="curve")
     buffer = BytesIO()
     canvas.save(buffer, format="PNG")
     return buffer.getvalue()
@@ -75,6 +85,10 @@ def describe(marks: list[Mark]) -> str:
         what = f"Mark {number} is a {mark.color} {mark.shape}"
         lines.append(f"- {what}: {mark.note}" if mark.note else f"- {what}.")
     return "\n".join(lines)
+
+
+def _placed(points: list[tuple[float, float]], width: int, height: int) -> list[tuple[float, float]]:
+    return [(x * (width - 1), y * (height - 1)) for x, y in points]
 
 
 def _box(points: list[tuple[float, float]]) -> tuple[float, float, float, float]:

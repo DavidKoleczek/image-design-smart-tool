@@ -4,7 +4,7 @@ Every capability of Image Design is in `image_design.lib`. All other surfaces, i
 
 ## Generate an image with the OpenAI API
 
-`generate_openai_image` creates or edits an image with an OpenAI image model through the Images API. It requires an `OPENAI_API_KEY`.
+`generate_openai_image` creates or edits an image with an OpenAI image model through the Images API. It requires an OpenAI API key, from the `OPENAI_API_KEY` environment variable or [saved on the machine](#openai-api-key).
 
 ```python
 async def generate_openai_image(
@@ -79,6 +79,7 @@ A mark is a shape with an optional note:
 class Mark(BaseModel):
     shape: Literal["circle", "box", "arrow", "sketch"]
     points: list[tuple[float, float]]  # fractions of the image's width and height
+    strokes: list[list[tuple[float, float]]] = []  # for a sketch, each stroke after the first
     color: str = "red"
     note: str = ""
 ```
@@ -91,6 +92,7 @@ class ImageRun(Protocol):
     directory: Path
     data_directory: Path
     run_id: str
+    folder: Path  # the image's folder in the data directory; the run's files are in runs/<run_id> there
 
     def events(self) -> AsyncIterator[ImageEvent]: ...
     async def cancel(self) -> None: ...
@@ -104,6 +106,25 @@ Each `ImageVersion` records its file, its size, and the request that made it.
 
 Only one run can work on an image at a time. A request for an image that already has a run raises `ImageDesignError`.
 A request that fails or times out is not retried, because it may still have been billed.
+
+### OpenAI API key
+
+```python
+def openai_api_key_status() -> OpenAIKeyStatus
+def save_openai_api_key(key: str) -> None
+def clear_openai_api_key() -> None
+```
+
+```python
+class OpenAIKeyStatus(BaseModel):
+    source: Literal["environment", "saved"] | None
+    saved: bool
+```
+
+A request is sent with the key in `OPENAI_API_KEY` when the environment has one, and otherwise with the saved key.
+`save_openai_api_key` keeps a key in the platform's credential store: Windows Credential Manager, the macOS Keychain, or the Secret Service on Linux. It is written to no file of the tool. On a machine with no such store it raises `ImageDesignError`, and the environment variable is the way.
+`openai_api_key_status` says which key is used and whether one is saved. Nothing returns the key itself.
+`clear_openai_api_key` forgets the saved key.
 
 ## Generate an image with ChatGPT
 
@@ -368,10 +389,16 @@ The server has one tool for an agent, `open_app`. It opens the browser page and 
 The other tools are for the view. They are listed only to hosts that render MCP Apps, and marked for the app alone. The view and the resource templates are listed to the same hosts.
 
 - `list_images`, `view_image`, `move_image`, `delete_image`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's directory.
-- `generate_openai_image` and `generate_chatgpt_image` start a run on the app's directory with `detach=True` and `origin="app"`, so the image goes on being made when the app closes. They return the image's name and the run's ID once the run has started. They take the prompt, the name, the version to edit, and the model and output options. References, marks, and masks are not taken yet.
+- `generate_openai_image` and `generate_chatgpt_image` start a run on the app's directory with `detach=True` and `origin="app"`, so the image goes on being made when the app closes. They return the image's name and the run's ID once the run has started. They take the prompt, the name, the version to edit, the model and output options, and what guides the request: `references`, `marks`, and for the OpenAI API a `mask`. Each reference is a `path` the app offers or an `upload`, and the mask is an upload. A started run has copied what it was given, so the uploads it took are cleared, and the result's `references` says where each is offered from now.
 - `preview_openai_image_request` and `preview_chatgpt_image_request` take the same arguments and return the `ImageRequestPreview`.
+- `upload_file` takes a file from the view in base64 pieces, under an ID the view makes up: a reference dropped or pasted into the app, or the mask painted in it. Uploads wait in `image-design-uploads` in the system's temp folder. One that no request takes is cleared when the app closes, or by the next app to start a day later.
+- `read_reference_library` returns the references the app offers besides the images in its directory: the pinned files, and what requests sent from the app were given before.
+- `list_reference_folder` returns the images in a folder pinned to show its files.
+- `choose_reference_files` and `choose_reference_folder` ask the user in the platform's own file dialog, which needs Tk in the Python that runs the app.
+- `keep_reference` copies an upload into `app/pins` in the data directory, so a dropped image can be pinned. The copy is cleared once the state is saved without it among the pins.
+- `read_openai_key`, `enter_openai_key`, and `clear_openai_key` are over `openai_api_key_status`, `save_openai_api_key`, and `clear_openai_api_key`. None takes or returns the key. `enter_openai_key` has the user type it into a window on the machine the server runs on, so the key is in no message between the view, its host, and the server.
 - `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, and the pane sizes.
-- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options.
+- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, and the pinned references and folders.
 
 The view reads images as resources, each as base64. A read is refused unless the listing has that image or version, or the image's activity has that preview.
 
@@ -379,11 +406,13 @@ The view reads images as resources, each as base64. A read is refused unless the
 - `image-design://versions/{version}/{+name}` is a version kept for an image, such as `v2`.
 - `image-design://thumbnails/{version}/{+name}` is a WebP of a version that fits 256 by 256 pixels. Use `file` as the version for the image's file.
 - `image-design://previews/{run}/{index}/{+name}` is an in-progress image of a run. `run` is the run's ID, and `index` is the one its `preview` event has.
+- `image-design://references/{+path}` is a WebP that fits 256 by 256 pixels of an image the app offers as a reference, by its path on the machine. It is refused unless the file is an image in the app's directory, pinned, in a folder pinned to show its files, used before, or chosen in the file dialog. A request's references are held to the same rule.
 
-The app keeps what it remembers in two files:
+The app keeps what it remembers in these files:
 
 - `app-settings.json` is the same for every directory. It is in `image-design` in the user's config folder: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, and `$XDG_CONFIG_HOME` or `~/.config` on Linux.
-- `app/app.json` is in the data directory, so each directory has its own. The data directory's `.gitignore` ignores it.
+- `app/app.json` is in the data directory, so each directory has its own. The data directory's `.gitignore` ignores the `app` folder.
+- `app/used.json` lists the references that requests sent from the app were given, newest first.
 
 ## MCP server
 

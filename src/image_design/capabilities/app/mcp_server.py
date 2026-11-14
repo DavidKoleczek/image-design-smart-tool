@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 import json
 from pathlib import Path
 import threading
+import time
 from typing import Any
 import uuid
 
@@ -31,11 +32,15 @@ from mcp.types import (
     Tool,
 )
 
+from image_design.capabilities.app import library, uploads
 from image_design.capabilities.app.resources import (
     is_image_resource,
     is_preview_resource,
+    is_reference_resource,
     read_image_resource,
     read_preview_resource,
+    read_reference_resource,
+    reference_path,
 )
 from image_design.capabilities.app.server import App, serve_app, view
 from image_design.capabilities.app.settings import (
@@ -46,13 +51,19 @@ from image_design.capabilities.app.settings import (
 )
 from image_design.capabilities.app.tools import (
     CANCEL_IMAGE,
+    CHOOSE_FILES,
+    CHOOSE_FOLDER,
+    CLEAR_OPENAI_KEY,
     DELETE_IMAGE,
+    ENTER_OPENAI_KEY,
     GENERATE_CHATGPT,
     GENERATE_OPENAI,
     IMAGE_FILE,
     IMAGE_RESOURCES,
     IMAGE_THUMBNAIL,
     IMAGE_VERSION,
+    KEEP_REFERENCE,
+    LIST_FOLDER,
     LIST_IMAGES,
     LIST_METHODS,
     MOVE_IMAGE,
@@ -60,12 +71,16 @@ from image_design.capabilities.app.tools import (
     PREVIEW_CHATGPT,
     PREVIEW_OPENAI,
     READ_ACTIVITY,
+    READ_LIBRARY,
+    READ_OPENAI_KEY,
     READ_SETTINGS,
     READ_STATE,
+    REFERENCE,
     RESTORE_VERSION,
     RUN_PREVIEW,
     SAVE_SETTINGS,
     SAVE_STATE,
+    UPLOAD_FILE,
     VIEW,
     VIEW_IMAGE,
     VIEW_TOOLS,
@@ -78,6 +93,9 @@ from image_design.schemas import (
     ImageMethods,
     ImageRequestPreview,
     ImageSummary,
+    OpenAIKeyStatus,
+    ReferenceEntry,
+    UsedReference,
 )
 from image_design.shared.images.runs import ImageRun
 from image_design.shared.images.store import directories
@@ -86,6 +104,10 @@ from image_design.shared.images.store import directories
 OPEN_REQUEST = "open"
 # What a run the view starts is recorded as asked by.
 ORIGIN = "app"
+CHOOSE_FILES_TITLE = "Choose reference images"
+CHOOSE_FOLDER_TITLE = "Choose a folder to pin"
+ENTER_KEY_TITLE = "Image Design: OpenAI API key"
+ENTER_KEY_LABEL = "Paste your OpenAI API key. It is saved in this computer's credential store."
 INSTRUCTIONS = (
     "Image Design has an app where the user sees the images in one directory. Call `open_app` when they ask for it."
 )
@@ -116,6 +138,12 @@ class AppServer:
         preview_openai_image_request: Callable[..., ImageRequestPreview],
         preview_chatgpt_image_request: Callable[..., ImageRequestPreview],
         cancel_image: Callable[[str, Path, Path], None],
+        choose_files: Callable[[Path, str], list[Path]],
+        choose_folder: Callable[[Path, str], Path | None],
+        openai_api_key_status: Callable[[], OpenAIKeyStatus],
+        save_openai_api_key: Callable[[str], None],
+        clear_openai_api_key: Callable[[], None],
+        ask_secret: Callable[[str, str], str | None],
         settings_path: Path,
     ) -> None:
         self.directory, self.data_directory = directories(directory, data_directory)
@@ -133,6 +161,21 @@ class AppServer:
             PREVIEW_CHATGPT.name: preview_chatgpt_image_request,
         }
         self._cancel_image = cancel_image
+        self._choose_files = choose_files
+        self._choose_folder = choose_folder
+        self._openai_api_key_status = openai_api_key_status
+        self._save_openai_api_key = save_openai_api_key
+        self._clear_openai_api_key = clear_openai_api_key
+        self._ask_secret = ask_secret
+        # Whether a file or folder dialog is showing, so a second click does not show another.
+        self._asking = False
+        # Where the file dialogs open: where files were last chosen from, and until then the app's directory.
+        self._last_folder: Path | None = None
+        # The files chosen in a dialog since the app started, which it then offers as references.
+        self._chosen: set[Path] = set()
+        # The uploads no request took yet.
+        self._uploads: set[str] = set()
+        uploads.clear_old(time.time())
         # The last listing the view was given, which the files it then reads are checked against.
         self._listing: ImageListing | None = None
         self._lock = threading.Lock()
@@ -159,11 +202,14 @@ class AppServer:
             return self._app
 
     def close(self) -> None:
-        """Stop serving the browser host page, if it was opened."""
+        """Stop serving the browser host page, if it was opened, and clear the uploads no request took."""
         with self._lock:
             if self._app is not None:
                 self._app.stop()
                 self._app = None
+            for upload in self._uploads:
+                uploads.clear(upload)
+            self._uploads.clear()
 
     async def _list_tools(
         self, ctx: ServerRequestContext[Any], params: PaginatedRequestParams | None
@@ -191,13 +237,16 @@ class AppServer:
                 return ReadResourceResult(contents=[contents])
             if is_image_resource(params.uri) or is_preview_resource(params.uri):
                 return ReadResourceResult(contents=[await asyncio.to_thread(self._image_resource, params.uri)])
+            if is_reference_resource(params.uri):
+                return ReadResourceResult(contents=[await asyncio.to_thread(self._reference_resource, params.uri)])
         except ImageDesignError as error:
             raise MCPError(INVALID_PARAMS, str(error)) from None
         raise MCPError(
             INVALID_PARAMS,
             f"'{params.uri}' is not a resource of this server. It has {VIEW_URI}, each image's file at "
             f"{IMAGE_FILE.uri_template}, its versions at {IMAGE_VERSION.uri_template}, small copies of them at "
-            f"{IMAGE_THUMBNAIL.uri_template}, and the in-progress images of its runs at {RUN_PREVIEW.uri_template}.",
+            f"{IMAGE_THUMBNAIL.uri_template}, the in-progress images of its runs at {RUN_PREVIEW.uri_template}, and "
+            f"small copies of the references it offers at {REFERENCE.uri_template}.",
         )
 
     def _image_resource(self, uri: str) -> BlobResourceContents:
@@ -218,13 +267,101 @@ class AppServer:
 
         return read_preview_resource(uri, listing, activity)
 
+    def _reference_resource(self, uri: str) -> BlobResourceContents:
+        return read_reference_resource(uri, self._as_reference(reference_path(uri)))
+
+    def _as_reference(self, path: Path) -> Path:
+        """`path`, once it is known to be an image the app offers as a reference, so no other file on this machine
+        can be read or sent through the app."""
+        state = read_app_state(self.data_directory)
+        if (
+            path in state.pins
+            or path in self._chosen
+            or any(folder.shows == "files" and folder.path == path.parent for folder in state.folders)
+            or library.is_kept(self.data_directory, path)
+            or library.is_used(self.data_directory, path)
+            or (self._listing is not None and any(image.path == path for image in self._listing.images))
+            # The image may be newer than that listing.
+            or any(image.path == path for image in self._list().images)
+        ):
+            return path
+        raise ImageDesignError(
+            f"{path} is not an image the app offers as a reference. Pin it, pin the folder it is in, or choose it in "
+            "the file dialog.",
+            "not-a-reference",
+        )
+
     def _request(self, arguments: dict[str, Any], tool: Tool) -> dict[str, Any]:
         """What a request tool was called with, as the arguments of the library function it wraps, on the app's
         directory."""
         request = {name: arguments[name] for name in tool.input_schema["properties"] if name in arguments}
         if isinstance(request.get("size"), list):
             request["size"] = tuple(request["size"])
+        if "references" in request:
+            request["references"] = [self._reference(reference) for reference in request["references"]]
+        if "mask" in request:
+            request["mask"] = uploads.staged(request["mask"])
         return {**request, "directory": self.directory, "data_directory": self.data_directory}
+
+    def _reference(self, reference: dict[str, str]) -> Path:
+        if "upload" in reference:
+            return uploads.staged(reference["upload"])
+        return self._as_reference(Path(reference["path"]))
+
+    def _took(self, arguments: dict[str, Any], run: ImageRun) -> list[Path]:
+        """Remember the references a started run was given as used here, and clear the uploads it took, which the
+        run has copied into its own folder. Returns where each reference is offered from now, in order."""
+        given: list[UsedReference] = []
+        for number, reference in enumerate(arguments.get("references") or [], 1):
+            if "upload" not in reference:
+                given.append(UsedReference(name=Path(reference["path"]).name, path=Path(reference["path"])))
+                continue
+            name = uploads.staged(reference["upload"]).name
+            copies = sorted((run.folder / "runs" / run.run_id / "inputs").glob(f"reference-{number}.*"))
+            if copies:
+                given.append(UsedReference(name=name, path=copies[0]))
+        library.remember_used(self.data_directory, given)
+        taken = [reference["upload"] for reference in arguments.get("references") or [] if "upload" in reference]
+        for upload in [*taken, *([arguments["mask"]] if "mask" in arguments else [])]:
+            uploads.clear(upload)
+            self._uploads.discard(upload)
+        return [each.path for each in given]
+
+    def _entries(self, paths: list[Path]) -> list[dict[str, Any]]:
+        entries = (library.entry(path) for path in paths)
+        return [found.model_dump(mode="json") for found in entries if found is not None]
+
+    def _pinned_folder(self, path: Path) -> list[ReferenceEntry]:
+        pinned = [folder.path for folder in read_app_state(self.data_directory).folders if folder.shows == "files"]
+        if path not in pinned:
+            raise ImageDesignError(
+                f"{path} is not a folder pinned to show its files. Those pinned so are: "
+                f"{', '.join(str(folder) for folder in pinned) or 'none'}.",
+                "missing-folder",
+            )
+        return library.list_folder(path)
+
+    def _keep(self, upload: str) -> ReferenceEntry:
+        kept = library.entry(library.keep(uploads.staged(upload), self.data_directory))
+        if kept is None:
+            raise ImageDesignError(f"The upload {upload} could not be kept to pin it. Add the file again.", "bad-upload")
+        return kept
+
+    async def _in_dialog[Asked, Chosen](self, ask: Callable[[Asked, str], Chosen], first: Asked, second: str) -> Chosen:
+        if self._asking:
+            raise ImageDesignError(
+                "A window asking for something is already open. Answer it first; it may be behind another window.",
+                "dialog-open",
+            )
+        self._asking = True
+        try:
+            return await asyncio.to_thread(ask, first, second)
+        finally:
+            self._asking = False
+
+    def _dialog_folder(self) -> Path:
+        folder = self._last_folder
+        return folder if folder is not None and folder.is_dir() else self.directory
 
     def _list(self) -> ImageListing:
         directory = self.directory
@@ -294,8 +431,11 @@ class AppServer:
         if params.name in self._generate:
             tool = GENERATE_OPENAI if params.name == GENERATE_OPENAI.name else GENERATE_CHATGPT
             # In a process of its own, so the image goes on being made when the app or its host closes.
-            run = await self._generate[params.name](**self._request(arguments, tool), origin=ORIGIN, detach=True)
-            return _structured({"name": run.name, "run_id": run.run_id})
+            request = await asyncio.to_thread(self._request, arguments, tool)
+            run = await self._generate[params.name](**request, origin=ORIGIN, detach=True)
+            references = await asyncio.to_thread(self._took, arguments, run)
+            started = {"name": run.name, "run_id": run.run_id, "references": [str(path) for path in references]}
+            return _structured(started)
         if params.name in self._preview:
             tool = PREVIEW_OPENAI if params.name == PREVIEW_OPENAI.name else PREVIEW_CHATGPT
             preview = await asyncio.to_thread(lambda: self._preview[params.name](**self._request(arguments, tool)))
@@ -303,6 +443,47 @@ class AppServer:
         if params.name == CANCEL_IMAGE.name:
             await asyncio.to_thread(self._cancel_image, arguments["name"], self.directory, self.data_directory)
             return _text(f"Asked the run on {arguments['name']} to stop.")
+        if params.name == UPLOAD_FILE.name:
+            received = await asyncio.to_thread(
+                uploads.receive, arguments["upload"], arguments["name"], arguments["offset"], arguments["data"]
+            )
+            self._uploads.add(arguments["upload"])
+            return _structured({"received": received})
+        if params.name == READ_LIBRARY.name:
+            state = await asyncio.to_thread(read_app_state, self.data_directory)
+            found = await asyncio.to_thread(library.read_library, self.data_directory, state)
+            return _structured(found.model_dump(mode="json"))
+        if params.name == LIST_FOLDER.name:
+            entries = await asyncio.to_thread(self._pinned_folder, Path(arguments["path"]))
+            return _structured({"entries": [each.model_dump(mode="json") for each in entries]})
+        if params.name == CHOOSE_FILES.name:
+            folder = arguments.get("folder")
+            opened = Path(folder) if folder else self._dialog_folder()
+            chosen = await self._in_dialog(self._choose_files, opened, CHOOSE_FILES_TITLE)
+            if chosen:
+                self._last_folder = chosen[0].parent
+                self._chosen.update(chosen)
+            return _structured({"entries": await asyncio.to_thread(self._entries, chosen)})
+        if params.name == CHOOSE_FOLDER.name:
+            picked = await self._in_dialog(self._choose_folder, self._dialog_folder(), CHOOSE_FOLDER_TITLE)
+            return _structured({"path": str(picked) if picked else None})
+        if params.name == KEEP_REFERENCE.name:
+            kept = await asyncio.to_thread(self._keep, arguments["upload"])
+            return _structured(kept.model_dump(mode="json"))
+        if params.name == READ_OPENAI_KEY.name:
+            status = await asyncio.to_thread(self._openai_api_key_status)
+            return _structured(status.model_dump(mode="json"))
+        if params.name == ENTER_OPENAI_KEY.name:
+            # Typed on this machine and kept here: the key is in no message between the view, its host, and this.
+            entered = await self._in_dialog(self._ask_secret, ENTER_KEY_TITLE, ENTER_KEY_LABEL)
+            if entered is not None:
+                await asyncio.to_thread(self._save_openai_api_key, entered)
+            status = await asyncio.to_thread(self._openai_api_key_status)
+            return _structured({**status.model_dump(mode="json"), "entered": entered is not None})
+        if params.name == CLEAR_OPENAI_KEY.name:
+            await asyncio.to_thread(self._clear_openai_api_key)
+            status = await asyncio.to_thread(self._openai_api_key_status)
+            return _structured(status.model_dump(mode="json"))
         if params.name == READ_SETTINGS.name:
             settings = await asyncio.to_thread(read_app_settings, self.settings_path)
             return _structured(settings.model_dump(mode="json"))
@@ -314,6 +495,7 @@ class AppServer:
             return _structured(state.model_dump(mode="json"))
         if params.name == SAVE_STATE.name:
             state = await asyncio.to_thread(save_app_state, arguments["state"], self.data_directory)
+            await asyncio.to_thread(library.clear_unpinned, self.data_directory, state.pins)
             return _structured(state.model_dump(mode="json"))
         known = ", ".join(tool.name for tool in [OPEN_APP, *VIEW_TOOLS])
         raise ImageDesignError(f"'{params.name}' is not a tool of this server. The tools are: {known}.", "no-such-tool")

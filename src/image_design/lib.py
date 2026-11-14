@@ -2,6 +2,7 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Literal, overload
 
+from image_design.capabilities.app import folders as app_folders
 from image_design.capabilities.app import mcp_server as app_server_module
 from image_design.capabilities.app import server as app_module
 from image_design.capabilities.app import settings as app_settings
@@ -11,6 +12,7 @@ from image_design.capabilities.chatgpt_image import method as chatgpt_method
 from image_design.capabilities.intelligence_models import intelligence_models
 from image_design.capabilities.manage_images import manage_images
 from image_design.capabilities.openai_image import generate
+from image_design.capabilities.openai_image import key as openai_key
 from image_design.capabilities.openai_image import method as openai_method
 from image_design.capabilities.svg_image import check as svg_check
 from image_design.capabilities.svg_image import draw as svg_draw
@@ -37,6 +39,7 @@ from image_design.schemas import (
     OpenAIImageBackground,
     OpenAIImageComplexity,
     OpenAIImageQuality,
+    OpenAIKeyStatus,
     ReasoningEffort,
     SvgCheck,
 )
@@ -434,6 +437,28 @@ def list_image_methods() -> ImageMethods:
     return ImageMethods(openai=openai_method.describe(), chatgpt=chatgpt_method.describe(), svg=svg_method.describe())
 
 
+def openai_api_key_status() -> OpenAIKeyStatus:
+    """Where the OpenAI API key that `generate_openai_image` is billed to comes from, without the key itself.
+
+    The `OPENAI_API_KEY` environment variable wins. Without it, the key saved with `save_openai_api_key` is used.
+    """
+    return openai_key.status()
+
+
+def save_openai_api_key(key: str) -> None:
+    """Keep an OpenAI API key in the platform's credential store, for when the environment has none.
+
+    That is Windows Credential Manager, the macOS Keychain, or the Secret Service on Linux. The key is written to no
+    file of the tool. Raises `ImageDesignError` when the machine has no such store.
+    """
+    openai_key.save(key)
+
+
+def clear_openai_api_key() -> None:
+    """Forget the OpenAI API key saved with `save_openai_api_key`, if there is one."""
+    openai_key.clear()
+
+
 def restore_image_version(
     name: str, version: str, directory: Path | None = None, data_directory: Path | None = None
 ) -> ImageSummary:
@@ -517,6 +542,12 @@ def app_server(directory: Path | None = None, data_directory: Path | None = None
         preview_openai_image_request,
         preview_chatgpt_image_request,
         cancel_image,
+        app_folders.choose_files,
+        app_folders.choose_folder,
+        openai_api_key_status,
+        save_openai_api_key,
+        clear_openai_api_key,
+        app_folders.ask_secret,
         app_settings.settings_path(),
     )
 

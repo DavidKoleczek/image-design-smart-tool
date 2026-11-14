@@ -3,6 +3,10 @@ import { Kbd } from "@/components/ui/kbd";
 
 const SHORTCUTS: [string[], string][] = [
   [["1", "2"], "Markup or Mask"],
+  [["V", "H"], "Select or pan"],
+  [["O", "R", "A", "P"], "Circle, box, arrow, or sketch"],
+  [["B", "E"], "Paint or erase the mask"],
+  [["Del"], "Delete the mark picked"],
   [["+", "-"], "Zoom in or out"],
   [["F"], "Fit"],
   [["C"], "Compare with the version before"],

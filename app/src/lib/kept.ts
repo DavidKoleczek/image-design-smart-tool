@@ -23,6 +23,7 @@ export function keep<Value>(options: {
   // Changed here and not yet saved, or being saved: a read meanwhile would undo the change.
   let unsaved = false;
   let saving = 0;
+  let lastSave: Promise<void> = Promise.resolve();
   // Counts the times the server came to keep it somewhere else, so an answer from the place before is dropped.
   let place = 0;
 
@@ -79,7 +80,17 @@ export function keep<Value>(options: {
       set({ ...state, value: change(state.value) });
       unsaved = true;
       clearTimeout(timer);
-      timer = setTimeout(() => void save(), SAVE_DELAY_MS);
+      timer = setTimeout(() => {
+        lastSave = save();
+      }, SAVE_DELAY_MS);
+    },
+    /** Save a change still waiting now, and wait until the server has it, for a call that goes by what is kept. */
+    async flush() {
+      if (unsaved) {
+        clearTimeout(timer);
+        lastSave = save();
+      }
+      await lastSave;
     },
     /** Read it from where the server keeps it now. A change not yet saved was for the place before, and is dropped. */
     moved() {

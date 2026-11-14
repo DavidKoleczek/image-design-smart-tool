@@ -1,5 +1,5 @@
 `generate-openai-image` creates or edits an image with an OpenAI image model through the Images API.
-It needs the `openai` extra and an `OPENAI_API_KEY`. Each request is billed to that key, and it is never retried.
+It needs the `openai` extra and an OpenAI API key: `OPENAI_API_KEY` in the environment, or else the key the user saved from the app's settings or with `save_openai_api_key`. Each request is billed to that key, and it is never retried.
 
 A new `--name` creates the image. The name of an image that exists edits it and overwrites its file.
 Every image made is kept as a version in the data directory, so `restore-image-version` can put an earlier one back.
@@ -18,6 +18,7 @@ result = await run.result()
 
 `marks.json` holds a list of marks. Points are fractions of the image's width and height from its top left: two
 opposite corners for a `circle` or `box`, the tail then the head for an `arrow`, and each point along a `sketch`.
+A sketch drawn in several strokes has the first in `points` and the others, each a list of points, in `strokes`.
 
 ```json
 [{"shape": "circle", "points": [[0.4, 0.5], [0.6, 0.9]], "color": "red", "note": "this pot"}]

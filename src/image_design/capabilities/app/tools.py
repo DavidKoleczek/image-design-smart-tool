@@ -8,6 +8,7 @@ IMAGE_FILE_PREFIX = "image-design://images/"
 IMAGE_VERSION_PREFIX = "image-design://versions/"
 IMAGE_THUMBNAIL_PREFIX = "image-design://thumbnails/"
 RUN_PREVIEW_PREFIX = "image-design://previews/"
+REFERENCE_PREFIX = "image-design://references/"
 # In a thumbnail's URI, names the image's file where a version's id would be.
 FILE = "file"
 APP_ONLY = {"ui": {"resourceUri": VIEW_URI, "visibility": ["app"]}}
@@ -147,10 +148,30 @@ REQUEST = {
     },
     "version": {"type": "string", "description": "The version to edit, such as v2. Omit it for the image's file"},
 }
+REFERENCE_PATH = {"type": "string", "description": "An image file's path on this machine, as the app offered it"}
+UPLOAD = {"type": "string", "description": "An upload's id: 16 to 64 lowercase hex digits the view makes up"}
+REFERENCES = {
+    "type": "array",
+    "items": {"type": "object", "properties": {"path": REFERENCE_PATH, "upload": UPLOAD}},
+    "description": "Other images to send with the prompt, in order. Each is a `path` the app offers as a reference, "
+    "or the `upload` holding a file sent with `upload_file`",
+}
+MARKS = {
+    "type": "array",
+    "items": {"type": "object"},
+    "description": "Shapes drawn over the image being edited, each with a `shape`, its `points` as fractions of the "
+    "image, a `color`, and for a sketch of several strokes its further `strokes`",
+}
 OPENAI_REQUEST = {
     "type": "object",
     "properties": {
         **REQUEST,
+        "references": REFERENCES,
+        "marks": MARKS,
+        "mask": {
+            "type": "string",
+            "description": "The upload holding a PNG the image's size, transparent where the model may make changes",
+        },
         "model": {"type": "string", "description": "An OpenAI image model's ID. Omit it for the default"},
         "size": {
             "type": "array",
@@ -172,6 +193,8 @@ CHATGPT_REQUEST = {
     "type": "object",
     "properties": {
         **REQUEST,
+        "references": REFERENCES,
+        "marks": MARKS,
         "transparent": {"type": "boolean", "description": "Ask for a transparent background"},
         "model": {"type": "string", "description": "The Codex model that carries the request. Omit it for the default"},
         "reasoning_effort": {"type": "string", "description": "That model's reasoning effort"},
@@ -214,6 +237,91 @@ CANCEL_IMAGE = Tool(
     input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
     _meta=APP_ONLY,
 )
+UPLOAD_FILE = Tool(
+    name="upload_file",
+    description="Send a piece of a file for a request to take: a reference dropped or pasted into the app, or the mask "
+    "painted in it. Returns how much of the file has arrived. An upload no request takes is cleared when the app "
+    "closes. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "upload": UPLOAD,
+            "name": {"type": "string", "description": "The file's name"},
+            "offset": {"type": "integer", "description": "Where in the file this piece starts"},
+            "data": {"type": "string", "description": "The piece, as base64"},
+        },
+        "required": ["upload", "name", "offset", "data"],
+    },
+    _meta=APP_ONLY,
+)
+READ_LIBRARY = Tool(
+    name="read_reference_library",
+    description="The references the app offers besides the images in its directory: what the person pinned, and what "
+    "requests sent from the app were given before. Called by the view.",
+    input_schema={"type": "object", "properties": {}},
+    _meta=APP_ONLY,
+)
+LIST_FOLDER = Tool(
+    name="list_reference_folder",
+    description="The images in a folder the person pinned to show its files. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "The pinned folder's path"}},
+        "required": ["path"],
+    },
+    _meta=APP_ONLY,
+)
+CHOOSE_FILES = Tool(
+    name="choose_reference_files",
+    description="Ask the person for image files in their platform's file dialog, and return those they chose, which "
+    "the app then offers as references. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "folder": {
+                "type": "string",
+                "description": "Where the dialog opens. Omit it for where files were last chosen from",
+            }
+        },
+    },
+    _meta=APP_ONLY,
+)
+CHOOSE_FOLDER = Tool(
+    name="choose_reference_folder",
+    description="Ask the person for a folder to pin in their platform's folder dialog, and return its path, or none "
+    "when they cancel. Called by the view.",
+    input_schema={"type": "object", "properties": {}},
+    _meta=APP_ONLY,
+)
+KEEP_REFERENCE = Tool(
+    name="keep_reference",
+    description="Keep an uploaded image with the app's state for its directory, so it can be pinned, and return it "
+    "as the app offers it. It is cleared once the app's state is saved without it among the pins. Called by the view.",
+    input_schema={"type": "object", "properties": {"upload": UPLOAD}, "required": ["upload"]},
+    _meta=APP_ONLY,
+)
+READ_OPENAI_KEY = Tool(
+    name="read_openai_key",
+    description="Where the OpenAI API key comes from: the environment, the platform's credential store, or nowhere. "
+    "Never the key itself. Called by the view.",
+    input_schema={"type": "object", "properties": {}},
+    _meta=APP_ONLY,
+)
+ENTER_OPENAI_KEY = Tool(
+    name="enter_openai_key",
+    description="Ask the person to type their OpenAI API key into a window on this machine, and save it in the "
+    "platform's credential store. The key is not an argument and is not returned, so it passes through no host. "
+    "Returns where the key comes from now, and whether one was entered. Called by the view.",
+    input_schema={"type": "object", "properties": {}},
+    _meta=APP_ONLY,
+)
+CLEAR_OPENAI_KEY = Tool(
+    name="clear_openai_key",
+    description="Forget the OpenAI API key saved in the platform's credential store, and return where the key comes "
+    "from now. Called by the view.",
+    input_schema={"type": "object", "properties": {}},
+    _meta=APP_ONLY,
+)
 VIEW_TOOLS = [
     LIST_IMAGES,
     VIEW_IMAGE,
@@ -227,6 +335,15 @@ VIEW_TOOLS = [
     PREVIEW_OPENAI,
     PREVIEW_CHATGPT,
     CANCEL_IMAGE,
+    UPLOAD_FILE,
+    READ_LIBRARY,
+    LIST_FOLDER,
+    CHOOSE_FILES,
+    CHOOSE_FOLDER,
+    KEEP_REFERENCE,
+    READ_OPENAI_KEY,
+    ENTER_OPENAI_KEY,
+    CLEAR_OPENAI_KEY,
     READ_SETTINGS,
     SAVE_SETTINGS,
     READ_STATE,
@@ -255,4 +372,11 @@ RUN_PREVIEW = ResourceTemplate(
     description="An in-progress image of a run on an image, by the run's id and the index its `preview` event has, as "
     "base64, for the app's view.",
 )
-IMAGE_RESOURCES = [IMAGE_FILE, IMAGE_VERSION, IMAGE_THUMBNAIL, RUN_PREVIEW]
+REFERENCE = ResourceTemplate(
+    name="Reference",
+    uri_template=f"{REFERENCE_PREFIX}{{+path}}",
+    description="A small WebP of an image the app offers as a reference, by its path on this machine: an image in "
+    "the app's directory, one that is pinned, in a folder pinned to show its files, used before, or chosen in the "
+    "file dialog. As base64, for the app's view.",
+)
+IMAGE_RESOURCES = [IMAGE_FILE, IMAGE_VERSION, IMAGE_THUMBNAIL, RUN_PREVIEW, REFERENCE]

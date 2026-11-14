@@ -48,6 +48,8 @@ class ImageRun(Protocol):
     directory: Path
     data_directory: Path
     run_id: str
+    folder: Path
+    """The image's folder in the data directory, where the run keeps its files under `runs/<run_id>`."""
 
     def events(self) -> AsyncIterator[ImageEvent]:
         """Every event from the start, then live ones until the run ends with `finished` or `failed`."""
@@ -279,7 +281,7 @@ class DetachedRun:
         self.directory = directory
         self.data_directory = data_directory
         self.run_id = run_id
-        self._folder = folder
+        self.folder = folder
 
     def events(self) -> AsyncIterator[ImageEvent]:
         """Every event from the start, then each as the run's process writes it, until the run ends."""
@@ -312,10 +314,10 @@ class DetachedRun:
 
     @property
     def _run_folder(self) -> Path:
-        return self._folder / "runs" / self.run_id
+        return self.folder / "runs" / self.run_id
 
     def _record(self) -> ImageRunRecord:
-        return next(run for run in load_runs(self._folder) if run.id == self.run_id)
+        return next(run for run in load_runs(self.folder) if run.id == self.run_id)
 
     def _running(self) -> bool:
         run = self._record()

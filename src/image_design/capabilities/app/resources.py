@@ -12,6 +12,7 @@ from image_design.capabilities.app.tools import (
     IMAGE_FILE_PREFIX,
     IMAGE_THUMBNAIL_PREFIX,
     IMAGE_VERSION_PREFIX,
+    REFERENCE_PREFIX,
     RUN_PREVIEW_PREFIX,
 )
 from image_design.schemas import ImageActivity, ImageDesignError, ImageListing, ImageSummary
@@ -38,6 +39,28 @@ def is_image_resource(uri: str) -> bool:
 
 def is_preview_resource(uri: str) -> bool:
     return uri.startswith(RUN_PREVIEW_PREFIX)
+
+
+def is_reference_resource(uri: str) -> bool:
+    return uri.startswith(REFERENCE_PREFIX)
+
+
+def reference_path(uri: str) -> Path:
+    """The path on this machine that the reference at `uri` names."""
+    return Path(unquote(uri.removeprefix(REFERENCE_PREFIX)))
+
+
+def read_reference_resource(uri: str, path: Path) -> BlobResourceContents:
+    """A small copy of the reference at `path`, as base64. The caller checks that the app offers it."""
+    try:
+        content = _thumbnail(path)
+    except OSError as error:
+        raise ImageDesignError(
+            f"{path} could not be read: {error}. It may have been moved or deleted, so add it again from where it is "
+            "now.",
+            "no-such-file",
+        ) from None
+    return BlobResourceContents(uri=uri, mime_type=THUMBNAIL_TYPE, blob=base64.b64encode(content).decode("ascii"))
 
 
 def read_preview_resource(

@@ -32,6 +32,18 @@ function worded(error: AppError): string | null {
       return "A request is still working on this image. Wait for it to end, or stop it first.";
     case "not-running":
       return "No request is working on this image any more.";
+    case "bad-upload":
+      return "That file didn't reach the app whole. Remove it and add it again.";
+    case "not-a-reference":
+      return "A reference is no longer one the app can read. Remove it and add it again.";
+    case "missing-folder":
+      return "That folder can't be read. It may have been moved, so unpin it and pin it again from where it is now.";
+    case "dialog-open":
+      return "A window asking for something is already open. It may be behind another window.";
+    case "bad-key":
+      return "That is not an API key. Copy it again and paste it whole.";
+    case "no-credential-store":
+      return "This computer has no credential store to keep the key in. Set OPENAI_API_KEY in the environment the app is started in instead.";
     case "bad-settings":
       return "Those settings couldn't be saved. Reset the layout, or reload the app and try again.";
     case "bad-state":

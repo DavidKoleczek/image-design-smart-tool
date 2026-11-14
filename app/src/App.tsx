@@ -6,27 +6,27 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { DeleteDialog, RenameDialog } from "@/components/ImageMenu";
 import { ImagesPane } from "@/components/ImagesPane";
 import { ImageSwitcher } from "@/components/ImageSwitcher";
+import { KeyDialog } from "@/components/KeyDialog";
 import { RequestPane } from "@/components/RequestPane";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { StatusBar } from "@/components/StatusBar";
 import { TopBar, type NarrowPane, type Pane } from "@/components/TopBar";
 import { Segmented } from "@/components/ui/segmented";
 import { Workspace } from "@/components/Workspace";
+import { moveGuides, setMode, useCanvas, type CanvasMode } from "@/lib/canvas";
 import { onDisplay, requestDisplayMode } from "@/lib/host";
-import { moveDraft } from "@/lib/drafts";
+import { moveDraft, NEW_IMAGE } from "@/lib/drafts";
 import { useImages } from "@/lib/images";
 import { paneLayout, useBreakpoint } from "@/lib/layout";
+import { useMethods } from "@/lib/methods";
+import { addEntries, moveReferences } from "@/lib/references";
+import { guideBlock, pickedModel } from "@/lib/request";
 import { useRuns } from "@/lib/runs";
 import { updateSettings, useLayoutResets, useSettings } from "@/lib/settings";
 import { useShortcuts } from "@/lib/shortcuts";
-import { followDirectory } from "@/lib/state";
+import { followDirectory, useAppState } from "@/lib/state";
 import { cn } from "@/lib/utils";
 import { useViewed } from "@/lib/viewed";
-
-/** What the canvas is for: marks and the mask are two ways to guide a request, and one shows at a time. */
-type CanvasMode = "markup" | "mask";
-
-const NEEDS_SOURCE = "Needs a source image";
 
 function App() {
   const [root, breakpoint, width] = useBreakpoint();
@@ -36,10 +36,24 @@ function App() {
   });
   const [narrowPane, setNarrowPane] = useState<NarrowPane>("image");
   const [shortcuts, setShortcuts] = useState(false);
-  const [mode, setMode] = useState<CanvasMode>("markup");
+  const { mode: pickedMode } = useCanvas();
   const { listing, image, error, startNew, select, refresh } = useImages();
   const { shown, before, view } = useViewed(image);
   const runs = useRuns(image);
+  const { state } = useAppState();
+  const { methods } = useMethods();
+  const model = methods ? pickedModel(state.request, methods) : null;
+  const blocks: Record<CanvasMode, string | null> = {
+    markup: guideBlock("markup", image, shown, model),
+    mask: guideBlock("mask", image, shown, model),
+  };
+  // A mode the image or the model does not take gives way to marks, which every model takes.
+  const mode: CanvasMode | null =
+    blocks[pickedMode] === null
+      ? pickedMode
+      : blocks.markup === null
+        ? "markup"
+        : null;
   // The image a dialog is asking about, by its name.
   const [renaming, setRenaming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -100,8 +114,16 @@ function App() {
   };
 
   const pickMode = (picked: CanvasMode) => {
-    if (image) {
+    if (blocks[picked] === null) {
       setMode(picked);
+    }
+  };
+
+  /** Add an image of the directory to the references of a request, which `key` names. */
+  const refer = (name: string, key: string) => {
+    const added = listing?.images.find((each) => each.name === name);
+    if (added) {
+      addEntries(key, [{ name: added.name, path: added.path }], Infinity);
     }
   };
 
@@ -130,6 +152,13 @@ function App() {
     onSelect: select,
     onRename: setRenaming,
     onDelete: setDeleting,
+    onUseInNew: (name: string) => {
+      refer(name, NEW_IMAGE);
+      startNew();
+    },
+    onAddReference: (name: string) =>
+      refer(name, image ? image.name : NEW_IMAGE),
+    source: image?.name ?? null,
   };
   const canvas = (
     <Canvas
@@ -138,6 +167,9 @@ function App() {
       shown={shown}
       before={before}
       runs={runs}
+      mode={mode}
+      tools={mode ?? "markup"}
+      blocked={mode === null ? blocks.markup : null}
       error={error}
       onView={view}
       onChanged={refresh}
@@ -149,6 +181,8 @@ function App() {
       image={image}
       shown={shown}
       runs={runs}
+      mode={mode}
+      onUseInNew={picking.onUseInNew}
       onCreated={async (name) => {
         // Listed first, so the image is there to come into view.
         await refresh();
@@ -192,20 +226,20 @@ function App() {
         center={
           <Segmented<CanvasMode>
             label="Canvas mode"
-            value={image ? mode : null}
+            value={mode}
             onChange={pickMode}
             options={[
               {
                 value: "markup",
                 label: "Markup",
                 icon: "mark",
-                disabled: image ? undefined : NEEDS_SOURCE,
+                disabled: blocks.markup ?? undefined,
               },
               {
                 value: "mask",
                 label: "Mask",
                 icon: "area",
-                disabled: image ? undefined : NEEDS_SOURCE,
+                disabled: blocks.mask ?? undefined,
               },
             ]}
           />
@@ -248,6 +282,7 @@ function App() {
         <StatusBar listing={listing} image={image} shown={shown} />
       )}
       <ShortcutsDialog open={shortcuts} onOpenChange={setShortcuts} />
+      <KeyDialog />
       <RenameDialog
         name={renaming}
         onClose={() => setRenaming(null)}
@@ -258,6 +293,8 @@ function App() {
           }
           if (renaming !== null) {
             moveDraft(renaming, name);
+            moveReferences(renaming, name);
+            moveGuides(renaming, name);
           }
           void refresh();
         }}

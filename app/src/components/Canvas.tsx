@@ -3,9 +3,11 @@ import { useCallback, useState } from "react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
 import { Notice } from "@/components/ui/notice";
+import { ToolStrip } from "@/components/ToolStrip";
 import { Versions } from "@/components/Versions";
 import { Viewport } from "@/components/Viewport";
 import type { ImageListing, ImageSummary, ImageVersion } from "@/lib/api";
+import type { CanvasMode } from "@/lib/canvas";
 import { previewPicture } from "@/lib/pictures";
 import type { Runs } from "@/lib/runs";
 import type { Shown } from "@/lib/viewed";
@@ -30,6 +32,9 @@ export function Canvas({
   shown,
   before,
   runs,
+  mode,
+  tools,
+  blocked,
   error,
   onView,
   onChanged,
@@ -40,6 +45,11 @@ export function Canvas({
   shown: Shown | null;
   before: ImageVersion | null;
   runs: Runs;
+  /** What is drawn over the image to guide a request; null when it can take neither marks nor a mask. */
+  mode: CanvasMode | null;
+  /** The mode whose tools show, and why none of them can be used, when they cannot. */
+  tools: CanvasMode;
+  blocked: string | null;
   error: string | null;
   /** Show the version with this id; null for what the image's file holds. */
   onView: (version: string | null) => void;
@@ -81,13 +91,22 @@ export function Canvas({
       {error && <Notice className="m-3">{error}</Notice>}
       {image && shown ? (
         <>
-          <Viewport
-            key={image.name}
-            image={image}
-            shown={shown}
-            before={before}
-            live={live}
-          />
+          <div className="flex min-h-0 flex-1">
+            <ToolStrip
+              mode={tools}
+              blocked={
+                blocked ?? (run ? "A request is working on this image" : null)
+              }
+            />
+            <Viewport
+              key={image.name}
+              image={image}
+              shown={shown}
+              before={before}
+              live={live}
+              mode={mode}
+            />
+          </div>
           <Versions
             key={`versions:${image.name}`}
             image={image}

@@ -7,12 +7,14 @@ from pathlib import Path
 import re
 from typing import Any
 
+from conftest import MemoryKeyring
 from fake_openai import COLORS, FakeImagesAPI, picture
 from PIL import Image
 import pytest
 from typer.testing import CliRunner
 
 from image_design import lib
+from image_design.capabilities.openai_image import images_api as images_api_module
 from image_design.capabilities.openai_image.generate import MARKS_NOTE
 from image_design.cli import app
 from image_design.schemas import (
@@ -23,6 +25,7 @@ from image_design.schemas import (
     ImageResult,
     ImageUsage,
     Mark,
+    OpenAIKeyStatus,
 )
 from image_design.shared.images import pictures
 from image_design.shared.images.store import GITIGNORE, LOCKS
@@ -103,6 +106,74 @@ async def test_an_image_is_created_then_edited_then_restored_and_every_version_i
     assert created.path.read_bytes() == first
     assert (data / ".gitignore").read_text(encoding="utf-8") == GITIGNORE.read_text(encoding="utf-8")
     assert not (directory / ".agents").exists()
+
+
+def test_a_saved_key_is_used_when_the_environment_has_none_and_is_never_part_of_its_status(
+    credential_store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    before = (lib.openai_api_key_status(), lib.list_image_methods().openai.ready)
+    with pytest.raises(ImageDesignError) as spaced:
+        lib.save_openai_api_key("sk-test with a space")
+    lib.save_openai_api_key("  sk-test-saved\n")
+    saved = (lib.openai_api_key_status(), lib.list_image_methods().openai.ready)
+    sent_with = images_api_module.client(5).api_key
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-environment")
+    both = lib.openai_api_key_status()
+    environment_wins = images_api_module.client(5).api_key
+    lib.clear_openai_api_key()
+    lib.clear_openai_api_key()
+    monkeypatch.delenv("OPENAI_API_KEY")
+    cleared = (lib.openai_api_key_status(), lib.list_image_methods().openai.problem)
+
+    assert before == (OpenAIKeyStatus(source=None, saved=False), False)
+    assert "not an API key" in str(spaced.value)
+    assert saved == (OpenAIKeyStatus(source="saved", saved=True), True)
+    assert (sent_with, environment_wins) == ("sk-test-saved", "sk-test-environment")
+    assert both == OpenAIKeyStatus(source="environment", saved=True)
+    assert "sk-test" not in saved[0].model_dump_json()
+    assert credential_store.kept == {}
+    assert cleared[0] == OpenAIKeyStatus(source=None, saved=False)
+    assert cleared[1] is not None
+    assert "save_openai_api_key" in cleared[1]
+
+
+def test_a_key_is_not_called_saved_on_a_machine_with_no_credential_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(ImageDesignError) as refused:
+        lib.save_openai_api_key("sk-test-saved")
+
+    assert refused.value.reason == "no-credential-store"
+    assert "OPENAI_API_KEY environment variable instead" in str(refused.value)
+    assert lib.openai_api_key_status() == OpenAIKeyStatus(source=None, saved=False)
+
+
+async def test_a_sketch_of_several_strokes_is_drawn_as_one_mark_with_a_stroke_that_never_moved_as_a_dot(
+    images_api: FakeImagesAPI,
+) -> None:
+    await made(prompt="A paper-cut cactus.", name="cactus.png")
+    sketch = Mark(
+        shape="sketch",
+        points=[(0.1, 0.1), (0.3, 0.1)],
+        strokes=[[(0.1, 0.5), (0.3, 0.5)], [(0.8, 0.8), (0.8, 0.8)]],
+        color="blue",
+    )
+    await made(prompt="Make this taller.", name="cactus.png", marks=[sketch])
+    with pytest.raises(ImageDesignError) as refused:
+        await made(
+            prompt="Make this taller.",
+            name="cactus.png",
+            marks=[Mark(shape="box", points=[(0.1, 0.1), (0.3, 0.3)], strokes=[[(0.5, 0.5), (0.6, 0.6)]])],
+        )
+
+    editing = images_api.requests[1]
+    markup = Image.open(BytesIO(editing.files["markup"][0]))
+    blue = (0, 0, 255, 255)
+    assert [markup.getpixel(point) for point in ((205, 102), (205, 511), (818, 818))] == [blue, blue, blue]
+    # Nothing joins one stroke to the next.
+    assert markup.getpixel((205, 300)) == (0, 0, 0, 0)
+    assert editing.fields["prompt"].count("Mark ") == 1
+    assert "Mark 1 is a box with strokes, which only a sketch has" in str(refused.value)
 
 
 @pytest.mark.parametrize(

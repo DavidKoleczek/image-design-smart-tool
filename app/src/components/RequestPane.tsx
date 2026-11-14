@@ -1,10 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 
+import { References } from "@/components/References";
 import { RequestPreview } from "@/components/RequestPreview";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/field";
 import { Icon } from "@/components/ui/icon";
 import { LoadingMark } from "@/components/ui/loading-mark";
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
 import { Notice } from "@/components/ui/notice";
 import {
   Popover,
@@ -26,25 +28,47 @@ import {
   type ImageMethods,
   type ImageSummary,
 } from "@/lib/api";
+import {
+  clearGuides,
+  clearMask,
+  setTool,
+  useCanvas,
+  useGuides,
+  type CanvasMode,
+} from "@/lib/canvas";
 import { moveDraft, NEW_IMAGE, updateDraft, useDraft } from "@/lib/drafts";
 import { describe, describeEnding } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
+import { openKeyDialog, useKey } from "@/lib/key";
+import { sentMark } from "@/lib/marks";
 import { useMethods } from "@/lib/methods";
+import {
+  addFiles,
+  clearReferences,
+  imageFiles,
+  sentReferences,
+  settleReferences,
+  uploadMask,
+  useReferences,
+} from "@/lib/references";
 import {
   CHATGPT,
   CHATGPT_LABEL,
   freeName,
+  modelLabel,
   problemOf,
+  referenceRoom,
   requestOf,
   resolve,
   SIZES,
   stillFormats,
   typedName,
   type Resolved,
+  type SentGuide,
   type Target,
 } from "@/lib/request";
 import type { Runs } from "@/lib/runs";
-import { updateAppState, useAppState } from "@/lib/state";
+import { flushAppState, updateAppState, useAppState } from "@/lib/state";
 import { ago, useElapsed } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import type { Shown } from "@/lib/viewed";
@@ -54,6 +78,8 @@ const ONLY_CHATGPT = "Only with ChatGPT";
 const KEEPS_FORMAT = "An edit keeps the image's format";
 const NO_TRANSPARENCY = "JPEG has no transparency";
 const AUTO = "auto";
+// In the model list, opens the dialog about the key rather than picking a model.
+const SET_KEY = "set-openai-key";
 
 const QUALITIES: Record<string, string> = { xhigh: "Extra high" };
 const FORMATS: Record<string, string> = {
@@ -110,14 +136,17 @@ function TargetBlock({
   typed,
   resolved,
   methods,
+  onUseInNew,
 }: {
   target: Target;
   /** A new image's name as it stands in the field. */
   typed: string;
   resolved: Resolved;
   methods: ImageMethods;
+  onUseInNew: (name: string) => void;
 }) {
   const { openai, chatgpt } = methods;
+  const key = useKey();
   const shown = target.image ? target.shown : null;
   return (
     <div className="flex flex-col gap-2 border-b border-line p-3">
@@ -138,6 +167,21 @@ function TargetBlock({
                 )}
               </span>
             </div>
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button size="sm" icon aria-label="More for the source" />
+                }
+              >
+                <Icon name="more" />
+              </MenuTrigger>
+              <MenuContent align="end">
+                <MenuItem onClick={() => onUseInNew(target.image.name)}>
+                  <Icon name="image" />
+                  Use as a reference instead
+                </MenuItem>
+              </MenuContent>
+            </Menu>
           </>
         ) : (
           <>
@@ -166,7 +210,9 @@ function TargetBlock({
         <Select
           label="Image model"
           value={resolved.model}
-          onChange={(model) => update({ model })}
+          onChange={(model) =>
+            model === SET_KEY ? openKeyDialog() : update({ model })
+          }
           items={[
             ...openai.models.map((model) => ({
               value: model.id,
@@ -176,6 +222,16 @@ function TargetBlock({
                 ? undefined
                 : (openai.problem ?? "Not set up"),
             })),
+            // Where the person looks when the models are greyed out for want of a key.
+            ...(key.status?.source === null
+              ? [
+                  {
+                    value: SET_KEY,
+                    label: "Set API key...",
+                    group: "OpenAI API",
+                  },
+                ]
+              : []),
             {
               value: CHATGPT,
               label: CHATGPT_LABEL,
@@ -519,6 +575,65 @@ function Elapsed({ since }: { since: string }) {
   );
 }
 
+/** The mask being painted on the canvas: how much of the image it covers, and the tools that paint it. */
+function MaskSection({
+  name,
+  painted,
+  open,
+  onOpenChange,
+}: {
+  name: string;
+  /** The share of the image the mask covers. */
+  painted: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { tool } = useCanvas();
+  return (
+    <Section
+      title="Mask"
+      open={open}
+      onOpenChange={onOpenChange}
+      aside={
+        <span className="pr-1 mono-annotation text-ink-muted">
+          {painted > 0
+            ? `${Math.max(1, Math.round(painted * 100))}% of the image`
+            : "nothing painted"}
+        </span>
+      }
+    >
+      <div className="flex items-center gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          aria-pressed={tool === "brush"}
+          onClick={() => setTool("brush")}
+          className="aria-pressed:border-accent-ink aria-pressed:bg-accent-soft"
+        >
+          <Icon name="area" />
+          Paint
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          aria-pressed={tool === "eraser"}
+          onClick={() => setTool("eraser")}
+          className="aria-pressed:border-accent-ink aria-pressed:bg-accent-soft"
+        >
+          <Icon name="eraser" />
+          Erase
+        </Button>
+        <span className="flex-1" />
+        {painted > 0 && (
+          <Button size="sm" onClick={() => clearMask(name)}>
+            Clear
+          </Button>
+        )}
+      </div>
+    </Section>
+  );
+}
+
 /** The request to an image model: what it is for, the prompt, what comes out, and Generate, or Stop while it works. */
 function RequestForm({
   methods,
@@ -526,6 +641,8 @@ function RequestForm({
   image,
   shown,
   runs,
+  mode,
+  onUseInNew,
   onCreated,
   onChanged,
   onView,
@@ -535,19 +652,32 @@ function RequestForm({
   image: ImageSummary | null;
   shown: Shown | null;
   runs: Runs;
+  mode: CanvasMode | null;
+  onUseInNew: (name: string) => void;
   onCreated: (name: string) => Promise<void>;
   onChanged: () => Promise<void>;
   onView: (version: string | null) => void;
 }) {
   const { state } = useAppState();
   const options = state.request;
-  const draft = useDraft(image ? image.name : NEW_IMAGE);
-  const [open, setOpen] = useState({ prompt: true, output: true });
+  const key = image ? image.name : NEW_IMAGE;
+  const draft = useDraft(key);
+  const references = useReferences(key);
+  const guides = useGuides(key, shown?.picture?.key ?? null);
+  const [open, setOpen] = useState({
+    prompt: true,
+    mask: true,
+    references: true,
+    output: true,
+  });
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const [previewing, setPreviewing] = useState(false);
+  // While the request is previewed: the mask it would send, which is sent up before the library can say.
+  const [previewing, setPreviewing] = useState<{
+    mask: { upload: string; url: string } | null;
+  } | null>(null);
 
   const resolved = resolve(options, methods, image, draft.size);
   const typed = draft.name ?? freeName(listing, resolved.format);
@@ -555,7 +685,28 @@ function RequestForm({
     image && shown
       ? { image, shown }
       : { image: null, name: typedName(typed, stillFormats(methods)) };
-  const problem = problemOf(target, draft.prompt, resolved, methods, listing);
+  // Only the guide of the mode the canvas is in goes out, since a request takes marks or a mask and not both.
+  const marks = image && mode === "markup" ? guides.marks : [];
+  const masked = image !== null && mode === "mask" && guides.painted > 0;
+  const room = referenceRoom(
+    resolved,
+    methods,
+    image !== null,
+    marks.length > 0,
+  );
+  const full =
+    references.length >= room
+      ? `${modelLabel(resolved, methods)} takes ${methods[resolved.method].max_images} images`
+      : null;
+  const problem = problemOf(
+    target,
+    draft.prompt,
+    resolved,
+    methods,
+    listing,
+    references,
+    room,
+  );
   const run = image?.last_run ?? null;
   const running = image?.status === "running" && run !== null;
   const prompts = earlierPrompts(target, runs, listing);
@@ -568,8 +719,19 @@ function RequestForm({
     }
   }, [listing]);
 
-  const setPrompt = (prompt: string) =>
-    updateDraft(image ? image.name : NEW_IMAGE, { prompt });
+  const setPrompt = (prompt: string) => updateDraft(key, { prompt });
+
+  /** The mask painted on the image in view, sent up for a request to take; null when the request has none. */
+  const sendMask = async () =>
+    masked && image && shown && shown.width !== null && shown.height !== null
+      ? uploadMask(image.name, shown.width, shown.height)
+      : null;
+
+  const guide = (mask: string | null): SentGuide => ({
+    references: sentReferences(references),
+    marks: marks.map(sentMark),
+    mask,
+  });
 
   const generate = async () => {
     if (problem !== null || starting || running) {
@@ -578,15 +740,31 @@ function RequestForm({
     setStarting(true);
     setFailure(null);
     try {
+      // The server sends only references it knows the app offers, a pin among them once the pin is saved.
+      await flushAppState();
+      const mask = await sendMask();
+      const sent = references;
       const started = await generateImage(
-        requestOf(target, draft.prompt, options, resolved, methods),
+        requestOf(
+          target,
+          draft.prompt,
+          options,
+          resolved,
+          methods,
+          guide(mask?.upload ?? null),
+        ),
       );
       watched.add(started.run_id);
       if (target.image) {
+        // The marks and the mask were for this request. The references stay for the next one.
+        clearGuides(target.image.name);
+        settleReferences(key, sent, started.references);
         // What the run makes lands in the image's file, so that is what shows while it works.
         onView(null);
         await onChanged();
       } else {
+        // What the new image was made from says nothing about how it is changed next.
+        clearReferences(NEW_IMAGE);
         moveDraft(NEW_IMAGE, started.name);
         await onCreated(started.name);
       }
@@ -594,6 +772,16 @@ function RequestForm({
       setFailure(`The request did not start. ${describe(cause)}`);
     } finally {
       setStarting(false);
+    }
+  };
+
+  const preview = async () => {
+    setFailure(null);
+    try {
+      await flushAppState();
+      setPreviewing({ mask: await sendMask() });
+    } catch (cause) {
+      setFailure(`Could not preview the request. ${describe(cause)}`);
     }
   };
 
@@ -625,6 +813,13 @@ function RequestForm({
           void generate();
         }
       }}
+      onPaste={(event) => {
+        const files = imageFiles(event.clipboardData);
+        if (files.length > 0) {
+          event.preventDefault();
+          addFiles(key, files, room);
+        }
+      }}
     >
       <div className="min-h-0 flex-1 overflow-y-auto">
         <TargetBlock
@@ -632,6 +827,7 @@ function RequestForm({
           typed={typed}
           resolved={resolved}
           methods={methods}
+          onUseInNew={onUseInNew}
         />
         <Section
           title="Prompt"
@@ -658,6 +854,29 @@ function RequestForm({
             className="block field-sizing-content max-h-80 min-h-19 resize-none"
           />
         </Section>
+        {image && mode === "mask" && (
+          <MaskSection
+            name={image.name}
+            painted={guides.painted}
+            open={open.mask}
+            onOpenChange={(mask) => setOpen({ ...open, mask })}
+          />
+        )}
+        <References
+          open={open.references}
+          onOpenChange={(shown) => setOpen({ ...open, references: shown })}
+          target={key}
+          references={references}
+          room={room}
+          full={full}
+          first={
+            (image ? 2 : 1) +
+            (resolved.method === "chatgpt" && marks.length > 0 ? 1 : 0)
+          }
+          listing={listing}
+          source={image?.name ?? null}
+          onError={setFailure}
+        />
         <Section
           title="Output"
           open={open.output}
@@ -726,7 +945,7 @@ function RequestForm({
                 icon
                 aria-label="Preview request"
                 disabled={problem !== null}
-                onClick={() => setPreviewing(true)}
+                onClick={() => void preview()}
               >
                 <Icon name="eye" />
               </Button>
@@ -750,16 +969,26 @@ function RequestForm({
         )}
       </footer>
       <RequestPreview
-        open={previewing}
+        open={previewing !== null}
         request={
           previewing && problem === null
-            ? requestOf(target, draft.prompt, options, resolved, methods)
+            ? requestOf(
+                target,
+                draft.prompt,
+                options,
+                resolved,
+                methods,
+                guide(previewing.mask?.upload ?? null),
+              )
             : null
         }
         source={target.image ? target : null}
-        onClose={() => setPreviewing(false)}
+        references={references}
+        marks={marks}
+        mask={previewing?.mask?.url ?? null}
+        onClose={() => setPreviewing(null)}
         onGenerate={() => {
-          setPreviewing(false);
+          setPreviewing(null);
           void generate();
         }}
       />
@@ -773,6 +1002,8 @@ export function RequestPane({
   image,
   shown,
   runs,
+  mode,
+  onUseInNew,
   onCreated,
   onChanged,
   onView,
@@ -782,6 +1013,10 @@ export function RequestPane({
   image: ImageSummary | null;
   shown: Shown | null;
   runs: Runs;
+  /** What on the canvas guides the request: its marks, or its mask; null when the image takes neither. */
+  mode: CanvasMode | null;
+  /** Start a new image with the image named as its first reference. */
+  onUseInNew: (name: string) => void;
   /** Called with a new image's name once the request that creates it has started. */
   onCreated: (name: string) => Promise<void>;
   /** Called once a request on the image in view has started, so it is listed again. */
@@ -804,7 +1039,11 @@ export function RequestPane({
           onChange={() => {}}
           options={[
             { value: "model", label: "Image model" },
-            { value: "svg", label: "SVG", disabled: "Not in the app yet" },
+            {
+              value: "svg",
+              label: "SVG",
+              disabled: "Not available in the app",
+            },
           ]}
         />
       </header>
@@ -817,6 +1056,8 @@ export function RequestPane({
           image={image}
           shown={shown}
           runs={runs}
+          mode={mode}
+          onUseInNew={onUseInNew}
           onCreated={onCreated}
           onChanged={onChanged}
           onView={onView}

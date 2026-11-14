@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { MarksPicture } from "@/components/Marks";
+import { ReferenceThumb } from "@/components/ReferenceThumb";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { Icon, type IconName } from "@/components/ui/icon";
@@ -14,6 +16,9 @@ import {
 } from "@/lib/api";
 import { describe } from "@/lib/errors";
 import { methodLabel } from "@/lib/format";
+import type { Mark } from "@/lib/marks";
+import { usePicture } from "@/lib/pictures";
+import { fileName, type Reference } from "@/lib/references";
 import { cn } from "@/lib/utils";
 import type { Shown } from "@/lib/viewed";
 
@@ -35,12 +40,6 @@ const ROLE_ICONS: Record<Sent["role"], IconName> = {
 };
 // What goes beside the images rather than among them, so it has no number of its own.
 const BESIDE: Sent["role"][] = ["marks", "mask"];
-
-function fileName(path: string): string {
-  return path.slice(
-    Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1,
-  );
-}
 
 function Part({
   from,
@@ -64,17 +63,57 @@ function Part({
   );
 }
 
+type Guides = {
+  /** The request's references, in the order it sends them. */
+  references: Reference[];
+  marks: Mark[];
+  /** The mask as it is sent, as a data URL; null for none. */
+  mask: string | null;
+};
+
+const TILE = "size-10 shrink-0 rounded-sm border border-line";
+
+/** The marks as the request sends them: alone on a layer of their own, or drawn on a copy of the source. */
+function MarksTile({
+  marks,
+  source,
+  copy,
+}: {
+  marks: Mark[];
+  source: { image: ImageSummary; shown: Shown };
+  /** Whether they are drawn on a copy of the source rather than sent beside it. */
+  copy: boolean;
+}) {
+  const picture = source.shown.picture;
+  const { url } = usePicture(
+    copy && picture ? { ...picture, small: true } : null,
+  );
+  return (
+    <MarksPicture
+      marks={marks}
+      width={source.shown.width ?? 1}
+      height={source.shown.height ?? 1}
+      url={copy ? url : null}
+      className={cn(TILE, "checker")}
+    />
+  );
+}
+
 /** What the library worked out the request would send: the images in order, the parameters, and the prompt. */
 function Preview({
   preview,
   source,
-}: {
+  references,
+  marks,
+  mask,
+}: Guides & {
   preview: ImageRequestPreview;
   source: { image: ImageSummary; shown: Shown } | null;
 }) {
   const numbered = preview.images.filter(
     (image) => !BESIDE.includes(image.role),
   );
+  const sent = preview.images.filter((image) => image.role === "reference");
   const written = preview.added
     ? preview.prompt
         .slice(0, preview.prompt.length - preview.added.length)
@@ -89,13 +128,21 @@ function Preview({
         )}
         {preview.images.map((image, index) => {
           const own = image.role === "source" && source;
+          const reference =
+            image.role === "reference"
+              ? (references[sent.indexOf(image)] ?? null)
+              : null;
+          const marked =
+            (image.role === "marks" || image.role === "marked-copy") && source;
           const name = own
             ? [source.image.name, source.shown.version?.id]
                 .filter(Boolean)
                 .join(" ")
-            : image.path
-              ? fileName(image.path)
-              : ROLES[image.role];
+            : reference
+              ? reference.name
+              : image.path && image.role !== "mask"
+                ? fileName(image.path)
+                : ROLES[image.role];
           return (
             <div key={index} className="flex min-w-0 items-center gap-2.5">
               {own ? (
@@ -108,6 +155,20 @@ function Preview({
                   }
                   shape={source.shown}
                   className="size-10"
+                />
+              ) : reference ? (
+                <ReferenceThumb reference={reference} className="size-10" />
+              ) : marked ? (
+                <MarksTile
+                  marks={marks}
+                  source={source}
+                  copy={image.role === "marked-copy"}
+                />
+              ) : image.role === "mask" && mask ? (
+                <img
+                  src={mask}
+                  alt=""
+                  className={cn(TILE, "checker object-contain")}
                 />
               ) : (
                 <span className="grid size-10 shrink-0 place-items-center rounded-sm border border-line bg-field text-ink-muted">
@@ -154,9 +215,12 @@ export function RequestPreview({
   open,
   request,
   source,
+  references,
+  marks,
+  mask,
   onClose,
   onGenerate,
-}: {
+}: Guides & {
   open: boolean;
   /** The request to preview; null while the dialog is closed. */
   request: ImageRequest | null;
@@ -206,7 +270,13 @@ export function RequestPreview({
         className="sm:max-w-200"
       >
         {preview ? (
-          <Preview preview={preview} source={source} />
+          <Preview
+            preview={preview}
+            source={source}
+            references={references}
+            marks={marks}
+            mask={mask}
+          />
         ) : (
           <div className="grid min-h-40 flex-1 place-items-center p-5">
             {shown?.error ? (
