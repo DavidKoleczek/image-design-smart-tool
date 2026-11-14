@@ -19,6 +19,7 @@ from openai_codex import (
     AsyncThread,
     AsyncTurnHandle,
     CodexConfig,
+    Input,
     InputItem,
     InvalidRequestError,
     LocalImageInput,
@@ -109,7 +110,7 @@ class CodexRun:
         self._thread: AsyncThread | None = None
         self._turn: AsyncTurnHandle | None = None
         # Steering that arrived as a turn ended, which goes on in a turn of its own.
-        self._pending: list[str] = []
+        self._pending: list[Input | str] = []
         self._text = ""
         self._total_tokens: int | None = None
         self._answered = False
@@ -130,16 +131,18 @@ class CodexRun:
     def events(self) -> AsyncIterator[AgentEvent]:
         return self._log.replay()
 
-    async def steer(self, message: str) -> None:
+    async def steer(self, message: str, images: list[Path] | None = None) -> None:
+        require_showable(images or [])
         if self._answered or self._task.done() or self._turn is None:
             raise self._ended()
+        content = _content(message, images or [])
         try:
-            await self._turn.steer(message)
+            await self._turn.steer(content)
         except InvalidRequestError:
             # The turn ended as the message went out; unless the run did too, it goes on in a turn of its own.
             if self._answered or self._task.done():
                 raise self._ended() from None
-            self._pending.append(message)
+            self._pending.append(content)
         except Exception as error:
             raise ImageDesignError(
                 f"The steering message was not delivered: {type(error).__name__}: {error} Send it again, or cancel "
@@ -254,6 +257,14 @@ class CodexRun:
             if turn.status == TurnStatus.completed and self._pending and not self._halting:
                 await self._begin(self._pending.pop(0))
                 continue
+            if turn.status == TurnStatus.completed and not self._halting and self._request.follow_up is not None:
+                follow_up = await self._request.follow_up()
+                # Steering that came while it was asked for goes first, and the follow up after it.
+                if follow_up is not None:
+                    self._pending.append(follow_up)
+                if self._pending:
+                    await self._begin(self._pending.pop(0))
+                    continue
             if turn.status == TurnStatus.interrupted or self._halting:
                 return self._finish(AgentResult(text=self._text, cancelled=True, session_id=self._session_id))
             if turn.status != TurnStatus.completed:
@@ -485,6 +496,13 @@ def copy_skills(skill_directories: list[Path], cwd: Path) -> None:
         for skill in sorted(directory.iterdir()):
             if (skill / "SKILL.md").is_file():
                 shutil.copytree(skill, cwd / SKILLS_DIRECTORY / skill.name, dirs_exist_ok=True)
+
+
+def _content(text: str, images: list[Path]) -> Input | str:
+    """A message as Codex takes it: the text alone, or the text followed by its images."""
+    if not images:
+        return text
+    return [TextInput(text), *(LocalImageInput(str(path)) for path in images)]
 
 
 def as_data(notification: Notification) -> dict[str, Any]:

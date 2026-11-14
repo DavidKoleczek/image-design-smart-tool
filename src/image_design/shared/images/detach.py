@@ -25,12 +25,14 @@ from image_design.shared.images.store import PROCESS_LOG
 RUNNING = "IMAGE_DESIGN_DETACHED_RUN"
 
 
-async def detach(command: list[str], request: BaseModel, directory: Path, data_directory: Path) -> DetachedRun:
-    """Start `command` with `request`, and follow the run it reports."""
+async def detach[Run: DetachedRun](
+    command: list[str], request: BaseModel, directory: Path, data_directory: Path, follow: type[Run]
+) -> Run:
+    """Start `command` with `request`, and follow the run it reports as a `follow`."""
     report = await asyncio.to_thread(_start_process, command, request)
     if report.get("error"):
         raise ImageDesignError(report["error"], report.get("reason"), report.get("image"))
-    return DetachedRun(directory, data_directory, Path(report["folder"]), report["name"], report["run_id"])
+    return follow(directory, data_directory, Path(report["folder"]), report["name"], report["run_id"])
 
 
 def serve(start: Callable[[str], Awaitable[InProcessRun]]) -> int:

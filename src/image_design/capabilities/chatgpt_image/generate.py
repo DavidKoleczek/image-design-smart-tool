@@ -33,7 +33,7 @@ from image_design.shared.images.requests import (
     write,
     write_references,
 )
-from image_design.shared.images.runs import ImageRun, InProcessRun, RunOutput
+from image_design.shared.images.runs import DetachedRun, ImageRun, InProcessRun, RunOutput
 from image_design.shared.images.store import StoredImage, directories, image_name, new_run_id
 
 # What starts a detached run, given its request on stdin.
@@ -121,7 +121,7 @@ async def generate_chatgpt_image(
             "references": [path.resolve() for path in request.references],
         }
     )
-    return await detaching.detach(BACKGROUND_COMMAND, absolute, root, data)
+    return await detaching.detach(BACKGROUND_COMMAND, absolute, root, data, DetachedRun)
 
 
 async def start(request: ChatGPTImageRequest, intelligence: Intelligence | None = None) -> InProcessRun:

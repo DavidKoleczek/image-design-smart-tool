@@ -30,8 +30,11 @@ class AgentRun(Protocol):
         """Every event from the start, then live ones until the run ends with `terminal`."""
         ...
 
-    async def steer(self, message: str) -> None:
-        """Send a message to the agent while it works; the implementation's `steering` says how it lands."""
+    async def steer(self, message: str, images: list[Path] | None = None) -> None:
+        """Send a message, and any images with it, to the agent while it works.
+
+        The implementation's `steering` says how it lands.
+        """
         ...
 
     async def cancel(self) -> None:

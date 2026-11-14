@@ -148,7 +148,8 @@ The result's `usage` is None, since the run counts against the ChatGPT plan rath
 ## Draw an SVG image
 
 `draw_svg_image` creates or edits an SVG image by running an agent that draws it with code.
-The agent writes a Python script, `image.py`, and runs it to build the SVG. It then renders the SVG with [resvg](https://github.com/linebender/resvg), looks at the render, and fixes what does not match the request.
+The agent writes a Python script, `image.py`, with its dependencies declared inline, and runs it with `uv run --script` to build the SVG. 
+It then renders the SVG with [resvg](https://github.com/linebender/resvg), looks at the render, and fixes what does not match the request.
 
 ```python
 async def draw_svg_image(
@@ -193,12 +194,15 @@ The parameters that differ from `generate_openai_image`:
 - `agent_provider`, `model`, `reasoning_effort`: The agent that draws. See [Agent providers](#agent-providers).
 - `intelligence`: An agent to use in place of the agent provider. Tests use it to pass a fake.
 
-The returned `SvgRun` is an `ImageRun` that also has a `session_id` and a `steer(message)` method.
+The returned `SvgRun` is an `ImageRun` that also has a `session_id` and a `steer(message, origin, references, marks)` method, which works as `steer_svg_image` does.
+Its events also include an `agent` event for each thing the agent does, a `preview` with the path of each render it builds, and a `steered` event for each message sent to it.
 
 The agent is told to put each part of the drawing in a named group, so a later request can change one part without redrawing the rest.
-`image.py` is kept with the image's data and committed with the project, so anyone who clones the project can continue to change the drawing.
+When the agent finishes, the tool runs `image.py` once more and keeps what it builds, so the kept SVG is always one that `image.py` builds. If the agent finishes without building `image.py` as it last changed it, the tool builds it and gives the agent the result once.
+`image.py` and the `image.py.lock` that uv writes for it are kept with the image's data and committed with the project, so anyone who clones the project can continue to change the drawing. Each version keeps its own copy.
+An agent that stops before it finishes keeps its work, and `resume_session=True` goes on from there.
 
-resvg renders static SVG only. It skips what it does not support, such as animation, scripts, and text with no matching font, without reporting an error. `check_svg_image` lists what was skipped.
+resvg renders static SVG only. It skips what it does not support, such as animation and scripts, without reporting an error, so `check_svg_image` finds them in the SVG itself. Text renders with the fonts installed on the machine that renders it, so the check also counts the text elements.
 
 ### Steer, check, and export
 
@@ -286,12 +290,14 @@ An image's file is kept apart from the tool's data for it. With the default `dat
     images/<id>/
       image.json
       image.py
+      image.py.lock
       versions/
       runs/
+      work/
       sessions/
 ```
 
-`data_directory` has a `.gitignore` that ignores everything except each image's `image.json` and `image.py`.
+`data_directory` has a `.gitignore` that ignores everything except each image's `image.json`, `image.py`, and `image.py.lock`.
 If you set `data_directory`, pass the same one in every call. The tool does not record where it is.
 An image file that you put in the directory yourself is listed like any other.
 

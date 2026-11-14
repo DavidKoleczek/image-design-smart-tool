@@ -13,6 +13,7 @@ from image_design.schemas import (
     DEFAULT_OPENAI_IMAGE_MODEL,
     IMAGE_FORMATS,
     OPENAI_IMAGE_MODELS,
+    SVG_SUFFIX,
     ImageRunRecord,
     Mark,
     OpenAIImageBackground,
@@ -33,7 +34,7 @@ from image_design.shared.images.requests import (
     write,
     write_references,
 )
-from image_design.shared.images.runs import ImageRun, InProcessRun
+from image_design.shared.images.runs import DetachedRun, ImageRun, InProcessRun
 from image_design.shared.images.store import StoredImage, directories, image_name, new_run_id
 
 # What starts a detached run, given its request on stdin. Tests swap it for a command that fakes the API.
@@ -140,7 +141,7 @@ async def generate_openai_image(
             "mask": request.mask.resolve() if request.mask else None,
         }
     )
-    return await detaching.detach(BACKGROUND_COMMAND, absolute, root, data)
+    return await detaching.detach(BACKGROUND_COMMAND, absolute, root, data, DetachedRun)
 
 
 async def start(request: OpenAIImageRequest) -> InProcessRun:
@@ -258,6 +259,12 @@ def _require_arguments(request: OpenAIImageRequest) -> None:
     suffix = PurePosixPath(request.name.replace("\\", "/")).suffix.lower()
     animated = suffix == ".gif"
     name = request.name
+    if suffix == SVG_SUFFIX:
+        raise invalid(
+            f"{name!r} does not end in an image format OpenAI image models make. End it in one of: "
+            f"{', '.join(IMAGE_FORMATS)}, or draw an SVG with draw_svg_image.",
+            name,
+        )
     if not request.prompt.strip():
         raise invalid("The prompt is empty. Say what to make, or what to change.", name)
     if not 1 <= request.count <= MAX_COUNT:

@@ -1,5 +1,6 @@
 """What an intelligence implementation is asked to do, what it reports while it works, and what it answers with."""
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -58,6 +59,12 @@ class AgentRequest(BaseModel):
         default=None,
         description="Where each image the agent makes with the agent provider's image tool is saved, announced by an "
         "`image` event; None means it cannot make images",
+    )
+    follow_up: Callable[[], Awaitable[str | None]] | None = Field(
+        default=None,
+        exclude=True,
+        description="Asked each time the agent ends a turn with nothing queued; a message it gives goes on in the same "
+        "session, and none lets the run end",
     )
 
 

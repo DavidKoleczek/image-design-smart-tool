@@ -24,6 +24,7 @@ from image_design.schemas import (
 from image_design.shared.images.store import (
     EVENTS,
     PROCESS_LOG,
+    Script,
     StoredImage,
     alive,
     load_runs,
@@ -61,13 +62,20 @@ class ImageRun(Protocol):
         ...
 
 
+class KeepImage(Protocol):
+    def __call__(self, content: bytes, script: Script | None = None) -> ImageVersion:
+        """Keep an image the work made, and the script that built it, as a version."""
+        ...
+
+
 @dataclass(frozen=True)
 class RunOutput:
     """Where a method's work sends what it receives, as it receives it."""
 
     preview: Callable[[bytes, int], None]
-    image: Callable[[bytes], ImageVersion]
+    image: KeepImage
     used: Callable[[ImageUsage], None]
+    event: Callable[[ImageEventKind, str, dict[str, Any]], None]
 
 
 Work = Callable[[RunOutput], Coroutine[Any, Any, None]]
@@ -77,7 +85,8 @@ class InProcessRun:
     """An image being made by work this process does.
 
     `stop` ends what was started for the work, such as an agent, once the work has ended however it ended. A cancel
-    can come before the work's first step, when nothing in the work itself would run.
+    can come before the work's first step, when nothing in the work itself would run. Previews are kept with
+    `preview_suffix`, which is `suffix` unless they come in another format, as a drawing's renders do.
     """
 
     def __init__(
@@ -89,6 +98,7 @@ class InProcessRun:
         lock: Path,
         suffix: str,
         stop: Callable[[], Awaitable[None]] | None = None,
+        preview_suffix: str | None = None,
     ) -> None:
         self.name = image.name
         self.directory = image.root
@@ -101,6 +111,7 @@ class InProcessRun:
         self._timeout_seconds = timeout_seconds
         self._lock = lock
         self._suffix = suffix
+        self._preview_suffix = preview_suffix or suffix
         self._stop = stop
         self._made: list[ImageVersion] = []
         self._events: list[ImageEvent] = []
@@ -109,9 +120,16 @@ class InProcessRun:
         self._emit(
             "started",
             f"Making {self.name} with {run.request.get('model', run.method)}.",
-            {"name": self.name, "directory": str(self.directory), "origin": run.origin, **run.request},
+            {
+                "name": self.name,
+                "directory": str(self.directory),
+                "origin": run.origin,
+                "prompt": run.prompt,
+                **run.request,
+            },
         )
-        self._working = asyncio.create_task(work(RunOutput(self._preview, self._version, self._used)))
+        output = RunOutput(self._preview, self._version, self._used, self._emit)
+        self._working = asyncio.create_task(work(output))
         self._task = asyncio.create_task(self._drive())
 
     def events(self) -> AsyncIterator[ImageEvent]:
@@ -213,13 +231,13 @@ class InProcessRun:
             await asyncio.sleep(POLL_SECONDS)
 
     def _preview(self, content: bytes, index: int) -> None:
-        path = self._folder / PREVIEWS / f"{index + 1}{self._suffix}"
+        path = self._folder / PREVIEWS / f"{index + 1}{self._preview_suffix}"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
         self._emit("preview", f"Preview {index + 1} of {self.name}: {path}", {"path": str(path), "index": index})
 
-    def _version(self, content: bytes) -> ImageVersion:
-        version = self._image.add_version(content, self._suffix, self._run.method, self.run_id)
+    def _version(self, content: bytes, script: Script | None = None) -> ImageVersion:
+        version = self._image.add_version(content, self._suffix, self._run.method, self.run_id, script)
         first = not self._made
         if first:
             self._image.publish(version)

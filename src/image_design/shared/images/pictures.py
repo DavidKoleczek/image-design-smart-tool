@@ -14,6 +14,9 @@ from image_design.schemas import ImageDesignError
 # other image is sent as a PNG.
 SENT_AS_IS = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}
 SVG_SUFFIXES = (".svg", ".svgz")
+# Content is taken for an SVG when its root element starts this early, past any XML declaration and comments.
+SVG_MARKER = b"<svg"
+SVG_SNIFF_BYTES = 4096
 # The sizes the GPT Image 2.6 models accept for a still image, from
 # https://developers.openai.com/api/docs/guides/image-generation. An animation only needs multiples of 16.
 SIZE_STEP = 16
@@ -35,7 +38,10 @@ class Picture(NamedTuple):
 
 
 def describe(content: bytes) -> Picture | None:
-    """What `content` is as an image, or None when it is not one Pillow can read."""
+    """What `content` is as an image, or None when it is not one Pillow can read or resvg can render.
+
+    An SVG's size is the size resvg renders it at.
+    """
     try:
         with Image.open(BytesIO(content)) as image:
             return Picture(
@@ -47,7 +53,30 @@ def describe(content: bytes) -> Picture | None:
                 frame_ms=image.info.get("duration"),
             )
     except (UnidentifiedImageError, OSError):
+        pass
+    if SVG_MARKER not in content[:SVG_SNIFF_BYTES]:
         return None
+    try:
+        rendered = svg_png(content)
+    except ImageDesignError:
+        return None
+    with Image.open(BytesIO(rendered)) as image:
+        return Picture(format="SVG", width=image.width, height=image.height, frames=1, alpha=True)
+
+
+def svg_png(content: bytes, resources: Path | None = None, zoom: float | None = None) -> bytes:
+    """An SVG rendered with resvg as a PNG, at `zoom` times its own size.
+
+    `resources` is where the files it refers to by relative path are; none are found without it.
+    """
+    try:
+        return resvg_py.svg_to_bytes(
+            svg_string=content.decode("utf-8"),
+            resources_dir=str(resources) if resources is not None else None,
+            zoom=zoom,
+        )
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ImageDesignError(f"The SVG could not be rendered: {error}.") from None
 
 
 def read(path: Path) -> Picture:

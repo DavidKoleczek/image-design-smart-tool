@@ -51,7 +51,11 @@ uv tool uninstall image-design
 ```bash
 image-design generate-openai-image "A paper-cut cactus in a terracotta pot." --name concepts/cactus.png
 image-design generate-chatgpt-image "Make the pot blue." --name concepts/cactus.png
+image-design draw-svg-image "A flat vector sailboat on calm water at sunset. No text." --name sailboat.svg
+image-design check-svg-image --name sailboat.svg
+image-design export-svg-image --name sailboat.svg --output sailboat.png --scale 2
 image-design restore-image-version --name concepts/cactus.png --version v1
+image-design read-image-activity --name sailboat.svg
 image-design cancel-image --name concepts/cactus.png
 image-design list-intelligence-models
 ```

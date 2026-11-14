@@ -19,11 +19,15 @@ from image_design import lib
 from image_design.core.skill import DISTRIBUTION
 from image_design.schemas import (
     DEFAULT_CHATGPT_REASONING_EFFORT,
+    DEFAULT_REASONING_EFFORT,
+    NOT_GIVEN,
+    AgentProvider,
     ImageDesignError,
     ImageEvent,
     ImageResult,
     ImageSummary,
     Mark,
+    NotGiven,
     OpenAIImageBackground,
     OpenAIImageComplexity,
     OpenAIImageQuality,
@@ -282,6 +286,142 @@ def generate_chatgpt_image(
 
 
 @app.command()
+def draw_svg_image(
+    prompt: Annotated[str, typer.Argument(help="What to draw, or what to change.", show_default=False)],
+    name: Annotated[
+        str,
+        typer.Option("--name", help="The image's path in the directory, such as logo.svg; one that exists is edited."),
+    ],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    references: Annotated[
+        list[Path] | None, typer.Option("--reference", help="An image to show the agent with the prompt; repeatable.")
+    ] = None,
+    marks: Annotated[
+        Path | None,
+        typer.Option("--marks", help="A JSON file with a list of marks to draw on the render the agent is shown."),
+    ] = None,
+    canvas: Annotated[
+        str | None,
+        typer.Option("--canvas", metavar="WIDTHxHEIGHT", help="512x512 for a new drawing; an edit keeps its own."),
+    ] = None,
+    max_shapes: Annotated[
+        str | None, typer.Option("--max-shapes", metavar="N|none", help="The most elements that draw.")
+    ] = None,
+    max_colors: Annotated[
+        str | None, typer.Option("--max-colors", metavar="N|none", help="The most distinct colors.")
+    ] = None,
+    max_bytes: Annotated[
+        str | None, typer.Option("--max-bytes", metavar="N|none", help="The largest the SVG file may be.")
+    ] = None,
+    resume_session: Annotated[
+        str,
+        typer.Option(
+            "--resume-session", metavar="true|false|ID", help="Go on in the image's last agent session, or this one."
+        ),
+    ] = "false",
+    agent_provider: Annotated[AgentProvider | None, typer.Option("--agent-provider")] = None,
+    model: Annotated[str | None, typer.Option("--model", help="See image-design list-intelligence-models.")] = None,
+    reasoning_effort: Annotated[
+        ReasoningEffort, typer.Option("--reasoning-effort", help="The model's reasoning effort.")
+    ] = DEFAULT_REASONING_EFFORT,
+    timeout_seconds: Annotated[int, typer.Option("--timeout-seconds", min=1)] = 600,
+    origin: Annotated[str | None, typer.Option("--origin", help="Who asked, such as app.")] = None,
+    detach: Annotated[
+        bool, typer.Option("--detach", help="Leave the agent going in a process of its own once it starts.")
+    ] = False,
+    json: Annotated[bool, typer.Option("--json", help="Print each event as a line of JSON instead.")] = False,
+) -> None:
+    """Create or edit an SVG image with an agent that draws it with code. Agentic.
+
+    Prints the path of the image drawn, with the agent's progress on stderr. Exits 0 when the run is done.
+    """
+    code = asyncio.run(
+        _follow(
+            lib.draw_svg_image(
+                prompt=prompt,
+                name=name,
+                directory=directory,
+                data_directory=data_directory,
+                references=references,
+                marks=_marks(marks),
+                canvas=_canvas(canvas),
+                max_shapes=_budget(max_shapes, "--max-shapes"),
+                max_colors=_budget(max_colors, "--max-colors"),
+                max_bytes=_budget(max_bytes, "--max-bytes"),
+                resume_session=_resume_session(resume_session),
+                agent_provider=agent_provider,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                timeout_seconds=timeout_seconds,
+                origin=origin,
+                detach=detach,
+            ),
+            detach,
+            json,
+        )
+    )
+    raise typer.Exit(code)
+
+
+@app.command()
+def steer_svg_image(
+    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    message: Annotated[str, typer.Option("--message", help="What the agent should change.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    origin: Annotated[str | None, typer.Option("--origin", help="Who asked, such as app.")] = None,
+    references: Annotated[
+        list[Path] | None, typer.Option("--reference", help="An image to show the agent with it; repeatable.")
+    ] = None,
+    marks: Annotated[
+        Path | None,
+        typer.Option("--marks", help="A JSON file with a list of marks to draw on the agent's latest render."),
+    ] = None,
+) -> None:
+    """Send a message to the agent drawing an SVG image while it works. Deterministic."""
+    lib.steer_svg_image(
+        name=name,
+        message=message,
+        directory=directory,
+        data_directory=data_directory,
+        origin=origin,
+        references=references,
+        marks=_marks(marks),
+    )
+
+
+@app.command()
+def check_svg_image(
+    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """Measure an SVG image against its budgets. Deterministic."""
+    check = lib.check_svg_image(name=name, directory=directory, data_directory=data_directory)
+    typer.echo(check.model_dump_json(indent=2) if json else check.describe())
+
+
+@app.command()
+def export_svg_image(
+    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    output: Annotated[Path, typer.Option("--output", help="The file to write: a .png, .jpg, or .webp.")],
+    scale: Annotated[float, typer.Option("--scale", help="Times the canvas size.")] = 1,
+    version: Annotated[
+        str | None, typer.Option("--version", help="The version to render; the one in the image's file when omitted.")
+    ] = None,
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+) -> None:
+    """Render an SVG image to a raster file. Deterministic."""
+    written = lib.export_svg_image(
+        name=name, output=output, scale=scale, version=version, directory=directory, data_directory=data_directory
+    )
+    typer.echo(_shown(written))
+
+
+@app.command()
 def restore_image_version(
     name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
     version: Annotated[str, typer.Option("--version", help="The version to put back, such as v1.")],
@@ -302,6 +442,31 @@ def cancel_image(
 ) -> None:
     """Stop the run working on an image. Deterministic."""
     lib.cancel_image(name=name, directory=directory, data_directory=data_directory)
+
+
+@app.command()
+def read_image_activity(
+    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    after: Annotated[
+        str | None, typer.Option("--after", help="The cursor an earlier call printed, to read only what came since.")
+    ] = None,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """The history of an image: each request, what its agent did, and how each run ended. Deterministic."""
+    activity = lib.read_image_activity(name=name, directory=directory, data_directory=data_directory, after=after)
+    if json:
+        typer.echo(activity.model_dump_json(indent=2))
+        return
+    for event in activity.events:
+        if event.text:
+            kind = event.data.get("kind", event.kind) if event.kind == "agent" else event.kind
+            typer.echo(f"{event.time:%Y-%m-%d %H:%M:%S} {kind}: {event.text}")
+    if activity.cursor is None:
+        typer.echo(f"{activity.name} has had no run.")
+    else:
+        typer.echo(f"Status: {activity.status}. To read only what comes next, pass --after {activity.cursor}")
 
 
 @app.command()
@@ -389,14 +554,39 @@ def _marks(path: Path | None) -> list[Mark] | None:
         ) from None
 
 
-def _size(typed: str | None) -> tuple[int, int] | None:
+def _size(typed: str | None, hint: str = "--size") -> tuple[int, int] | None:
     """A size as typed: WIDTHxHEIGHT."""
     if typed is None:
         return None
     match = re.fullmatch(r"(\d+)x(\d+)", typed.strip().lower())
     if match is None:
-        raise typer.BadParameter(f"{typed!r} is not WIDTHxHEIGHT, such as 1024x1024.", param_hint="--size")
+        raise typer.BadParameter(f"{typed!r} is not WIDTHxHEIGHT, such as 1024x1024.", param_hint=hint)
     return int(match[1]), int(match[2])
+
+
+def _canvas(typed: str | None) -> tuple[int, int] | NotGiven:
+    """A canvas as typed, or NOT_GIVEN when left out, so an edit keeps its own."""
+    size = _size(typed, "--canvas")
+    return NOT_GIVEN if size is None else size
+
+
+def _budget(typed: str | None, hint: str) -> int | NotGiven | None:
+    """A budget as typed: a number, or `none` for no limit; NOT_GIVEN when left out, so an edit keeps its own."""
+    if typed is None:
+        return NOT_GIVEN
+    if typed.strip().lower() == "none":
+        return None
+    if not typed.strip().isdigit():
+        raise typer.BadParameter(f"{typed!r} is not a number or none.", param_hint=hint)
+    return int(typed)
+
+
+def _resume_session(typed: str) -> bool | str:
+    """`true`, `false`, or a session ID, as typed."""
+    lowered = typed.strip().lower()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    return typed.strip()
 
 
 def main() -> int:

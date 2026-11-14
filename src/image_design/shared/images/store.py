@@ -3,10 +3,13 @@
 The data directory holds a folder per image, named by the image's id so it stays put when the image moves:
 
     images/<id>/image.json      the record, committed with the project
+    images/<id>/image.py        for a drawn SVG, the script that builds it, committed with its image.py.lock
     images/<id>/versions.json   every version, and which one is in the image's file
-    images/<id>/versions/       the versions' files
+    images/<id>/versions/       the versions' files, and a drawn SVG's scripts
     images/<id>/runs.json       every request on the image
     images/<id>/runs/<run id>/  a run's events, the files it sent, and its previews
+    images/<id>/work/           where an agent draws an SVG
+    images/<id>/sessions/       the agents' sessions, which a later run can resume
     locks/                      which process is working on which image
 """
 
@@ -21,12 +24,14 @@ import shutil
 import sys
 import tempfile
 import time
+from typing import NamedTuple
 import uuid
 
 from pydantic import BaseModel, ValidationError
 
 from image_design.schemas import (
     IMAGE_FORMATS,
+    SVG_SUFFIX,
     ImageDesignError,
     ImageEvent,
     ImageMethod,
@@ -44,10 +49,16 @@ DATA_FOLDER = ".agents"
 IMAGES = "images"
 LOCKS = "locks"
 RECORD = "image.json"
+SCRIPT = "image.py"
+# uv writes a script's lock beside it, under the script's name with this added.
+LOCK_SUFFIX = ".lock"
 VERSIONS = "versions.json"
 RUNS = "runs.json"
 EVENTS = "events.jsonl"
 PROCESS_LOG = "process.log"
+SESSIONS = "sessions"
+# Every extension an image's name can end in.
+KEPT_SUFFIXES = (*IMAGE_FORMATS, SVG_SUFFIX)
 GITIGNORE = Path(__file__).with_name("data.gitignore")
 # A lock file is written just after it is made, so one still empty this soon after is being written, not abandoned.
 LOCK_WRITE_SECONDS = 10
@@ -79,13 +90,20 @@ def image_name(name: str, root: Path, data: Path) -> str:
             "invalid-name",
             name,
         )
-    if posix.suffix.lower() not in IMAGE_FORMATS:
+    if posix.suffix.lower() not in KEPT_SUFFIXES:
         raise ImageDesignError(
-            f"{name!r} does not end in an image format the tool makes. End it in one of: {', '.join(IMAGE_FORMATS)}.",
+            f"{name!r} does not end in an image format the tool makes. End it in one of: {', '.join(KEPT_SUFFIXES)}.",
             "invalid-name",
             name,
         )
     return posix.as_posix()
+
+
+class Script(NamedTuple):
+    """The image.py that builds a drawn SVG, and the lock uv keeps for its dependencies."""
+
+    code: bytes
+    lock: bytes | None
 
 
 @dataclass
@@ -116,6 +134,9 @@ class StoredImage:
     def save_runs(self) -> None:
         write_atomically(self.folder / RUNS, ImageRuns(runs=self.runs).model_dump_json(indent=2))
 
+    def save_record(self) -> None:
+        write_atomically(self.folder / RECORD, self.record.model_dump_json(indent=2, exclude_none=True))
+
     def version(self, version_id: str) -> ImageVersion:
         for version in self.versions.versions:
             if version.id == version_id:
@@ -125,8 +146,10 @@ class StoredImage:
             f"Image {self.name} has no version {version_id!r}. Its versions: {known}.", "no-such-version", self.name
         )
 
-    def add_version(self, content: bytes, suffix: str, method: ImageMethod, run_id: str | None) -> ImageVersion:
-        """Keep `content` as the image's next version, without touching the image's file."""
+    def add_version(
+        self, content: bytes, suffix: str, method: ImageMethod, run_id: str | None, script: Script | None = None
+    ) -> ImageVersion:
+        """Keep `content` as the image's next version, and the script that built it, without touching the image's file."""
         picture = pictures.describe(content)
         if picture is None:
             raise ImageDesignError(
@@ -138,6 +161,10 @@ class StoredImage:
         file = Path("versions") / f"v{number}{suffix}"
         (self.folder / file).parent.mkdir(parents=True, exist_ok=True)
         (self.folder / file).write_bytes(content)
+        kept_script: Path | None = None
+        if script is not None:
+            kept_script = file.with_suffix(".py")
+            _write_script(self.folder / kept_script, script)
         version = ImageVersion(
             id=f"v{number}",
             file=file,
@@ -148,15 +175,18 @@ class StoredImage:
             method=method,
             run_id=run_id,
             created=datetime.now(UTC),
+            script=kept_script,
         )
         self.versions.versions.append(version)
         self.save_versions()
         return version
 
     def publish(self, version: ImageVersion) -> None:
-        """Put `version` in the image's file."""
+        """Put `version` in the image's file, and the script that built it, when it has one, in the image's image.py."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_atomically(self.path, (self.folder / version.file).read_bytes())
+        if version.script is not None:
+            _write_script(self.folder / SCRIPT, read_script(self.folder / version.script))
         self.versions.current = version.id
         self.save_versions()
 
@@ -180,8 +210,9 @@ class StoredImage:
         return hashlib.sha256(self.path.read_bytes()).hexdigest() == current.sha256
 
     def located(self, version: ImageVersion) -> ImageVersion:
-        """`version` with the absolute path of its file."""
-        return version.model_copy(update={"file": self.folder / version.file})
+        """`version` with the absolute paths of its files."""
+        script = self.folder / version.script if version.script is not None else None
+        return version.model_copy(update={"file": self.folder / version.file, "script": script})
 
     def running(self) -> ImageRunRecord | None:
         """The run working on the image, when its process is alive."""
@@ -234,7 +265,7 @@ def new_image(root: Path, data: Path, name: str) -> StoredImage:
     image = StoredImage(root=root, data=data, folder=folder, record=record, versions=ImageVersions(), runs=[])
     image.save_versions()
     image.save_runs()
-    write_atomically(folder / RECORD, record.model_dump_json(indent=2))
+    image.save_record()
     return image
 
 
@@ -369,6 +400,25 @@ def write_atomically(path: Path, content: str | bytes) -> None:
                 time.sleep(REPLACE_WAIT_SECONDS)
     finally:
         partial.unlink(missing_ok=True)
+
+
+def read_script(path: Path) -> Script:
+    """The script at `path` and its lock, which is None when there is none."""
+    lock = lock_path(path)
+    return Script(path.read_bytes(), lock.read_bytes() if lock.is_file() else None)
+
+
+def lock_path(script: Path) -> Path:
+    return script.with_name(script.name + LOCK_SUFFIX)
+
+
+def _write_script(path: Path, script: Script) -> None:
+    write_atomically(path, script.code)
+    lock = lock_path(path)
+    if script.lock is None:
+        lock.unlink(missing_ok=True)
+    else:
+        write_atomically(lock, script.lock)
 
 
 def load_runs(folder: Path) -> list[ImageRunRecord]:

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple, get_args
 
@@ -130,11 +131,13 @@ class IntelligenceModels(BaseModel):
 # region: Images
 
 ImageFormat = Literal["png", "jpeg", "webp", "gif"]
-# The extensions an image's name can end in, and the format each is saved in.
+# The extensions a raster image's name can end in, and the format each is saved in.
 IMAGE_FORMATS: dict[str, ImageFormat] = {".png": "png", ".jpg": "jpeg", ".webp": "webp", ".gif": "gif"}
-ImageMethod = Literal["openai", "chatgpt", "imported"]
+# The extension of an SVG image's name, the other kind of image the tool keeps.
+SVG_SUFFIX = ".svg"
+ImageMethod = Literal["openai", "chatgpt", "svg", "imported"]
 ImageRunStatus = Literal["running", "done", "failed", "cancelled", "timed-out"]
-ImageEventKind = Literal["started", "preview", "version", "finished", "failed"]
+ImageEventKind = Literal["started", "preview", "agent", "steered", "version", "finished", "failed"]
 MarkShape = Literal["circle", "box", "arrow", "sketch"]
 Fraction = Annotated[float, Field(ge=0, le=1)]
 
@@ -173,6 +176,11 @@ class ImageVersion(BaseModel):
     method: ImageMethod = Field(description="What made it; `imported` for a file the tool found in place")
     run_id: str | None = None
     created: datetime
+    script: Path | None = Field(
+        default=None,
+        description="For an SVG the tool drew, the image.py that builds it, kept as `file` is, with its lock beside it "
+        "under the same name and .lock added",
+    )
 
 
 class ImageVersions(BaseModel):
@@ -182,6 +190,25 @@ class ImageVersions(BaseModel):
     versions: list[ImageVersion] = Field(default_factory=list)
 
 
+class NotGiven(Enum):
+    """A parameter left out, so it keeps the value it had; None, by contrast, sets no value."""
+
+    NOT_GIVEN = "NOT_GIVEN"
+
+
+NOT_GIVEN = NotGiven.NOT_GIVEN
+DEFAULT_SVG_CANVAS = (512, 512)
+
+
+class SvgBudgets(BaseModel):
+    """What an SVG drawing should stay within. The agent is told them, and `check_svg_image` measures against them."""
+
+    canvas: tuple[int, int] = Field(description="Width and height, the size of the SVG's view")
+    max_shapes: int | None = Field(default=None, description="Elements that draw, such as path and rect; None for any")
+    max_colors: int | None = Field(default=None, description="Distinct fill, stroke, and stop colors; None for any")
+    max_bytes: int | None = Field(default=None, description="The size of the SVG file; None for any")
+
+
 class ImageRecord(BaseModel):
     """image.json: what marks an image as one the tool keeps data for. It is committed with the project."""
 
@@ -189,6 +216,9 @@ class ImageRecord(BaseModel):
     id: str = Field(description="Names the image's folder in the data directory, and stays the same when it moves")
     name: str = Field(description="The image's path in its directory, with forward slashes")
     created: datetime
+    budgets: SvgBudgets | None = Field(
+        default=None, description="For an SVG the tool drew, the budgets of its last drawing, which an edit keeps"
+    )
 
 
 class ImageRunRecord(BaseModel):
@@ -201,6 +231,10 @@ class ImageRunRecord(BaseModel):
         description="The settings it was sent with, and the files it sent, as copied into the run's folder"
     )
     origin: str | None = Field(default=None, description="Who asked, such as `app`")
+    agent_provider: AgentProvider | None = Field(default=None, description="For an agentic method, what ran the agent")
+    session_id: str | None = Field(
+        default=None, description="For an agentic method, the agent's session, which a later run can resume"
+    )
     status: ImageRunStatus = "running"
     pid: int = Field(description="The process running it; a `running` run whose process is gone has crashed")
     started: datetime
@@ -256,6 +290,74 @@ class ImageSummary(BaseModel):
     )
     versions: list[ImageVersion]
     status: ImageRunStatus | None = Field(description="Its last run's status; None when it has had no run")
+
+
+class ImageActivity(BaseModel):
+    """What happened to an image, run by run: each request, what its agent did, and how it ended."""
+
+    name: str
+    events: list[ImageEvent] = Field(description="In order; each run's begin with `started`, which has its request")
+    status: ImageRunStatus | None = Field(description="The last run's status; None when it has had no run")
+    cursor: str | None = Field(
+        description="Pass as `after` to get only what happens from here on; None when the image has had no run"
+    )
+
+
+# endregion
+
+# region: SVG images
+
+
+class SvgPart(BaseModel):
+    """A named group of a drawing."""
+
+    id: str = Field(description="Its id, after the ids of the named groups it is in, joined by /")
+    shapes: int = Field(description="The elements that draw in it")
+
+
+class SvgCheck(BaseModel):
+    """An SVG drawing measured against its budgets. It only reports: nothing passes or fails."""
+
+    name: str
+    path: Path
+    budgets: SvgBudgets
+    size: tuple[float, float] | None = Field(description="The width and height the SVG declares; None when it does not")
+    view_box: tuple[float, float, float, float] | None = Field(description="Its viewBox; None when it has none")
+    shapes: int = Field(description="The elements that draw, such as path, rect, circle, text, and use")
+    colors: list[str] = Field(description="Each distinct color, as #rrggbb, or #rrggbbaa when it is see-through")
+    bytes: int
+    texts: int = Field(description="Text elements, which render with the fonts of the machine that renders them")
+    parts: list[SvgPart]
+    skipped: list[str] = Field(description="What resvg does not render, such as scripts and animation, with counts")
+
+    def describe(self) -> str:
+        """The check as text, a line for each measure, for a person or an agent to read."""
+        width, height = self.budgets.canvas
+        declared = "declares no size" if self.size is None else f"declares {self.size[0]:g}x{self.size[1]:g}"
+        view_box = "no viewBox" if self.view_box is None else "viewBox " + " ".join(f"{n:g}" for n in self.view_box)
+        colors = f": {', '.join(self.colors)}." if self.colors else "."
+        lines = [
+            f"Canvas: {width}x{height}. The SVG {declared}, with {view_box}.",
+            f"Shapes: {self.shapes}{_at_most(self.budgets.max_shapes)}.",
+            f"Colors: {len(self.colors)}{_at_most(self.budgets.max_colors)}{colors}",
+            f"Bytes: {self.bytes:,}{_at_most(self.budgets.max_bytes)}.",
+        ]
+        if self.texts:
+            lines.append(
+                f"Text elements: {self.texts}. They render with the fonts of the machine that renders them, so they "
+                "can look different elsewhere."
+            )
+        if self.parts:
+            lines.append("Named parts:")
+            lines.extend(f"- {part.id} ({part.shapes} shape{'' if part.shapes == 1 else 's'})" for part in self.parts)
+        else:
+            lines.append("Named parts: none. Put each part in a <g> with an id.")
+        lines.append("Not rendered by resvg: " + (", ".join(self.skipped) + "." if self.skipped else "nothing."))
+        return "\n".join(lines)
+
+
+def _at_most(budget: int | None) -> str:
+    return f" (at most {budget:,})" if budget is not None else ""
 
 
 # endregion

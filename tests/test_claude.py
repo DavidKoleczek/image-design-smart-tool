@@ -453,6 +453,43 @@ async def test_a_result_before_a_late_steer_is_echoed_does_not_end_the_run(world
     assert costs == pytest.approx([0.01, 0.02])
 
 
+async def test_steering_with_images_sends_them_as_base64_blocks(
+    world: Callable[..., FakeWorld], tmp_path: Path
+) -> None:
+    image = tmp_path / "marked.png"
+    image.write_bytes(b"PNG fake")
+    fake = world(keeps_working, lambda client, sent: client.push(echo(sent), result("done")))
+
+    run = await ClaudeIntelligence().start(request())
+    await until_message(run, "Working.")
+    await run.steer("Look at the marks.", [image])
+    await run.result()
+
+    assert fake.sent[1]["message"]["content"] == [
+        {"type": "text", "text": "Look at the marks."},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(b"PNG fake").decode()},
+        },
+    ]
+
+
+async def test_a_follow_up_is_sent_in_the_same_session_until_it_has_nothing_more(
+    world: Callable[..., FakeWorld],
+) -> None:
+    fake = world(answers("first"), answers("second"))
+    asked: list[int] = []
+
+    async def follow_up() -> str | None:
+        asked.append(len(asked))
+        return "Check the build." if len(asked) == 1 else None
+
+    result_ = await (await ClaudeIntelligence().start(request(follow_up=follow_up))).result()
+
+    assert [sent["message"]["content"] for sent in fake.sent] == ["Do the work.", "Check the build."]
+    assert (result_.text, len(asked)) == ("second", 2)
+
+
 async def test_steering_after_the_run_ended_names_the_session_to_resume(world: Callable[..., FakeWorld]) -> None:
     world(answers("done"))
 

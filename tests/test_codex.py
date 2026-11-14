@@ -115,7 +115,7 @@ class FakeTurn:
                 self.ended = True
                 return
 
-    async def steer(self, input: str) -> None:
+    async def steer(self, input: Any) -> None:
         self._world.steers.append(input)
         if self.ended:
             raise InvalidRequestError(-32600, "no active turn to steer")
@@ -163,7 +163,7 @@ class FakeWorld:
         self.thread_options: list[dict[str, Any]] = []
         self.resumed: list[str] = []
         self.turns: list[tuple[Any, dict[str, Any]]] = []
-        self.steers: list[str] = []
+        self.steers: list[Any] = []
         self.interrupts = 0
         self.closed = 0
         self.rollout: str | None = None
@@ -431,6 +431,43 @@ async def test_a_steer_that_meets_the_end_of_a_turn_goes_on_in_a_turn_of_its_own
 
     assert [content for content, _ in fake.turns] == [[TextInput("Do the work.")], "One more thing."]
     assert result.text == "second"
+
+
+async def test_a_steer_with_images_sends_them_as_local_image_inputs(
+    world: Callable[..., FakeWorld], tmp_path: Path
+) -> None:
+    image = tmp_path / "marked.png"
+    image.write_bytes(b"PNG fake")
+
+    def script(turn: FakeTurn) -> None:
+        keeps_working(turn)
+        turn.after_steer = [message("done"), turn_completed()]
+
+    fake = world(script)
+
+    run = await CodexIntelligence().start(request())
+    await run.steer("Look at the marks.", [image])
+    await run.result()
+
+    assert fake.steers == [[TextInput("Look at the marks."), LocalImageInput(str(image))]]
+
+
+async def test_a_follow_up_goes_on_in_a_turn_of_its_own_until_it_has_nothing_more(
+    world: Callable[..., FakeWorld],
+) -> None:
+    fake = world(answers("first"), answers("second"))
+    asked: list[int] = []
+
+    async def follow_up() -> str | None:
+        asked.append(len(asked))
+        return "Check the build." if len(asked) == 1 else None
+
+    sent = request(follow_up=follow_up)
+    result = await (await CodexIntelligence().start(sent)).result()
+
+    assert [content for content, _ in fake.turns] == [[TextInput("Do the work.")], "Check the build."]
+    assert (result.text, len(asked)) == ("second", 2)
+    assert "follow_up" not in sent.model_dump()
 
 
 async def test_a_steer_after_the_run_ended_names_the_session_to_resume(world: Callable[..., FakeWorld]) -> None:

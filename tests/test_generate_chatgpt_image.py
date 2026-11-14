@@ -46,7 +46,7 @@ class FakeAgentRun:
     def events(self) -> AsyncIterator[AgentEvent]:
         return self._log.replay()
 
-    async def steer(self, message: str) -> None:
+    async def steer(self, message: str, images: list[Path] | None = None) -> None:
         raise NotImplementedError
 
     async def cancel(self) -> None:

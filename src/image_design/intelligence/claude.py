@@ -102,14 +102,15 @@ class ClaudeRun:
     def events(self) -> AsyncIterator[AgentEvent]:
         return self._log.replay()
 
-    async def steer(self, message: str) -> None:
+    async def steer(self, message: str, images: list[Path] | None = None) -> None:
+        require_showable(images or [])
         if self._answered or self._task.done():
             raise ImageDesignError(
                 "The agent run has ended, so the steering message was not delivered. Start a new run with "
                 f"resume={self._session_id!r} and the message as its prompt."
             )
         try:
-            await self._send(message, [])
+            await self._send(message, images or [])
         except Exception as error:
             raise ImageDesignError(
                 f"The steering message was not delivered: {type(error).__name__}: {error} Send it again, or cancel "
@@ -161,6 +162,11 @@ class ClaudeRun:
         invalid = 0
         while True:
             answer = await self._answer()
+            if not answer.is_error and self._request.follow_up is not None:
+                follow_up = await self._request.follow_up()
+                if follow_up is not None:
+                    await self._send(follow_up, [])
+                    continue
             if answer.is_error:
                 self._answered = True
                 return AgentResult(text=self._last_text, error=describe(answer), session_id=self._session_id)

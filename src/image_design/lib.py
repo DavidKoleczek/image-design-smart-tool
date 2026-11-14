@@ -6,19 +6,29 @@ from image_design.capabilities.chatgpt_image import generate as chatgpt_image
 from image_design.capabilities.intelligence_models import intelligence_models
 from image_design.capabilities.manage_images import manage_images
 from image_design.capabilities.openai_image import generate
+from image_design.capabilities.svg_image import check as svg_check
+from image_design.capabilities.svg_image import draw as svg_draw
+from image_design.capabilities.svg_image import steering as svg_steering
+from image_design.capabilities.svg_image.runs import SvgRun
 from image_design.core import manifest
 from image_design.core import skill as skill_module
 from image_design.intelligence.interface import Intelligence
 from image_design.schemas import (
     DEFAULT_CHATGPT_REASONING_EFFORT,
+    DEFAULT_REASONING_EFFORT,
+    NOT_GIVEN,
+    AgentProvider,
+    ImageActivity,
     ImageSummary,
     IntelligenceModels,
     Manifest,
     Mark,
+    NotGiven,
     OpenAIImageBackground,
     OpenAIImageComplexity,
     OpenAIImageQuality,
     ReasoningEffort,
+    SvgCheck,
 )
 from image_design.shared.images import runs
 from image_design.shared.images.runs import ImageRun
@@ -172,11 +182,141 @@ async def generate_chatgpt_image(
     )
 
 
+async def draw_svg_image(
+    prompt: str,
+    name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+    canvas: tuple[int, int] | NotGiven = NOT_GIVEN,
+    max_shapes: int | NotGiven | None = NOT_GIVEN,
+    max_colors: int | NotGiven | None = NOT_GIVEN,
+    max_bytes: int | NotGiven | None = NOT_GIVEN,
+    resume_session: bool | str = False,
+    agent_provider: AgentProvider | None = None,
+    model: str | None = None,
+    reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT,
+    timeout_seconds: int = 600,
+    origin: str | None = None,
+    detach: bool = False,
+    intelligence: Intelligence | None = None,
+) -> SvgRun:
+    """Create or edit an SVG image with an agent that draws it with code. Agentic.
+
+    The agent writes image.py, a script with inline dependencies that writes the SVG, runs it with uv, renders the SVG
+    with resvg, looks at the render, and fixes what does not match the request. image.py is kept with the image's data
+    and committed with the project, so the drawing can go on changing. Needs uv, and the codex or claude extra.
+
+    Args:
+        prompt: What to draw, or what to change.
+        name: The image's path in `directory`, ending in .svg. A new name creates the image, and one that exists edits
+            it, overwriting its file. To redraw another image as an SVG, pass it in `references` under a new name.
+        directory: Where images are kept; `.image-design` in the working directory when None.
+        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        references: Images shown to the agent with the prompt, in any format.
+        marks: Shapes drawn on the render the agent is shown, to show what the prompt refers to. The agent is also
+            told which named parts of the drawing are under each.
+        canvas: The drawing's width and height. The agent is told the budgets, and `check_svg_image` measures them.
+            A new drawing defaults to 512 by 512, and an edit keeps the earlier value of each budget left out.
+        max_shapes: The most elements that draw; None for no limit.
+        max_colors: The most distinct colors; None for no limit.
+        max_bytes: The largest the SVG file may be; None for no limit.
+        resume_session: True to go on in the image's last agent session, so the agent remembers earlier requests, or
+            the ID of an earlier session to go on in.
+        agent_provider: `codex` or `claude`; the resumed session's, else the first installed, when None.
+        model: The agent provider's model; its default when None. See `list_intelligence_models`.
+        reasoning_effort: The model's reasoning effort.
+        timeout_seconds: How long the agent may work before it is stopped.
+        origin: Who asked, such as `app`.
+        detach: Run the agent in a process of its own, which goes on when the caller exits.
+        intelligence: An agent to use in place of the agent provider's, such as a fake in tests. Not with `detach`.
+
+    Returns:
+        The run, once the agent has started. Its `events()` yields each step, including what the agent says and the
+        tools it calls, and a `preview` for each render it builds; `steer()` sends the agent a message; `result()`
+        waits for the `ImageResult`.
+    """
+    return await svg_draw.draw_svg_image(
+        prompt=prompt,
+        name=name,
+        directory=directory,
+        data_directory=data_directory,
+        references=references,
+        marks=marks,
+        canvas=canvas,
+        max_shapes=max_shapes,
+        max_colors=max_colors,
+        max_bytes=max_bytes,
+        resume_session=resume_session,
+        agent_provider=agent_provider,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        timeout_seconds=timeout_seconds,
+        origin=origin,
+        detach=detach,
+        intelligence=intelligence,
+    )
+
+
+def steer_svg_image(
+    name: str,
+    message: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    origin: str | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+) -> None:
+    """Send a message to the agent drawing an SVG image while it works, from any process.
+
+    The process running the drawing delivers it within a second or so. `references` are shown to the agent with it,
+    and `marks` are drawn on the agent's latest render.
+    """
+    svg_steering.steer_svg_image(name, message, directory, data_directory, origin, references, marks)
+
+
+def check_svg_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> SvgCheck:
+    """Measure an SVG image against its budgets: its shapes, colors, bytes, named parts, and what resvg skips.
+
+    It only reports; nothing passes or fails. An SVG the tool did not draw is measured against its own size.
+    """
+    return svg_check.check_svg_image(name, directory, data_directory)
+
+
+def export_svg_image(
+    name: str,
+    output: Path,
+    scale: float = 1,
+    version: str | None = None,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+) -> Path:
+    """Render an SVG image, or one of its versions, to a .png, .jpg, or .webp at `scale` times its size.
+
+    A .jpg has no transparency, so what is see-through shows white. Returns the file written.
+    """
+    return svg_check.export_svg_image(name, output, scale, version, directory, data_directory)
+
+
 def restore_image_version(
     name: str, version: str, directory: Path | None = None, data_directory: Path | None = None
 ) -> ImageSummary:
-    """Put an earlier version of an image back in its file, keeping the file first if it was changed by hand."""
+    """Put an earlier version of an image back in its file, keeping the file first if it was changed by hand.
+
+    For an SVG the tool drew, the version's image.py goes back in place too.
+    """
     return manage_images.restore_image_version(name, version, directory, data_directory)
+
+
+def read_image_activity(
+    name: str, directory: Path | None = None, data_directory: Path | None = None, after: str | None = None
+) -> ImageActivity:
+    """The history of an image: each run's request, what its agent did, and how it ended, as the run's events.
+
+    Pass the `cursor` of an earlier call as `after` to get only what happened since.
+    """
+    return manage_images.read_image_activity(name, directory, data_directory, after)
 
 
 def cancel_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:

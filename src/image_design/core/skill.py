@@ -26,6 +26,30 @@ CAPABILITIES = (
         skill="capabilities/chatgpt_image/skills/skill_generate_chatgpt_image.md",
     ),
     Capability(
+        "draw-svg-image",
+        "Create or edit an SVG image with an agent that draws it with code.",
+        model_backed=True,
+        skill="capabilities/svg_image/skills/skill_draw_svg_image.md",
+    ),
+    Capability(
+        "steer-svg-image",
+        "Send a message to the agent drawing an SVG image while it works.",
+        model_backed=False,
+        skill="capabilities/svg_image/skills/skill_steer_svg_image.md",
+    ),
+    Capability(
+        "check-svg-image",
+        "Measure an SVG image against its budgets.",
+        model_backed=False,
+        skill="capabilities/svg_image/skills/skill_check_svg_image.md",
+    ),
+    Capability(
+        "export-svg-image",
+        "Render an SVG image to a .png, .jpg, or .webp file.",
+        model_backed=False,
+        skill="capabilities/svg_image/skills/skill_export_svg_image.md",
+    ),
+    Capability(
         "restore-image-version",
         "Put an earlier version of an image back in its file.",
         model_backed=False,
@@ -36,6 +60,12 @@ CAPABILITIES = (
         "Stop the run working on an image.",
         model_backed=False,
         skill="capabilities/manage_images/skills/skill_cancel_image.md",
+    ),
+    Capability(
+        "read-image-activity",
+        "Read the history of an image: each request, what its agent did, and how each run ended.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_read_image_activity.md",
     ),
     Capability(
         "manifest", "Print the tool's manifest as JSON.", model_backed=False, skill="core/skills/skill_manifest.md"

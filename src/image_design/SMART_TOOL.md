@@ -14,6 +14,11 @@ platforms:
   - macos
   - windows
 requires:
+  - name: uv
+    purpose: >-
+      uv on PATH for using the tool and agents to run generated scripts.
+    optional: false
+    install: https://docs.astral.sh/uv/getting-started/installation/
   - name: openai-api-key
     purpose: >-
       OPENAI_API_KEY, and image-design installed with the openai extra, for generate-openai-image.
@@ -33,7 +38,6 @@ requires:
       Without them, the agentic capabilities cannot run through claude.
     optional: true
     install: https://code.claude.com/docs/en/agent-sdk/quickstart
-
 ---
 
 Image creation and editing tool.

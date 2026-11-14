@@ -99,7 +99,8 @@ testpaths = ["tests"]
 pythonpath = ["tests"]
 # In parallel. More workers than the most here are no faster, since each takes a while to start.
 # A slow test gets a marker registered here, and that marker goes in `-m "not (...)"`, so it runs only when named.
-addopts = '--import-mode=importlib -n auto --maxprocesses 8 -m "not (detached)"'
+addopts = '--import-mode=importlib -n auto --maxprocesses 8 -m "not (detached or uv)"'
 markers = [
     "detached: starts a run in a process of its own. Run after changing shared/images/detach.py, DetachedRun in shared/images/runs.py, a capability's background.py, or cancel_image.",
+    "uv: runs a drawing's image.py with uv. Run after changing capabilities/svg_image/build.py.",
 ]
