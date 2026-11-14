@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { LoadingMark } from "@/components/ui/loading-mark";
 import { Notice } from "@/components/ui/notice";
 import { Thumb } from "@/components/ui/thumb";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -111,18 +112,26 @@ function Tile({
 
 /**
  * The versions kept for the image in view, oldest first, under what there is to say of the one that shows. Picking
- * one shows it; Restore puts it back in the image's file.
+ * one shows it; Restore puts it back in the image's file. Each version a run has yet to make holds its place.
  */
 export function Versions({
   image,
   shown,
   runs,
+  pending,
+  open,
+  onOpenChange,
   onView,
   onRestored,
 }: {
   image: ImageSummary;
   shown: Shown;
   runs: Runs;
+  /** How many versions the run working on the image has yet to make. */
+  pending: number;
+  /** Whether the versions show under the header; folded, the header alone leaves the image more room. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   /** Show the version with this id; null for what the image's file holds. */
   onView: (version: string | null) => void;
   onRestored: () => Promise<void>;
@@ -166,7 +175,23 @@ export function Versions({
       className="shrink-0 border-t border-line bg-panel"
     >
       <header className="flex h-9 items-center gap-3 pr-2 pl-3 whitespace-nowrap">
-        <h2 className="text-label">Versions</h2>
+        <h2 className="flex h-full">
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => onOpenChange(!open)}
+            className="-ml-1 flex h-full cursor-default items-center gap-1 rounded-sm px-1 text-label focus-visible:focus-ring focus-visible:outline-none"
+          >
+            <Icon
+              name="chevron"
+              className={cn(
+                "text-ink-muted transition-transform",
+                !open && "-rotate-90",
+              )}
+            />
+            Versions
+          </button>
+        </h2>
         <p className="flex min-w-0 flex-1 gap-3 overflow-hidden mono-annotation text-ink-muted">
           {facts(image, shown, runs).map((fact, index) => (
             <span key={index} className={cn(index === 0 && "text-ink")}>
@@ -202,7 +227,7 @@ export function Versions({
             )}
       </header>
       {error && <Notice className="mx-3 mb-2">{error}</Notice>}
-      {image.versions.length > 0 && (
+      {open && (image.versions.length > 0 || pending > 0) && (
         <div className="flex gap-1.5 overflow-x-auto px-3 pb-2">
           {image.versions.map((version) => (
             <Tile
@@ -229,6 +254,19 @@ export function Versions({
               onView={() => onView(null)}
             />
           )}
+          {Array.from({ length: pending }, (_, index) => (
+            <div
+              key={index}
+              className="flex shrink-0 flex-col items-center gap-[3px] border border-transparent px-[3px] pt-[3px] pb-0.5 text-ink-muted"
+            >
+              <span className="grid size-14 place-items-center rounded-sm border border-dashed border-line-control">
+                <LoadingMark size={12} />
+              </span>
+              <span className="flex h-4 items-center mono-annotation">
+                v{image.versions.length + index + 1}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </section>

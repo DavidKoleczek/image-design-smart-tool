@@ -13,7 +13,7 @@ import { Notice } from "@/components/ui/notice";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ImageSummary, ImageVersion } from "@/lib/api";
 import { dimensions } from "@/lib/format";
-import { usePicture, versionPicture } from "@/lib/pictures";
+import { usePicture, versionPicture, type Picture } from "@/lib/pictures";
 import { useShortcuts } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import type { Shown } from "@/lib/viewed";
@@ -33,6 +33,8 @@ const PIXELATED_FROM = 3;
 // The pixels between ruler ticks, of which the first that leaves this much room on screen is used.
 const TICK_STEPS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 const TICK_ROOM = 56;
+// The frame an image being made shows in until the size it comes out at is known.
+const UNKNOWN_SIZE = 1024;
 // How much one notch of a wheel, and one pixel of a pinch, zooms.
 const WHEEL = { notch: 0.0015, pinch: 0.01, line: 33 };
 
@@ -112,16 +114,20 @@ const FITTED: View = { zoom: null, x: 0, y: 0 };
 
 /**
  * The image in view between its rulers, over the checkerboard where it is transparent. It starts fitted; a wheel
- * zooms on the pointer and a drag moves it. Compare shows the version before in its place.
+ * zooms on the pointer and a drag moves it. Compare shows the version before in its place. While a run works on
+ * the image, what the image's file holds gives way to the run's latest in-progress image.
  */
 export function Viewport({
   image,
   shown,
   before,
+  live,
 }: {
   image: ImageSummary;
   shown: Shown;
   before: ImageVersion | null;
+  /** While a run works on the image: its latest in-progress image, and the size it was asked for, if any. */
+  live: { preview: Picture | null; size: [number, number] | null } | null;
 }) {
   const [box, setBox] = useState({ width: 0, height: 0 });
   const [view, setView] = useState(FITTED);
@@ -130,9 +136,19 @@ export function Viewport({
   const drag = useRef<{ x: number; y: number; from: View } | null>(null);
 
   const compared = compare ? before : null;
-  const picture = compared ? versionPicture(image, compared) : shown.picture;
-  const width = (compared ?? shown).width ?? 0;
-  const height = (compared ?? shown).height ?? 0;
+  // What the run makes lands in the image's file, so it forms where that shows, and not over another version.
+  const forming = live !== null && shown.file && compared === null;
+  const preview = forming ? live.preview : null;
+  const picture = compared
+    ? versionPicture(image, compared)
+    : (preview ?? shown.picture);
+  // An image with no file yet takes the size the run was asked for.
+  const blank = forming && shown.width === null;
+  const width =
+    (compared ?? shown).width ?? (blank ? (live.size?.[0] ?? UNKNOWN_SIZE) : 0);
+  const height =
+    (compared ?? shown).height ??
+    (blank ? (live.size?.[1] ?? UNKNOWN_SIZE) : 0);
   const id = compared ? compared.id : (shown.version?.id ?? null);
   const { url, error } = usePicture(picture);
   const vector = image.name.toLowerCase().endsWith(".svg");
@@ -259,12 +275,18 @@ export function Viewport({
     setPanning(false);
   };
 
+  // A name whose only runs made nothing is not a failure of its own: how the last run ended is said elsewhere.
+  const unmade =
+    picture === null &&
+    live === null &&
+    image.versions.length === 0 &&
+    image.last_run !== null;
   const missing =
-    picture === null
-      ? image.versions.length > 0
+    picture !== null || live !== null || unmade
+      ? null
+      : image.versions.length > 0
         ? "This image's file is gone or can't be read. Pick a version below and restore it."
-        : "This file is not an image the app can show."
-      : null;
+        : "This file is not an image the app can show.";
 
   return (
     <div
@@ -284,6 +306,15 @@ export function Viewport({
         aria-hidden
         className="absolute top-0 left-0 z-30 size-5 border-r border-b border-line bg-panel"
       />
+      {live && (
+        <div
+          role="progressbar"
+          aria-label="Working"
+          className="absolute top-5 right-0 left-5 z-20 h-0.5 overflow-hidden"
+        >
+          <span className="absolute inset-y-0 w-[32%] animate-slide bg-accent" />
+        </div>
+      )}
       <Ruler
         horizontal
         origin={left}
@@ -320,6 +351,11 @@ export function Viewport({
                 before, {compared.id}
               </span>
             )}
+            {preview && (
+              <span className="bg-accent px-1.5 mono-annotation text-on-accent">
+                in progress
+              </span>
+            )}
           </div>
           <div
             style={{ left, top, width: width * zoom, height: height * zoom }}
@@ -335,13 +371,20 @@ export function Viewport({
                 draggable={false}
                 className={cn(
                   "pointer-events-none absolute inset-0 block size-full",
+                  // An in-progress image can come at another size than the image it will replace.
+                  preview && "object-contain",
                   zoom >= PIXELATED_FROM &&
                     !vector &&
                     "[image-rendering:pixelated]",
                 )}
               />
             ) : (
-              !error && <LoadingMark size={24} />
+              !error && (
+                <span className="flex flex-col items-center gap-2 text-title">
+                  <LoadingMark size={24} />
+                  {blank && "Generating your image"}
+                </span>
+              )
             )}
           </div>
         </>
@@ -349,6 +392,16 @@ export function Viewport({
       {(missing ?? error) && (
         <Notice className="absolute top-8 right-3 left-8 z-10 mr-44 cursor-default">
           {missing ?? `Could not read the image. ${error}`}
+        </Notice>
+      )}
+      {unmade && (
+        <Notice
+          tone="neutral"
+          icon="image"
+          className="absolute top-8 right-3 left-8 z-10 mr-44 cursor-default"
+        >
+          No image has been made for this name yet. Generate again, or delete
+          it.
         </Notice>
       )}
       <div

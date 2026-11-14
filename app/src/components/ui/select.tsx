@@ -10,6 +10,8 @@ export type SelectItem<Value extends string> = {
   label: string;
   /** Items with the same group sit together under it. */
   group?: string;
+  /** A fact about it shown at the end of its row in the list, such as a size's pixels. */
+  aside?: string;
   /** Why it can't be picked now, which shows on it; it can be picked without one. */
   disabled?: string;
 };
@@ -106,6 +108,9 @@ function Option<Value extends string>({ item }: { item: SelectItem<Value> }) {
       <SelectPrimitive.ItemText className="flex-1">
         {item.label}
       </SelectPrimitive.ItemText>
+      {item.aside && (
+        <span className="mono-annotation text-ink-muted">{item.aside}</span>
+      )}
       <SelectPrimitive.ItemIndicator className="text-accent-ink">
         <Icon name="check" />
       </SelectPrimitive.ItemIndicator>

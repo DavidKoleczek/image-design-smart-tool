@@ -19,7 +19,7 @@ The library has no `mcp` function. The command calls `run_stdio()` in `image_des
 
 - `open_app`: serves the app and returns its browser URL and the directory it shows. Its `_meta.ui.resourceUri` names the view, so a host that renders MCP Apps shows it inline. A client that takes URL elicitation, such as Claude Code, is asked to open the URL in the browser. Calling it again returns the same URL. Pass `directory`, and `data_directory` when it is not `.agents` in that directory, to switch the app to other images.
 
-The view calls the server's other tools, such as `list_images`, `move_image`, and `save_app_settings`. They are listed only to hosts that render MCP Apps and are marked for the app alone, so an agent uses the CLI instead.
+The view calls the server's other tools, such as `list_images`, `generate_openai_image`, `cancel_image`, and `save_app_settings`. They are listed only to hosts that render MCP Apps and are marked for the app alone, so an agent uses the CLI instead.
 
 ## Resources
 
@@ -29,3 +29,4 @@ Listed only to hosts that render MCP Apps.
 - `image-design://images/{+name}`: an image's file, as base64, for the view.
 - `image-design://versions/{version}/{+name}`: a version kept for an image, such as `v2`.
 - `image-design://thumbnails/{version}/{+name}`: a small WebP of a version, or of the image's file when the version is `file`.
+- `image-design://previews/{run}/{index}/{+name}`: an in-progress image of a run, by the run's ID and the index its `preview` event has.

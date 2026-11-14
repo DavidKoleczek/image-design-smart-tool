@@ -1,12 +1,15 @@
+import asyncio
 import base64
 from collections.abc import Callable, Iterator
 from io import BytesIO
+import os
 from pathlib import Path
 import re
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import detached_openai
 from fake_openai import FakeImagesAPI, picture
 from mcp import Client, MCPError
 from mcp.types import BlobResourceContents, TextContent, TextResourceContents
@@ -16,18 +19,24 @@ import pytest
 from image_design import lib
 from image_design.capabilities.app import server as server_module
 from image_design.capabilities.app.tools import VIEW_URI
+from image_design.capabilities.openai_image import generate
 from image_design.schemas import (
+    AppImageRequest,
     AppLayout,
     AppSettings,
     AppState,
     ImageActivity,
     ImageDesignError,
     ImageListing,
+    ImageMethods,
+    ImageRequestPreview,
     ImageSummary,
     PaneLayout,
 )
 
 TIMEOUT_SECONDS = 5
+# A detached run starts a Python process of its own, which takes a while to import the library.
+DETACHED_TIMEOUT_SECONDS = 30
 
 
 @pytest.fixture
@@ -215,6 +224,9 @@ async def test_what_was_picked_in_the_app_is_kept_with_each_directory_s_data(
         before = await client.call_tool("read_app_state", {})
         read_only = not (tmp_path / "logos").exists()
         saved = await client.call_tool("save_app_state", {"state": {"method": "svg"}})
+        picked = AppImageRequest(model="chatgpt", size=(1536, 1024), format=".webp", count=2, reasoning_effort="high")
+        request = await client.call_tool("save_app_state", {"state": {"request": picked.model_dump(mode="json")}})
+        await client.call_tool("save_app_state", {"state": {"method": "svg"}})
         bad = await client.call_tool("save_app_state", {"state": {"method": "paint"}})
         await client.call_tool("open_app", {"directory": str(tmp_path / "photos")})
         elsewhere = await client.call_tool("read_app_state", {})
@@ -223,6 +235,7 @@ async def test_what_was_picked_in_the_app_is_kept_with_each_directory_s_data(
 
     assert (AppState.model_validate(before.structured_content), read_only) == (AppState(), True)
     assert AppState.model_validate(saved.structured_content) == AppState(method="svg")
+    assert AppState.model_validate(request.structured_content) == AppState(request=picked)
     assert AppState.model_validate_json(kept.read_text(encoding="utf-8")) == AppState(method="svg")
     # The data directory's .gitignore comes with it, so what the app keeps there stays out of a project's commits.
     assert (tmp_path / "logos" / ".agents" / ".gitignore").is_file()
@@ -335,3 +348,104 @@ async def test_the_view_reads_an_image_s_file_its_versions_and_small_copies_of_t
     assert "has no version 'v9'. Its versions: v1, v2." in refused[2]
     assert "no image named 'missing.png'" in refused[3]
     assert "is not a resource of this server" in refused[4]
+
+
+async def test_the_view_reads_what_each_method_takes_and_previews_a_request_without_sending_it(
+    open_app: Callable[..., lib.AppServer], images_api: FakeImagesAPI
+) -> None:
+    await made("A paper-cut cactus.", "cactus.png")
+    app_server = open_app()
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        methods = await client.call_tool("list_image_methods", {})
+        editing = await client.call_tool(
+            "preview_openai_image_request",
+            {"prompt": "Make it bloom.", "name": "cactus.png", "version": "v1", "size": [1536, 1024], "quality": "low"},
+        )
+        creating = await client.call_tool(
+            "preview_chatgpt_image_request", {"prompt": "A fern.", "name": "fern.png", "transparent": True}
+        )
+        refused = await client.call_tool("preview_openai_image_request", {"prompt": " ", "name": "fern.png"})
+        idle = await client.call_tool("cancel_image", {"name": "cactus.png"})
+        listed = await client.call_tool("list_images", {})
+
+    [cactus] = ImageListing.model_validate(listed.structured_content).images
+    edit = ImageRequestPreview.model_validate(editing.structured_content)
+    create = ImageRequestPreview.model_validate(creating.structured_content)
+    assert ImageMethods.model_validate(methods.structured_content) == lib.list_image_methods()
+    assert (edit.method, edit.edits, [image.path for image in edit.images]) == (
+        "openai",
+        True,
+        [cactus.versions[0].file],
+    )
+    assert (edit.parameters["size"], edit.parameters["quality"]) == ("1536x1024", "low")
+    assert (create.method, create.edits, create.images) == ("chatgpt", False, [])
+    assert create.parameters["transparent_background"] is True
+    assert refused.structured_content == {"reason": "invalid-request", "image": "fern.png"}
+    assert idle.structured_content == {"reason": "not-running", "image": None}
+    # Only the image made before the app opened was ever asked of the API.
+    assert (len(images_api.requests), cactus.status, len(cactus.versions)) == (1, "done", 1)
+
+
+@pytest.mark.detached
+async def test_the_view_starts_a_run_in_a_process_of_its_own_reads_its_previews_and_stops_one(
+    open_app: Callable[..., lib.AppServer], images_api: FakeImagesAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app_server = open_app()
+
+    async def image(client: Client, running: bool) -> ImageSummary:
+        """The image, once its run is going, or once it has ended."""
+        while True:
+            listing = ImageListing.model_validate((await client.call_tool("list_images", {})).structured_content)
+            if listing.images and (listing.images[0].status == "running") == running:
+                return listing.images[0]
+            await asyncio.sleep(0.05)
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        monkeypatch.setattr(generate, "BACKGROUND_COMMAND", detached_openai.command("answer"))
+        started = await client.call_tool(
+            "generate_openai_image",
+            {"prompt": "A cactus.", "name": "cactus.png", "size": [1536, 1024], "previews": 2},
+        )
+        created = await asyncio.wait_for(image(client, running=False), DETACHED_TIMEOUT_SECONDS)
+        run_id = (started.structured_content or {})["run_id"]
+        history = ImageActivity.model_validate(
+            (await client.call_tool("read_image_activity", {"name": "cactus.png"})).structured_content
+        )
+        [preview] = (await client.read_resource(f"image-design://previews/{run_id}/1/cactus.png")).contents
+        refused: list[str] = []
+        for uri in (
+            f"image-design://previews/{run_id}/2/cactus.png",
+            "image-design://previews/another-run/1/cactus.png",
+            f"image-design://previews/{run_id}/1/missing.png",
+        ):
+            with pytest.raises(MCPError) as failure:
+                await client.read_resource(uri)
+            refused.append(str(failure.value))
+        monkeypatch.setattr(generate, "BACKGROUND_COMMAND", detached_openai.command("hang"))
+        await client.call_tool("generate_openai_image", {"prompt": "Make it bloom.", "name": "cactus.png"})
+        busy = await client.call_tool("generate_openai_image", {"prompt": "Make it wilt.", "name": "cactus.png"})
+        working = await asyncio.wait_for(image(client, running=True), DETACHED_TIMEOUT_SECONDS)
+        stopping = await client.call_tool("cancel_image", {"name": "cactus.png"})
+        stopped = await asyncio.wait_for(image(client, running=False), DETACHED_TIMEOUT_SECONDS)
+
+    previews = [event for event in history.events if event.kind == "preview"]
+    assert started.structured_content == {"name": "cactus.png", "run_id": created.last_run and created.last_run.id}
+    assert (created.status, created.width, created.height) == ("done", 1536, 1024)
+    assert created.last_run is not None
+    assert (created.last_run.origin, created.last_run.pid != os.getpid()) == ("app", True)
+    assert [event.data["index"] for event in previews] == [0, 1]
+    assert isinstance(preview, BlobResourceContents)
+    assert (preview.mime_type, base64.b64decode(preview.blob)) == (
+        "image/png",
+        Path(previews[1].data["path"]).read_bytes(),
+    )
+    assert f"Run '{run_id}' on cactus.png has no preview '2'" in refused[0]
+    assert "Run 'another-run' on cactus.png has no preview '1'" in refused[1]
+    assert "no image named 'missing.png'" in refused[2]
+    assert busy.is_error
+    assert working.last_run is not None
+    assert working.last_run.prompt == "Make it bloom."
+    assert not stopping.is_error
+    assert (stopped.status, stopped.current, len(stopped.versions)) == ("cancelled", "v1", 1)
+    assert images_api.requests == []

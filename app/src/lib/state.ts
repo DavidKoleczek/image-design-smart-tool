@@ -2,9 +2,14 @@ import { useSyncExternalStore } from "react";
 
 import { readAppState, saveAppState, type AppState } from "@/lib/api";
 import { keep } from "@/lib/kept";
+import { DEFAULT_REQUEST } from "@/lib/request";
 
 /** `AppState()` in schemas.py, for when it cannot be read. */
-const DEFAULT_STATE: AppState = { method: "model", closed_folders: [] };
+const DEFAULT_STATE: AppState = {
+  method: "model",
+  request: DEFAULT_REQUEST,
+  closed_folders: [],
+};
 
 const store = keep<AppState>({
   initial: DEFAULT_STATE,

@@ -13,8 +13,10 @@ import { TopBar, type NarrowPane, type Pane } from "@/components/TopBar";
 import { Segmented } from "@/components/ui/segmented";
 import { Workspace } from "@/components/Workspace";
 import { onDisplay, requestDisplayMode } from "@/lib/host";
+import { moveDraft } from "@/lib/drafts";
 import { useImages } from "@/lib/images";
 import { paneLayout, useBreakpoint } from "@/lib/layout";
+import { useRuns } from "@/lib/runs";
 import { updateSettings, useLayoutResets, useSettings } from "@/lib/settings";
 import { useShortcuts } from "@/lib/shortcuts";
 import { followDirectory } from "@/lib/state";
@@ -37,6 +39,7 @@ function App() {
   const [mode, setMode] = useState<CanvasMode>("markup");
   const { listing, image, error, startNew, select, refresh } = useImages();
   const { shown, before, view } = useViewed(image);
+  const runs = useRuns(image);
   // The image a dialog is asking about, by its name.
   const [renaming, setRenaming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -134,12 +137,27 @@ function App() {
       image={image}
       shown={shown}
       before={before}
+      runs={runs}
       error={error}
       onView={view}
       onChanged={refresh}
     />
   );
-  const request = <RequestPane />;
+  const request = (
+    <RequestPane
+      listing={listing}
+      image={image}
+      shown={shown}
+      runs={runs}
+      onCreated={async (name) => {
+        // Listed first, so the image is there to come into view.
+        await refresh();
+        select(name);
+      }}
+      onChanged={refresh}
+      onView={view}
+    />
+  );
 
   return (
     <div
@@ -237,6 +255,9 @@ function App() {
           // Only the image in view takes the view with it; another one renamed from the list stays out of it.
           if (renaming === image?.name) {
             select(name);
+          }
+          if (renaming !== null) {
+            moveDraft(renaming, name);
           }
           void refresh();
         }}

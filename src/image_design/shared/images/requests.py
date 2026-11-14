@@ -75,6 +75,18 @@ def source(image: StoredImage, version: str | None) -> Path | None:
     return image.path if image.path.is_file() else None
 
 
+def previewed_source(root: Path, data: Path, name: str, version: str | None) -> Path | None:
+    """The file a request for the image named `name` would edit, found without claiming the image or keeping
+    anything for it."""
+    image = find_image(root, data, name)
+    if image is not None:
+        return source(image, version)
+    if version is not None:
+        raise ImageDesignError(f"Image {name} has no version {version!r}. Its versions: none.", "no-such-version", name)
+    path = root / name
+    return path if path.is_file() else None
+
+
 def write(path: Path, content: bytes) -> Path:
     path.write_bytes(content)
     return path

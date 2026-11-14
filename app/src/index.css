@@ -97,6 +97,17 @@
   --default-transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
 
   --animate-build: build 1.6s infinite steps(1, end);
+  --animate-slide: slide 1.6s ease-in-out infinite;
+
+  /* A short bar crosses its track from before the start to past the end, over a run with no known length. */
+  @keyframes slide {
+    from {
+      left: -32%;
+    }
+    to {
+      left: 100%;
+    }
+  }
 
   /* Four layers stack up from the bottom, hold, and start over, so each cycle ends as the plain brand square. */
   @keyframes build {

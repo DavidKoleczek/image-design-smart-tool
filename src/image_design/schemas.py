@@ -316,6 +316,38 @@ class ImagesState(BaseModel):
     last_viewed: str | None = None
 
 
+ImageRequestRole = Literal["source", "marked-copy", "reference", "marks", "mask"]
+
+
+class ImageRequestImage(BaseModel):
+    """One image a request sends."""
+
+    role: ImageRequestRole = Field(
+        description="`source` is the image being edited. Its marks go to the OpenAI API as `marks`, a layer beside "
+        "it, and to ChatGPT as `marked-copy`, a copy of it with them drawn on"
+    )
+    path: Path | None = Field(description="The file it is read from; None for what the tool draws from the marks")
+
+
+class ImageRequestPreview(BaseModel):
+    """What a request to an image model would send, worked out without sending it or keeping anything."""
+
+    method: ImageMethod
+    name: str
+    edits: bool = Field(description="Whether an image with that name exists, so the request edits it")
+    prompt: str = Field(description="As the image model receives it")
+    added: str | None = Field(
+        description="What the tool adds after the prompt as written, such as what the marks are; None when it adds "
+        "nothing"
+    )
+    images: list[ImageRequestImage] = Field(description="In the order they are sent")
+    parameters: dict[str, str | int | bool] = Field(
+        description="What the request sets, by the names the service gives them; what it leaves out is the service's "
+        "choice. For ChatGPT, the image tool's `transparent_background`, and the `codex_model` and "
+        "`reasoning_effort` that carry the request"
+    )
+
+
 class ImageActivity(BaseModel):
     """What happened to an image, run by run: each request, what its agent did, and how it ended."""
 
@@ -597,12 +629,37 @@ class AppSettings(BaseModel):
     medium: AppLayout = Field(default_factory=AppLayout, description="The panes from 640 to 1100 pixels wide")
 
 
+class AppImageRequest(BaseModel):
+    """What the person last picked in the app for a request to an image model."""
+
+    model: str | None = Field(
+        default=None,
+        description="An OpenAI image model's ID, or `chatgpt`; None for the default of the first method set up",
+    )
+    size: tuple[int, int] | None = Field(
+        default=None, description="None for the service's choice, and on an edit the size of the image being edited"
+    )
+    quality: OpenAIImageQuality = "auto"
+    format: str = Field(default=".png", description="The extension a new image's name ends in")
+    background: OpenAIImageBackground = "auto"
+    count: int = Field(default=1, ge=1)
+    complexity: OpenAIImageComplexity | None = Field(default=None, description="None for the service's choice")
+    compression: int = Field(default=100, ge=0, le=100, description="For a .jpg or .webp")
+    codex_model: str | None = Field(
+        default=None, description="The Codex model that carries a request to ChatGPT; None for the default"
+    )
+    reasoning_effort: ReasoningEffort | None = Field(
+        default=None, description="That model's reasoning effort; None for the default"
+    )
+
+
 class AppState(BaseModel):
     """app/app.json in a data directory: what the person last picked in the app for the images there."""
 
     method: AppMethod = Field(
         default="model", description="The way of making an image picked last: an image model, or drawing an SVG"
     )
+    request: AppImageRequest = Field(default_factory=AppImageRequest)
     closed_folders: list[str] = Field(
         default_factory=list, description="The folders closed in Your images, by their paths with forward slashes"
     )

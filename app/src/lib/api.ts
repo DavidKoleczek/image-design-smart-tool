@@ -9,6 +9,16 @@ const MOVE_TOOL = "move_image";
 const DELETE_TOOL = "delete_image";
 const RESTORE_TOOL = "restore_image_version";
 const ACTIVITY_TOOL = "read_image_activity";
+const METHODS_TOOL = "list_image_methods";
+const GENERATE_TOOLS = {
+  openai: "generate_openai_image",
+  chatgpt: "generate_chatgpt_image",
+};
+const PREVIEW_TOOLS = {
+  openai: "preview_openai_image_request",
+  chatgpt: "preview_chatgpt_image_request",
+};
+const CANCEL_TOOL = "cancel_image";
 const READ_SETTINGS_TOOL = "read_app_settings";
 const SAVE_SETTINGS_TOOL = "save_app_settings";
 const READ_STATE_TOOL = "read_app_state";
@@ -16,6 +26,7 @@ const SAVE_STATE_TOOL = "save_app_state";
 const IMAGE_FILE_PREFIX = "image-design://images/";
 const IMAGE_VERSION_PREFIX = "image-design://versions/";
 const IMAGE_THUMBNAIL_PREFIX = "image-design://thumbnails/";
+const RUN_PREVIEW_PREFIX = "image-design://previews/";
 // In a thumbnail URI, names the image file where a version id would be.
 const FILE = "file";
 
@@ -53,8 +64,16 @@ export type ImageVersion = {
 /** The fields of `ImageRunRecord` in schemas.py that the view reads. */
 export type ImageRun = {
   id: string;
+  method: ImageMethod;
+  prompt: string;
+  /** The settings it was sent with, by the names the method records them under. */
+  request: Record<string, unknown>;
+  /** The versions it has made so far. */
+  versions: string[];
   /** ISO 8601. */
   started: string;
+  /** Why it failed or timed out, as the library words it. */
+  error: string | null;
 };
 
 /** The fields of `ImageSummary` in schemas.py that the view reads. */
@@ -131,15 +150,127 @@ export type AppSettings = {
 /** `AppMethod` in schemas.py: an image model, or drawing an SVG. */
 export type AppMethod = "model" | "svg";
 
+/** `ImageMethodSetup` in schemas.py. */
+export type MethodSetup = {
+  /** Whether what it needs is installed and configured on this machine. */
+  ready: boolean;
+  /** What to set up, when it is not ready. */
+  problem: string | null;
+  /** The extensions the name of an image it makes can end in. */
+  formats: string[];
+};
+
+/** The fields of `OpenAIImageMethod` in schemas.py that the view reads. */
+export type OpenAIImageMethod = MethodSetup & {
+  models: { id: string; label: string }[];
+  default_model: string;
+  qualities: string[];
+  complexities: string[];
+  backgrounds: string[];
+  max_count: number;
+  max_previews: number;
+};
+
+/** The fields of `IntelligenceModel` in schemas.py that the view reads. */
+export type IntelligenceModel = {
+  id: string;
+  label: string;
+  reasoning_efforts: string[];
+};
+
+/** The fields of `ChatGPTImageMethod` in schemas.py that the view reads. */
+export type ChatGPTImageMethod = MethodSetup & {
+  /** The Codex models that can carry the request. */
+  models: IntelligenceModel[];
+  default_model: string;
+  default_reasoning_effort: string;
+};
+
+/** `ImageMethods` in schemas.py. */
+export type ImageMethods = {
+  openai: OpenAIImageMethod;
+  chatgpt: ChatGPTImageMethod;
+  svg: MethodSetup;
+};
+
+/** `AppImageRequest` in schemas.py: what was last picked for a request to an image model. */
+export type AppImageRequest = {
+  /** An OpenAI image model's id, or `chatgpt`; null for the default. */
+  model: string | null;
+  /** Width and height; null for the service's choice, on an edit the image's own size. */
+  size: [number, number] | null;
+  quality: string;
+  /** The extension a new image's name ends in. */
+  format: string;
+  background: string;
+  count: number;
+  /** Null for the service's choice. */
+  complexity: string | null;
+  compression: number;
+  /** The Codex model that carries a request to ChatGPT; null for the default. */
+  codex_model: string | null;
+  reasoning_effort: string | null;
+};
+
+/** What the request tools take, as `generate_openai_image` and `generate_chatgpt_image` in lib.py name them. */
+export type ImageRequest =
+  | {
+      method: "openai";
+      arguments: {
+        prompt: string;
+        name: string;
+        version?: string;
+        model: string;
+        size?: [number, number];
+        quality: string;
+        complexity?: string;
+        background: string;
+        compression?: number;
+        count: number;
+        previews: number;
+      };
+    }
+  | {
+      method: "chatgpt";
+      arguments: {
+        prompt: string;
+        name: string;
+        version?: string;
+        transparent: boolean;
+        model?: string;
+        reasoning_effort?: string;
+      };
+    };
+
+/** `ImageRequestPreview` in schemas.py: what a request would send. */
+export type ImageRequestPreview = {
+  method: ImageMethod;
+  name: string;
+  /** Whether an image with that name exists, so the request edits it. */
+  edits: boolean;
+  /** The prompt as the image model receives it. */
+  prompt: string;
+  /** What the tool adds after the prompt as written; null when it adds nothing. */
+  added: string | null;
+  images: {
+    role: "source" | "marked-copy" | "reference" | "marks" | "mask";
+    path: string | null;
+  }[];
+  parameters: Record<string, string | number | boolean>;
+};
+
 /** `AppState` in schemas.py. */
 export type AppState = {
   method: AppMethod;
+  request: AppImageRequest;
   /** The folders closed in Your images, by their paths. */
   closed_folders: string[];
 };
 
 // Deleting an image first stops a run working on it, which the server waits on for up to 15 seconds.
 const DELETE_TIMEOUT_MS = 30_000;
+// A run starts in a process of its own, and with ChatGPT an agent starts in that, before the tool answers.
+const START_TIMEOUT_MS = 120_000;
 
 function textOf(result: CallToolResult): string {
   return result.content
@@ -236,6 +367,37 @@ export async function readImageActivity(
   )) as ImageActivity;
 }
 
+/** The ways of making an image, whether each is set up on this machine, and what each takes. */
+export async function listImageMethods(): Promise<ImageMethods> {
+  return (await structuredFrom(METHODS_TOOL, {})) as ImageMethods;
+}
+
+/** Start creating or editing an image. It answers once the run has started, with the image's name and the run's id. */
+export async function generateImage(
+  request: ImageRequest,
+): Promise<{ name: string; run_id: string }> {
+  return (await structuredFrom(
+    GENERATE_TOOLS[request.method],
+    request.arguments,
+    START_TIMEOUT_MS,
+  )) as { name: string; run_id: string };
+}
+
+/** What the request would send, worked out by the library without sending it. */
+export async function previewImageRequest(
+  request: ImageRequest,
+): Promise<ImageRequestPreview> {
+  return (await structuredFrom(
+    PREVIEW_TOOLS[request.method],
+    request.arguments,
+  )) as ImageRequestPreview;
+}
+
+/** Stop the run working on the image, whoever started it. */
+export async function cancelImage(name: string): Promise<void> {
+  await call(CANCEL_TOOL, { name });
+}
+
 async function readImage(prefix: string, path: string): Promise<string> {
   const uri = `${prefix}${path.split("/").map(encodeURIComponent).join("/")}`;
   const result = await app.readServerResource({ uri });
@@ -261,6 +423,15 @@ export function readImagePicture(
   return version === null
     ? readImage(IMAGE_FILE_PREFIX, name)
     : readImage(IMAGE_VERSION_PREFIX, `${version}/${name}`);
+}
+
+/** An in-progress image of a run on the image, by the index its `preview` event has, as a data URL. */
+export function readRunPreview(
+  name: string,
+  run: string,
+  index: number,
+): Promise<string> {
+  return readImage(RUN_PREVIEW_PREFIX, `${run}/${index}/${name}`);
 }
 
 /** How the person set up the app, the same in every directory. */

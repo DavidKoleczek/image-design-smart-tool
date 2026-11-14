@@ -10,6 +10,7 @@ const SHORTCUTS: [string[], string][] = [
   [["["], "Your images"],
   [["]"], "Request"],
   [["N"], "New image"],
+  [["Ctrl", "Enter"], "Generate"],
   [["?"], "This list"],
   [["Esc"], "Close"],
 ];

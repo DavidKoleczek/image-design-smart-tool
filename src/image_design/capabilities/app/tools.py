@@ -7,6 +7,7 @@ VIEW_URI = "ui://image-design/app"
 IMAGE_FILE_PREFIX = "image-design://images/"
 IMAGE_VERSION_PREFIX = "image-design://versions/"
 IMAGE_THUMBNAIL_PREFIX = "image-design://thumbnails/"
+RUN_PREVIEW_PREFIX = "image-design://previews/"
 # In a thumbnail's URI, names the image's file where a version's id would be.
 FILE = "file"
 APP_ONLY = {"ui": {"resourceUri": VIEW_URI, "visibility": ["app"]}}
@@ -129,6 +130,90 @@ READ_ACTIVITY = Tool(
     },
     _meta=APP_ONLY,
 )
+LIST_METHODS = Tool(
+    name="list_image_methods",
+    description="The ways of making an image, whether each is set up on this machine, and the models and options "
+    "each takes. Called by the view.",
+    input_schema={"type": "object", "properties": {}},
+    _meta=APP_ONLY,
+)
+# What both image models are asked the same way.
+REQUEST = {
+    "prompt": {"type": "string", "description": "What to make, or what to change, sent as written"},
+    "name": {
+        "type": "string",
+        "description": "The image's path in the directory. A new name creates the image, and the name of one that "
+        "exists edits it",
+    },
+    "version": {"type": "string", "description": "The version to edit, such as v2. Omit it for the image's file"},
+}
+OPENAI_REQUEST = {
+    "type": "object",
+    "properties": {
+        **REQUEST,
+        "model": {"type": "string", "description": "An OpenAI image model's ID. Omit it for the default"},
+        "size": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Width and height. Omit it for the API's choice, or on an edit the image's own size",
+        },
+        "quality": {"type": "string"},
+        "complexity": {"type": "string"},
+        "background": {"type": "string"},
+        "compression": {"type": "integer", "description": "0 to 100, for a .jpg or .webp"},
+        "count": {"type": "integer", "description": "How many images to make. Each is kept as a version"},
+        "previews": {"type": "integer", "description": "In-progress images to ask for, with a count of 1"},
+    },
+    "required": ["prompt", "name"],
+}
+CHATGPT_REQUEST = {
+    "type": "object",
+    "properties": {
+        **REQUEST,
+        "transparent": {"type": "boolean", "description": "Ask for a transparent background"},
+        "model": {"type": "string", "description": "The Codex model that carries the request. Omit it for the default"},
+        "reasoning_effort": {"type": "string", "description": "That model's reasoning effort"},
+    },
+    "required": ["prompt", "name"],
+}
+GENERATE_OPENAI = Tool(
+    name="generate_openai_image",
+    description="Start creating or editing an image in the app's directory with an OpenAI image model, in a process "
+    "of its own, and return the image's name and the run's id. Billed to the OpenAI API key. Called by the view.",
+    input_schema=OPENAI_REQUEST,
+    _meta=APP_ONLY,
+)
+GENERATE_CHATGPT = Tool(
+    name="generate_chatgpt_image",
+    description="Start creating or editing an image in the app's directory with the image generation built into "
+    "Codex, in a process of its own, and return the image's name and the run's id. Counts against the ChatGPT plan "
+    "Codex is signed in with. Called by the view.",
+    input_schema=CHATGPT_REQUEST,
+    _meta=APP_ONLY,
+)
+PREVIEW_OPENAI = Tool(
+    name="preview_openai_image_request",
+    description="What `generate_openai_image` would send for the same arguments: the prompt, the images in order, "
+    "and the parameters. Nothing is sent or kept. Called by the view.",
+    input_schema=OPENAI_REQUEST,
+    _meta=APP_ONLY,
+)
+PREVIEW_CHATGPT = Tool(
+    name="preview_chatgpt_image_request",
+    description="What `generate_chatgpt_image` would send for the same arguments: the prompt, the images in order, "
+    "and the parameters. Nothing is sent or kept. Called by the view.",
+    input_schema=CHATGPT_REQUEST,
+    _meta=APP_ONLY,
+)
+CANCEL_IMAGE = Tool(
+    name="cancel_image",
+    description="Stop the run working on an image, whichever process started it. A request already sent may still be "
+    "billed or counted. Called by the view.",
+    input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
+    _meta=APP_ONLY,
+)
 VIEW_TOOLS = [
     LIST_IMAGES,
     VIEW_IMAGE,
@@ -136,6 +221,12 @@ VIEW_TOOLS = [
     DELETE_IMAGE,
     RESTORE_VERSION,
     READ_ACTIVITY,
+    LIST_METHODS,
+    GENERATE_OPENAI,
+    GENERATE_CHATGPT,
+    PREVIEW_OPENAI,
+    PREVIEW_CHATGPT,
+    CANCEL_IMAGE,
     READ_SETTINGS,
     SAVE_SETTINGS,
     READ_STATE,
@@ -158,4 +249,10 @@ IMAGE_THUMBNAIL = ResourceTemplate(
     description=f"A small WebP of a version of an image, or of its file when the version is `{FILE}`, as base64, for "
     "the app's view.",
 )
-IMAGE_RESOURCES = [IMAGE_FILE, IMAGE_VERSION, IMAGE_THUMBNAIL]
+RUN_PREVIEW = ResourceTemplate(
+    name="Run preview",
+    uri_template=f"{RUN_PREVIEW_PREFIX}{{run}}/{{index}}/{{+name}}",
+    description="An in-progress image of a run on an image, by the run's id and the index its `preview` event has, as "
+    "base64, for the app's view.",
+)
+IMAGE_RESOURCES = [IMAGE_FILE, IMAGE_VERSION, IMAGE_THUMBNAIL, RUN_PREVIEW]

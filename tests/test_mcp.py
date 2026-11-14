@@ -32,6 +32,12 @@ VIEW_TOOLS = (
     "delete_image",
     "restore_image_version",
     "read_image_activity",
+    "list_image_methods",
+    "generate_openai_image",
+    "generate_chatgpt_image",
+    "preview_openai_image_request",
+    "preview_chatgpt_image_request",
+    "cancel_image",
     "read_app_settings",
     "save_app_settings",
     "read_app_state",
@@ -41,6 +47,7 @@ IMAGE_RESOURCES = (
     "image-design://images/{+name}",
     "image-design://versions/{version}/{+name}",
     "image-design://thumbnails/{version}/{+name}",
+    "image-design://previews/{run}/{index}/{+name}",
 )
 
 

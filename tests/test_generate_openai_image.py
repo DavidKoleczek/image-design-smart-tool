@@ -15,7 +15,15 @@ from typer.testing import CliRunner
 from image_design import lib
 from image_design.capabilities.openai_image.generate import MARKS_NOTE
 from image_design.cli import app
-from image_design.schemas import DEFAULT_OPENAI_IMAGE_MODEL, ImageDesignError, ImageEvent, ImageResult, ImageUsage, Mark
+from image_design.schemas import (
+    DEFAULT_OPENAI_IMAGE_MODEL,
+    ImageDesignError,
+    ImageEvent,
+    ImageRequestImage,
+    ImageResult,
+    ImageUsage,
+    Mark,
+)
 from image_design.shared.images import pictures
 from image_design.shared.images.store import GITIGNORE, LOCKS
 
@@ -234,6 +242,66 @@ async def test_only_one_run_works_on_an_image_at_a_time_and_cancel_image_stops_i
     assert result.status == "cancelled"
     with pytest.raises(ImageDesignError, match="no run going"):
         lib.cancel_image("cactus.png")
+
+
+async def test_a_request_preview_is_what_the_request_then_sends_and_nothing_is_sent_or_kept_for_it(
+    images_api: FakeImagesAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    Path("palette.png").write_bytes(picture(512, 512, "#000000"))
+    create: dict[str, Any] = {
+        "prompt": "A cactus.",
+        "name": "cactus.jpg",
+        "quality": "low",
+        "compression": 80,
+        "previews": 2,
+    }
+    edit: dict[str, Any] = {
+        "prompt": "Make the pot blue.",
+        "name": "cactus.jpg",
+        "references": [Path("palette.png")],
+        "count": 2,
+    }
+    # A preview sends nothing, so it needs no key.
+    monkeypatch.delenv("OPENAI_API_KEY")
+    creating = lib.preview_openai_image_request(**create)
+    kept_for_a_preview = Path(".image-design").exists()
+    with pytest.raises(ImageDesignError, match="Previews work only with a count of 1"):
+        lib.preview_openai_image_request("A cactus.", name="cactus.png", previews=2, count=2)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    await made(**create)
+    before = sorted(Path(".image-design").rglob("*"))
+    editing = lib.preview_openai_image_request(marks=[CACTUS], **edit)
+    kept_for_an_edit = sorted(Path(".image-design").rglob("*")) != before
+    await made(marks=[CACTUS], **edit)
+
+    created, edited = images_api.requests
+    assert (kept_for_a_preview, kept_for_an_edit) == (False, False)
+    assert (creating.method, creating.name, creating.edits, creating.images) == ("openai", "cactus.jpg", False, [])
+    assert (creating.prompt, creating.added) == ("A cactus.", None)
+    assert creating.parameters == {
+        "model": DEFAULT_OPENAI_IMAGE_MODEL,
+        "quality": "low",
+        "output_format": "jpeg",
+        "output_compression": 80,
+        "n": 1,
+        "partial_images": 2,
+    }
+    assert {name: created.fields[name] for name in creating.parameters} == creating.parameters
+    assert set(created.fields) - set(creating.parameters) == {"prompt", "stream"}
+    assert editing.edits
+    assert editing.images == [
+        ImageRequestImage(role="source", path=Path(".image-design/cactus.jpg").resolve()),
+        ImageRequestImage(role="reference", path=Path("palette.png")),
+        ImageRequestImage(role="marks", path=None),
+    ]
+    assert editing.prompt == edited.fields["prompt"]
+    assert editing.added == f"{MARKS_NOTE}\n- Mark 1 is a red circle: this pot"
+    # An edit asks for the size of the image it edits, which the preview has worked out.
+    assert editing.parameters["size"] == "1024x1024"
+    assert {name: edited.fields[name] for name in editing.parameters} == {
+        name: str(value) for name, value in editing.parameters.items()
+    }
+    assert set(edited.fields) - set(editing.parameters) == {"prompt"}
 
 
 def test_the_cli_prints_each_image_made_and_exits_with_the_run_s_status(images_api: FakeImagesAPI) -> None:

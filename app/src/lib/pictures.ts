@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   readImagePicture,
+  readRunPreview,
   type ImageSummary,
   type ImageVersion,
 } from "@/lib/api";
@@ -10,12 +11,17 @@ import { describe } from "@/lib/errors";
 /** What of an image to show. */
 export type Picture = {
   name: string;
-  /** The version kept for the image; null for its file. */
+  /** The version kept for the image; null for its file, and for a run's in-progress image. */
   version: string | null;
   /** A thumbnail rather than the image itself. */
   small: boolean;
-  /** The hash of what is there, so the same content is read once however it is reached. */
-  sha256: string;
+  /** For an in-progress image of a run: the run's id, and the index the image has among the run's previews. */
+  preview: { run: string; index: number } | null;
+  /**
+   * What tells its content from any other: the hash of the file or version, so the same content is read once however
+   * it is reached, or the run and index of an in-progress image.
+   */
+  key: string;
 };
 
 /** The image's file; nothing when it has none the tool can read. */
@@ -25,7 +31,13 @@ export function filePicture(
 ): Picture | null {
   return image.width === null || image.sha256 === null
     ? null
-    : { name: image.name, version: null, small, sha256: image.sha256 };
+    : {
+        name: image.name,
+        version: null,
+        small,
+        preview: null,
+        key: image.sha256,
+      };
 }
 
 export function versionPicture(
@@ -37,7 +49,23 @@ export function versionPicture(
     name: image.name,
     version: version.id,
     small,
-    sha256: version.sha256,
+    preview: null,
+    key: version.sha256,
+  };
+}
+
+/** An in-progress image a run on the image sent before its final one. */
+export function previewPicture(
+  image: ImageSummary,
+  run: string,
+  index: number,
+): Picture {
+  return {
+    name: image.name,
+    version: null,
+    small: false,
+    preview: { run, index },
+    key: `preview:${run}:${index}`,
   };
 }
 
@@ -77,7 +105,7 @@ function inTurn(read: () => Promise<string>): Promise<string> {
 
 function entryOf(picture: Picture): Entry {
   const cache = picture.small ? caches.small : caches.full;
-  const key = picture.sha256;
+  const key = picture.key;
   const kept = cache.get(key);
   if (kept) {
     // Put back as the newest, so what is still looked at is the last to go.
@@ -85,8 +113,11 @@ function entryOf(picture: Picture): Entry {
     cache.set(key, kept);
     return kept;
   }
+  const { preview } = picture;
   const read = () =>
-    readImagePicture(picture.name, picture.version, picture.small);
+    preview
+      ? readRunPreview(picture.name, preview.run, preview.index)
+      : readImagePicture(picture.name, picture.version, picture.small);
   const entry: Entry = {
     promise: picture.small ? inTurn(read) : read(),
     url: null,
@@ -111,8 +142,9 @@ function entryOf(picture: Picture): Entry {
 type Loaded = { picture: Picture; url: string | null; error: string | null };
 
 /**
- * The picture read through the host: its data URL once read, or why it could not be. A thumbnail keeps showing what
- * it showed of the same image until the new one is read, so a row does not blink each time its image changes.
+ * The picture read through the host: its data URL once read, or why it could not be. Two kinds keep showing what
+ * showed of the same image until the new one is read: a thumbnail, so a row does not blink each time its image
+ * changes, and whatever comes before or after an in-progress image, so an image forms without going blank between.
  */
 export function usePicture(picture: Picture | null): {
   url: string | null;
@@ -122,13 +154,21 @@ export function usePicture(picture: Picture | null): {
   const name = picture?.name ?? null;
   const version = picture?.version ?? null;
   const small = picture?.small ?? false;
-  const sha256 = picture?.sha256 ?? null;
+  const key = picture?.key ?? null;
+  const run = picture?.preview?.run ?? null;
+  const index = picture?.preview?.index ?? null;
 
   useEffect(() => {
-    if (name === null || sha256 === null) {
+    if (name === null || key === null) {
       return;
     }
-    const asked = { name, version, small, sha256 };
+    const asked: Picture = {
+      name,
+      version,
+      small,
+      preview: run !== null && index !== null ? { run, index } : null,
+      key,
+    };
     let current = true;
     entryOf(asked).promise.then(
       (url) => current && setLoaded({ picture: asked, url, error: null }),
@@ -139,28 +179,29 @@ export function usePicture(picture: Picture | null): {
     return () => {
       current = false;
     };
-  }, [name, version, small, sha256]);
+  }, [name, version, small, key, run, index]);
 
   if (picture === null) {
     return { url: null, error: null };
   }
   const cache = picture.small ? caches.small : caches.full;
-  const ready = cache.get(picture.sha256)?.url ?? null;
+  const ready = cache.get(picture.key)?.url ?? null;
   if (ready !== null) {
     return { url: ready, error: null };
   }
   if (
     loaded &&
     loaded.picture.small === picture.small &&
-    loaded.picture.sha256 === picture.sha256
+    loaded.picture.key === picture.key
   ) {
     return { url: loaded.url, error: loaded.error };
   }
   const before =
-    loaded &&
-    picture.small &&
-    loaded.picture.small &&
+    loaded !== null &&
+    loaded.picture.small === picture.small &&
     loaded.picture.name === picture.name &&
-    loaded.picture.version === picture.version;
+    (picture.small
+      ? loaded.picture.version === picture.version
+      : picture.preview !== null || loaded.picture.preview !== null);
   return { url: before ? loaded.url : null, error: null };
 }

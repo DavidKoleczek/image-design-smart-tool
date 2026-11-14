@@ -28,6 +28,7 @@ from image_design.schemas import (
     ImageActivity,
     ImageListing,
     ImageMethods,
+    ImageRequestPreview,
     ImageSummary,
     IntelligenceModels,
     Manifest,
@@ -188,6 +189,94 @@ async def generate_chatgpt_image(
         origin=origin,
         detach=detach,
         intelligence=intelligence,
+    )
+
+
+def preview_openai_image_request(
+    prompt: str,
+    name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+    mask: Path | None = None,
+    version: str | None = None,
+    frame: int | None = None,
+    model: str | None = None,
+    size: tuple[int, int] | None = None,
+    quality: OpenAIImageQuality | None = None,
+    complexity: OpenAIImageComplexity | None = None,
+    background: OpenAIImageBackground | None = None,
+    compression: int | None = None,
+    count: int = 1,
+    frames: int | None = None,
+    frame_ms: int | None = None,
+    previews: int = 0,
+) -> ImageRequestPreview:
+    """What `generate_openai_image` would send for the same arguments, without sending it or keeping anything.
+
+    The arguments are checked as a request's are, so what a request would raise for, this raises for. It needs
+    neither the openai extra nor a key.
+
+    Returns:
+        The prompt as the model receives it, the images in the order they are sent, and each parameter the request
+        sets by the name the Images API gives it. On an edit that includes the size worked out from the image.
+    """
+    return generate.preview_openai_image_request(
+        prompt=prompt,
+        name=name,
+        directory=directory,
+        data_directory=data_directory,
+        references=references,
+        marks=marks,
+        mask=mask,
+        version=version,
+        frame=frame,
+        model=model,
+        size=size,
+        quality=quality,
+        complexity=complexity,
+        background=background,
+        compression=compression,
+        count=count,
+        frames=frames,
+        frame_ms=frame_ms,
+        previews=previews,
+    )
+
+
+def preview_chatgpt_image_request(
+    prompt: str,
+    name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+    version: str | None = None,
+    transparent: bool = False,
+    model: str | None = None,
+    reasoning_effort: ReasoningEffort = DEFAULT_CHATGPT_REASONING_EFFORT,
+) -> ImageRequestPreview:
+    """What `generate_chatgpt_image` would send for the same arguments, without sending it or keeping anything.
+
+    The arguments are checked as a request's are. Whether Codex is installed and signed in with ChatGPT is not, since
+    no agent is started.
+
+    Returns:
+        The prompt as the image tool receives it, the images in the order they are sent, whether a transparent
+        background is asked for, and the Codex model and reasoning effort that would carry the request.
+    """
+    return chatgpt_image.preview_chatgpt_image_request(
+        prompt=prompt,
+        name=name,
+        directory=directory,
+        data_directory=data_directory,
+        references=references,
+        marks=marks,
+        version=version,
+        transparent=transparent,
+        model=model,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -422,6 +511,12 @@ def app_server(directory: Path | None = None, data_directory: Path | None = None
         delete_image,
         restore_image_version,
         read_image_activity,
+        list_image_methods,
+        generate_openai_image,
+        generate_chatgpt_image,
+        preview_openai_image_request,
+        preview_chatgpt_image_request,
+        cancel_image,
         app_settings.settings_path(),
     )
 

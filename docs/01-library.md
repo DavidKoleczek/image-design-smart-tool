@@ -145,6 +145,39 @@ The parameters that differ:
 
 The result's `usage` is None, since the run counts against the ChatGPT plan rather than being billed by the token.
 
+## Preview a request
+
+`preview_openai_image_request` and `preview_chatgpt_image_request` return what a request would send, without sending it.
+
+```python
+def preview_openai_image_request(prompt: str, name: str, ...) -> ImageRequestPreview
+def preview_chatgpt_image_request(prompt: str, name: str, ...) -> ImageRequestPreview
+```
+
+Each takes the arguments of the function it previews, except `timeout_seconds`, `origin`, `detach`, and `intelligence`.
+The arguments are checked the same way, so a preview raises `ImageDesignError` for whatever the request would.
+Nothing is sent and nothing is kept for the image. A preview needs no API key, and does not check that Codex is signed in.
+
+```python
+class ImageRequestPreview(BaseModel):
+    method: ImageMethod
+    name: str
+    edits: bool  # whether an image with that name exists
+    prompt: str  # as the image model receives it
+    added: str | None  # what the tool adds after the prompt as written
+    images: list[ImageRequestImage]  # in the order they are sent
+    parameters: dict[str, str | int | bool]
+
+
+class ImageRequestImage(BaseModel):
+    role: Literal["source", "marked-copy", "reference", "marks", "mask"]
+    path: Path | None  # None for what the tool draws from the marks
+```
+
+- `added`: The tool adds to a prompt only when the request has marks, to say what they are. Otherwise the prompt is sent as written and `added` is None.
+- `images`: `source` is the image being edited. The OpenAI API receives the marks as `marks`, a layer beside the image. ChatGPT receives them as `marked-copy`, a copy of the image with the marks drawn on it.
+- `parameters`: For the OpenAI API, each parameter the request sets, under the name the Images API gives it. A parameter that is left out takes the API's default. On an edit, `size` is the size worked out from the image. For ChatGPT, `transparent_background`, and the `codex_model` and `reasoning_effort` that carry the request.
+
 ## Draw an SVG image
 
 `draw_svg_image` creates or edits an SVG image by running an agent that draws it with code.
@@ -334,15 +367,18 @@ class AppServer:
 The server has one tool for an agent, `open_app`. It opens the browser page and returns its URL. It also takes `directory` and `data_directory`, and switches the app to them when the directory can be listed.
 The other tools are for the view. They are listed only to hosts that render MCP Apps, and marked for the app alone. The view and the resource templates are listed to the same hosts.
 
-- `list_images`, `view_image`, `move_image`, `delete_image`, `restore_image_version`, and `read_image_activity` call the library function of the same name on the app's directory.
+- `list_images`, `view_image`, `move_image`, `delete_image`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's directory.
+- `generate_openai_image` and `generate_chatgpt_image` start a run on the app's directory with `detach=True` and `origin="app"`, so the image goes on being made when the app closes. They return the image's name and the run's ID once the run has started. They take the prompt, the name, the version to edit, and the model and output options. References, marks, and masks are not taken yet.
+- `preview_openai_image_request` and `preview_chatgpt_image_request` take the same arguments and return the `ImageRequestPreview`.
 - `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, and the pane sizes.
-- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory.
+- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options.
 
-The view reads images as resources, each as base64. A read is refused unless the listing has that image or version.
+The view reads images as resources, each as base64. A read is refused unless the listing has that image or version, or the image's activity has that preview.
 
 - `image-design://images/{+name}` is an image's file.
 - `image-design://versions/{version}/{+name}` is a version kept for an image, such as `v2`.
 - `image-design://thumbnails/{version}/{+name}` is a WebP of a version that fits 256 by 256 pixels. Use `file` as the version for the image's file.
+- `image-design://previews/{run}/{index}/{+name}` is an in-progress image of a run. `run` is the run's ID, and `index` is the one its `preview` event has.
 
 The app keeps what it remembers in two files:
 

@@ -5,6 +5,7 @@ from functools import partial
 import os
 from pathlib import Path, PurePosixPath
 import sys
+from typing import NamedTuple
 
 from pydantic import BaseModel
 
@@ -14,6 +15,8 @@ from image_design.schemas import (
     IMAGE_FORMATS,
     OPENAI_IMAGE_MODELS,
     SVG_SUFFIX,
+    ImageRequestImage,
+    ImageRequestPreview,
     ImageRunRecord,
     Mark,
     OpenAIImageBackground,
@@ -28,12 +31,13 @@ from image_design.shared.images.requests import (
     Reference,
     claimed,
     invalid,
-    references,
+    previewed_source,
     source,
     validated,
     write,
     write_references,
 )
+from image_design.shared.images.requests import references as sent_references
 from image_design.shared.images.runs import DetachedRun, ImageRun, InProcessRun
 from image_design.shared.images.store import StoredImage, directories, image_name, new_run_id
 
@@ -144,6 +148,77 @@ async def generate_openai_image(
     return await detaching.detach(BACKGROUND_COMMAND, absolute, root, data, DetachedRun)
 
 
+def preview_openai_image_request(
+    prompt: str,
+    name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+    mask: Path | None = None,
+    version: str | None = None,
+    frame: int | None = None,
+    model: str | None = None,
+    size: tuple[int, int] | None = None,
+    quality: OpenAIImageQuality | None = None,
+    complexity: OpenAIImageComplexity | None = None,
+    background: OpenAIImageBackground | None = None,
+    compression: int | None = None,
+    count: int = 1,
+    frames: int | None = None,
+    frame_ms: int | None = None,
+    previews: int = 0,
+) -> ImageRequestPreview:
+    """What `generate_openai_image` would send for these arguments, checked the same way, with nothing sent or kept."""
+    request = validated(
+        OpenAIImageRequest,
+        prompt=prompt,
+        name=name,
+        directory=directory,
+        data_directory=data_directory,
+        references=references or [],
+        marks=marks or [],
+        mask=mask,
+        version=version,
+        frame=frame,
+        model=model,
+        size=size,
+        quality=quality,
+        complexity=complexity,
+        background=background,
+        compression=compression,
+        count=count,
+        frames=frames,
+        frame_ms=frame_ms,
+        previews=previews,
+    )
+    _require_arguments(request)
+    root, data = directories(request.directory, request.data_directory)
+    image = image_name(request.name, root, data)
+    suffix = PurePosixPath(image).suffix.lower()
+    chosen = _model(request.model)
+    sent_references(request.references)
+    edited = previewed_source(root, data, image, request.version)
+    plan = _plan(request, image, edited, suffix)
+    if request.mask is not None and plan.picture is not None:
+        _mask(request.mask, plan.picture)
+    images = [ImageRequestImage(role="source", path=edited)] if edited is not None else []
+    images.extend(ImageRequestImage(role="reference", path=path) for path in request.references)
+    if request.marks:
+        images.append(ImageRequestImage(role="marks", path=None))
+    if request.mask is not None:
+        images.append(ImageRequestImage(role="mask", path=request.mask))
+    return ImageRequestPreview(
+        method="openai",
+        name=image,
+        edits=edited is not None,
+        prompt=plan.prompt,
+        added=plan.prompt[len(request.prompt) :].strip() or None,
+        images=images,
+        parameters=images_api.parameters(_api_request(request, plan, chosen, suffix, [], None, None)),
+    )
+
+
 async def start(request: OpenAIImageRequest) -> InProcessRun:
     """Check the request, keep what it sends, and start sending it."""
     _require_arguments(request)
@@ -152,7 +227,7 @@ async def start(request: OpenAIImageRequest) -> InProcessRun:
     suffix = PurePosixPath(name).suffix.lower()
     model = _model(request.model)
     images_api.preflight()
-    sent = references(request.references)
+    sent = sent_references(request.references)
     run_id = new_run_id()
     with claimed(root, data, name, run_id) as (image, lock):
         folder = image.run_folder(run_id)
@@ -172,42 +247,46 @@ async def start(request: OpenAIImageRequest) -> InProcessRun:
         return InProcessRun(image, run, work, request.timeout_seconds, lock, suffix)
 
 
-def _prepare(
-    request: OpenAIImageRequest,
-    sent_references: list[Reference],
-    image: StoredImage,
-    suffix: str,
-    model: OpenAIImageModel,
-    inputs: Path,
-) -> images_api.ApiRequest:
-    """The request to send, with the files it sends copied into `inputs`, once it is known the API can take it."""
+class _Plan(NamedTuple):
+    """What a request sends, worked out from what was asked and the image being edited, before anything is written."""
+
+    edited: Path | None
+    picture: pictures.Picture | None
+    frame: int
+    size: tuple[int, int] | None
+    frames: int | None
+    frame_ms: int | None
+    prompt: str
+
+
+def _plan(request: OpenAIImageRequest, name: str, edited: Path | None, suffix: str) -> _Plan:
+    """Work out what the request sends to edit the file `edited`, or to create the image when there is none, once it
+    is known the API can take it."""
     animated = suffix == ".gif"
-    edited = source(image, request.version)
     if edited is None:
         given = {"marks": bool(request.marks), "a mask": request.mask is not None, "frame": request.frame is not None}
         what = next((what for what, used in given.items() if used), None)
         if what is not None:
             raise invalid(
-                f"There is no image named {image.name} to edit, so {what} cannot be used. Leave it out to create the "
+                f"There is no image named {name} to edit, so {what} cannot be used. Leave it out to create the "
                 "image, or name an image that exists.",
-                image.name,
+                name,
             )
     picture = pictures.read(edited) if edited is not None else None
-    frame = request.frame or 0
     if picture is not None:
         if request.frame is not None and not 0 <= request.frame < picture.frames:
             raise invalid(
-                f"{image.name} has {picture.frames} frame(s), so frame {request.frame} does not exist. Pass a frame "
+                f"{name} has {picture.frames} frame(s), so frame {request.frame} does not exist. Pass a frame "
                 f"from 0 to {picture.frames - 1}.",
-                image.name,
+                name,
             )
         if request.mask is not None and (picture.frames > 1 or animated):
-            raise invalid("A mask works only for edits of still images. Leave out the mask.", image.name)
+            raise invalid("A mask works only for edits of still images. Leave out the mask.", name)
     if len(request.references) + (edited is not None) > MAX_INPUT_IMAGES:
         raise invalid(
             f"A request can send at most {MAX_INPUT_IMAGES} images, counting the image being edited. Send fewer "
             "references.",
-            image.name,
+            name,
         )
     # An edit keeps what the image being edited has, unless the request says otherwise.
     size, frames, frame_ms = request.size, request.frames, request.frame_ms
@@ -219,37 +298,61 @@ def _prepare(
         frames = frames or min(max(picture.frames, FRAMES[0]), FRAMES[1])
         if frame_ms is None and picture.frame_ms:
             frame_ms = min(max(picture.frame_ms, FRAME_MS[0]), FRAME_MS[1])
-
-    inputs.mkdir(parents=True, exist_ok=True)
-    sent: list[Path] = []
-    if edited is not None:
-        sent.append(write(inputs / "image.png", pictures.frame_png(edited, frame)))
-    sent.extend(write_references(sent_references, inputs))
-    markup = None
-    if request.marks and picture is not None:
-        marking.require_marks(request.marks)
-        markup = write(inputs / "marks.png", marking.layer(request.marks, picture.width, picture.height))
-    mask = None
-    if request.mask is not None and picture is not None:
-        mask = write(inputs / "mask.png", _mask(request.mask, picture))
     prompt = request.prompt
     if request.marks:
+        marking.require_marks(request.marks)
         prompt = f"{prompt}\n\n{MARKS_NOTE}\n{marking.describe(request.marks)}"
+    return _Plan(edited, picture, request.frame or 0, size, frames, frame_ms, prompt)
+
+
+def _prepare(
+    request: OpenAIImageRequest,
+    references: list[Reference],
+    image: StoredImage,
+    suffix: str,
+    model: OpenAIImageModel,
+    inputs: Path,
+) -> images_api.ApiRequest:
+    """The request to send, with the files it sends copied into `inputs`."""
+    plan = _plan(request, image.name, source(image, request.version), suffix)
+    inputs.mkdir(parents=True, exist_ok=True)
+    sent: list[Path] = []
+    if plan.edited is not None:
+        sent.append(write(inputs / "image.png", pictures.frame_png(plan.edited, plan.frame)))
+    sent.extend(write_references(references, inputs))
+    markup = None
+    if request.marks and plan.picture is not None:
+        markup = write(inputs / "marks.png", marking.layer(request.marks, plan.picture.width, plan.picture.height))
+    mask = None
+    if request.mask is not None and plan.picture is not None:
+        mask = write(inputs / "mask.png", _mask(request.mask, plan.picture))
+    return _api_request(request, plan, model, suffix, sent, markup, mask)
+
+
+def _api_request(
+    request: OpenAIImageRequest,
+    plan: _Plan,
+    model: OpenAIImageModel,
+    suffix: str,
+    images: list[Path],
+    markup: Path | None,
+    mask: Path | None,
+) -> images_api.ApiRequest:
     return images_api.ApiRequest(
         model=model.id,
-        prompt=prompt,
-        images=sent,
+        prompt=plan.prompt,
+        images=images,
         markup=markup,
         mask=mask,
-        size=size,
+        size=plan.size,
         quality=request.quality,
         complexity=request.complexity,
         background=request.background,
         output_format=IMAGE_FORMATS[suffix],
         compression=request.compression,
         count=request.count,
-        frames=frames,
-        frame_ms=frame_ms,
+        frames=plan.frames,
+        frame_ms=plan.frame_ms,
         previews=request.previews,
     )
 

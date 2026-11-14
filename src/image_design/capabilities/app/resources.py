@@ -1,13 +1,20 @@
 """The image files the app's view reads: an image's file, a version kept for it, and a small copy of either."""
 
 import base64
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import unquote
 
 from mcp.types import BlobResourceContents
 
-from image_design.capabilities.app.tools import FILE, IMAGE_FILE_PREFIX, IMAGE_THUMBNAIL_PREFIX, IMAGE_VERSION_PREFIX
-from image_design.schemas import ImageDesignError, ImageListing, ImageSummary
+from image_design.capabilities.app.tools import (
+    FILE,
+    IMAGE_FILE_PREFIX,
+    IMAGE_THUMBNAIL_PREFIX,
+    IMAGE_VERSION_PREFIX,
+    RUN_PREVIEW_PREFIX,
+)
+from image_design.schemas import ImageActivity, ImageDesignError, ImageListing, ImageSummary
 from image_design.shared.images import pictures
 
 IMAGE_TYPES = {
@@ -27,6 +34,30 @@ _thumbnails: dict[tuple[str, int, int], bytes] = {}
 
 def is_image_resource(uri: str) -> bool:
     return uri.startswith((IMAGE_FILE_PREFIX, IMAGE_VERSION_PREFIX, IMAGE_THUMBNAIL_PREFIX))
+
+
+def is_preview_resource(uri: str) -> bool:
+    return uri.startswith(RUN_PREVIEW_PREFIX)
+
+
+def read_preview_resource(
+    uri: str, listing: ImageListing, activity: Callable[[str], ImageActivity]
+) -> BlobResourceContents:
+    """The in-progress image of a run that the view asked for at `uri`, as base64.
+
+    Only a file one of the image's `preview` events names is read, so no other path can be reached through this.
+    """
+    run_id, _, rest = uri.removeprefix(RUN_PREVIEW_PREFIX).partition("/")
+    index, _, name = rest.partition("/")
+    image = _image(listing, unquote(name))
+    for event in activity(image.name).events:
+        if event.kind == "preview" and event.run_id == run_id and str(event.data.get("index")) == index:
+            return _contents(uri, image, Path(event.data["path"]), small=False)
+    raise ImageDesignError(
+        f"Run {run_id!r} on {image.name} has no preview {index!r}. Its activity has the previews of each run.",
+        "no-such-preview",
+        image.name,
+    )
 
 
 def read_image_resource(uri: str, listing: ImageListing) -> BlobResourceContents:

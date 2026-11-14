@@ -16,6 +16,8 @@ from image_design.schemas import (
     DEFAULT_CHATGPT_REASONING_EFFORT,
     DEFAULT_INTELLIGENCE_MODELS,
     ImageDesignError,
+    ImageRequestImage,
+    ImageRequestPreview,
     ImageRunRecord,
     Mark,
     ReasoningEffort,
@@ -27,12 +29,13 @@ from image_design.shared.images.requests import (
     Reference,
     claimed,
     invalid,
-    references,
+    previewed_source,
     source,
     validated,
     write,
     write_references,
 )
+from image_design.shared.images.requests import references as sent_references
 from image_design.shared.images.runs import DetachedRun, ImageRun, InProcessRun, RunOutput
 from image_design.shared.images.store import StoredImage, directories, image_name, new_run_id
 
@@ -124,12 +127,66 @@ async def generate_chatgpt_image(
     return await detaching.detach(BACKGROUND_COMMAND, absolute, root, data, DetachedRun)
 
 
+def preview_chatgpt_image_request(
+    prompt: str,
+    name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+    version: str | None = None,
+    transparent: bool = False,
+    model: str | None = None,
+    reasoning_effort: ReasoningEffort = DEFAULT_CHATGPT_REASONING_EFFORT,
+) -> ImageRequestPreview:
+    """What `generate_chatgpt_image` would send for these arguments, checked the same way, with nothing sent or kept.
+
+    Whether Codex is installed and signed in with ChatGPT is not checked, since nothing is sent.
+    """
+    request = validated(
+        ChatGPTImageRequest,
+        prompt=prompt,
+        name=name,
+        directory=directory,
+        data_directory=data_directory,
+        references=references or [],
+        marks=marks or [],
+        version=version,
+        transparent=transparent,
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
+    _require_arguments(request)
+    root, data = directories(request.directory, request.data_directory)
+    image = image_name(request.name, root, data)
+    sent_references(request.references)
+    edited = previewed_source(root, data, image, request.version)
+    sent = _plan(request, image, edited)
+    images = [ImageRequestImage(role="source", path=edited)] if edited is not None else []
+    if request.marks:
+        images.append(ImageRequestImage(role="marked-copy", path=None))
+    images.extend(ImageRequestImage(role="reference", path=path) for path in request.references)
+    return ImageRequestPreview(
+        method="chatgpt",
+        name=image,
+        edits=edited is not None,
+        prompt=sent,
+        added=sent[len(request.prompt) :].strip() or None,
+        images=images,
+        parameters={
+            "transparent_background": request.transparent,
+            "codex_model": request.model or DEFAULT_INTELLIGENCE_MODELS["codex"],
+            "reasoning_effort": request.reasoning_effort,
+        },
+    )
+
+
 async def start(request: ChatGPTImageRequest, intelligence: Intelligence | None = None) -> InProcessRun:
     """Check the request, keep what it sends, and start the agent that sends it."""
     _require_arguments(request)
     root, data = directories(request.directory, request.data_directory)
     name = image_name(request.name, root, data)
-    sent = references(request.references)
+    sent = sent_references(request.references)
     intelligence, model = select_intelligence(intelligence, "codex", request.model, DEFAULT_INTELLIGENCE_MODELS)
     run_id = new_run_id()
     with claimed(root, data, name, run_id) as (image, lock):
@@ -172,38 +229,47 @@ async def start(request: ChatGPTImageRequest, intelligence: Intelligence | None 
             raise
 
 
+def _plan(request: ChatGPTImageRequest, name: str, edited: Path | None) -> str:
+    """The prompt to send to edit the file `edited`, or to create the image when there is none, once it is known the
+    image tool can take the request."""
+    if edited is None and request.marks:
+        raise invalid(
+            f"There is no image named {name} to edit, so marks cannot be used. Leave them out to create the "
+            "image, or name an image that exists.",
+            name,
+        )
+    if len(request.references) + (edited is not None) + bool(request.marks) > MAX_INPUT_IMAGES:
+        raise invalid(
+            f"A request can send at most {MAX_INPUT_IMAGES} images, counting the image being edited and, with marks, "
+            "its marked copy. Send fewer references.",
+            name,
+        )
+    marking.require_marks(request.marks)
+    if edited is None:
+        return request.prompt
+    pictures.read(edited)
+    if not request.marks:
+        return request.prompt
+    return f"{request.prompt}\n\n{MARKS_NOTE}\n{marking.describe(request.marks)}"
+
+
 def _prepare(
-    request: ChatGPTImageRequest, sent_references: list[Reference], image: StoredImage, inputs: Path
+    request: ChatGPTImageRequest, references: list[Reference], image: StoredImage, inputs: Path
 ) -> tuple[list[Path], str]:
     """The images to send, written into `inputs`, in the order the image tool gets them, and the prompt to send.
 
     The order is the image being edited, its marked copy, then the references.
     """
     edited = source(image, request.version)
-    if edited is None and request.marks:
-        raise invalid(
-            f"There is no image named {image.name} to edit, so marks cannot be used. Leave them out to create the "
-            "image, or name an image that exists.",
-            image.name,
-        )
-    if len(request.references) + (edited is not None) + bool(request.marks) > MAX_INPUT_IMAGES:
-        raise invalid(
-            f"A request can send at most {MAX_INPUT_IMAGES} images, counting the image being edited and, with marks, "
-            "its marked copy. Send fewer references.",
-            image.name,
-        )
-    marking.require_marks(request.marks)
+    prompt = _plan(request, image.name, edited)
     inputs.mkdir(parents=True, exist_ok=True)
     sent: list[Path] = []
-    prompt = request.prompt
     if edited is not None:
-        pictures.read(edited)
         original = pictures.frame_png(edited)
         sent.append(write(inputs / "image.png", original))
         if request.marks:
             sent.append(write(inputs / "marked.png", marking.drawn(original, request.marks)))
-            prompt = f"{prompt}\n\n{MARKS_NOTE}\n{marking.describe(request.marks)}"
-    sent.extend(write_references(sent_references, inputs))
+    sent.extend(write_references(references, inputs))
     return sent, prompt
 
 

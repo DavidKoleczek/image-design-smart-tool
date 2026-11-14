@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Icon, type IconName } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
@@ -11,12 +12,15 @@ export function Notice({
   children,
   tone = "danger",
   icon,
+  onDismiss,
   className,
 }: {
   title?: ReactNode;
   children?: ReactNode;
   tone?: "danger" | "neutral";
   icon?: IconName;
+  /** Puts a button on it that takes it away, for one that reports something over and done with. */
+  onDismiss?: () => void;
   className?: string;
 }) {
   return (
@@ -35,7 +39,7 @@ export function Notice({
           tone === "danger" ? "text-danger" : "text-ink-muted",
         )}
       />
-      <div className="min-w-0 wrap-break-word">
+      <div className="min-w-0 flex-1 wrap-break-word">
         {title && (
           <b
             className={cn(
@@ -49,6 +53,17 @@ export function Notice({
         {title && children ? " " : null}
         {children}
       </div>
+      {onDismiss && (
+        <Button
+          size="sm"
+          icon
+          aria-label="Dismiss"
+          onClick={onDismiss}
+          className="-my-0.5 -mr-1"
+        >
+          <Icon name="close" />
+        </Button>
+      )}
     </div>
   );
 }

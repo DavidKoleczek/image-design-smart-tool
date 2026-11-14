@@ -4,6 +4,8 @@ The app's view is an MCP App. The page hosts it the way Claude or VS Code would 
 
 In the app the user browses the images of one directory, looks at the versions kept for an image and restores one, and renames, moves, or deletes images. An image made or changed outside the app shows in it within a second or so, and `image-design view-image` brings an image up in it.
 
+The user also creates and edits images there with an OpenAI image model or with ChatGPT, and can stop a request. A request the app starts runs in a process of its own, so it finishes when the app is closed, and its events have `app` as their origin. The OpenAI models need `OPENAI_API_KEY` in the environment `app` is started in.
+
 ```bash
 # on a free port; prints the URL, then blocks until Ctrl+C
 image-design app
@@ -28,7 +30,7 @@ app_view()  # the view's HTML, the MCP App resource
 
 `open` returns once the page is listening, so the URL answers at once, and serves from daemon threads until `close` or the process exits.
 
-The app keeps its theme and pane sizes in `image-design/app-settings.json` in the user's config folder, the same for every directory. What was last picked for a directory's images is kept in `app/app.json` in its data directory.
+The app keeps its theme and pane sizes in `image-design/app-settings.json` in the user's config folder, the same for every directory. What was last picked for a directory's images, such as the image model and its output options, is kept in `app/app.json` in its data directory.
 
 ## Arguments
 

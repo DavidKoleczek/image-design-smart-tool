@@ -29,7 +29,9 @@ function worded(error: AppError): string | null {
     case "name-in-use":
       return "Another image already has that name. Choose another, or delete that image first.";
     case "already-running":
-      return "A request is still working on this image and couldn't be stopped. Try again once it has ended.";
+      return "A request is still working on this image. Wait for it to end, or stop it first.";
+    case "not-running":
+      return "No request is working on this image any more.";
     case "bad-settings":
       return "Those settings couldn't be saved. Reset the layout, or reload the app and try again.";
     case "bad-state":
@@ -45,4 +47,18 @@ export function describe(cause: unknown): string {
     return worded(cause) ?? cause.message;
   }
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** How a run that made no image ended, for the person. The library's own words stand for a failure it explains. */
+export function describeEnding(
+  status: "failed" | "cancelled" | "timed-out",
+  error: string | null,
+): string {
+  if (status === "cancelled") {
+    return "Stopped before it finished.";
+  }
+  if (status === "timed-out") {
+    return "The request took too long and was stopped. It may still have been billed, or counted against a plan.";
+  }
+  return error ?? "The request failed without saying why.";
 }

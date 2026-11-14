@@ -1,7 +1,7 @@
 """The app's MCP server: the tool that opens the app, the tools its view calls, and the view as an MCP App resource."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import json
 from pathlib import Path
 import threading
@@ -28,9 +28,15 @@ from mcp.types import (
     ReadResourceResult,
     TextContent,
     TextResourceContents,
+    Tool,
 )
 
-from image_design.capabilities.app.resources import is_image_resource, read_image_resource
+from image_design.capabilities.app.resources import (
+    is_image_resource,
+    is_preview_resource,
+    read_image_resource,
+    read_preview_resource,
+)
 from image_design.capabilities.app.server import App, serve_app, view
 from image_design.capabilities.app.settings import (
     read_app_settings,
@@ -39,18 +45,25 @@ from image_design.capabilities.app.settings import (
     save_app_state,
 )
 from image_design.capabilities.app.tools import (
+    CANCEL_IMAGE,
     DELETE_IMAGE,
+    GENERATE_CHATGPT,
+    GENERATE_OPENAI,
     IMAGE_FILE,
     IMAGE_RESOURCES,
     IMAGE_THUMBNAIL,
     IMAGE_VERSION,
     LIST_IMAGES,
+    LIST_METHODS,
     MOVE_IMAGE,
     OPEN_APP,
+    PREVIEW_CHATGPT,
+    PREVIEW_OPENAI,
     READ_ACTIVITY,
     READ_SETTINGS,
     READ_STATE,
     RESTORE_VERSION,
+    RUN_PREVIEW,
     SAVE_SETTINGS,
     SAVE_STATE,
     VIEW,
@@ -58,11 +71,21 @@ from image_design.capabilities.app.tools import (
     VIEW_TOOLS,
     VIEW_URI,
 )
-from image_design.schemas import ImageActivity, ImageDesignError, ImageListing, ImageSummary
+from image_design.schemas import (
+    ImageActivity,
+    ImageDesignError,
+    ImageListing,
+    ImageMethods,
+    ImageRequestPreview,
+    ImageSummary,
+)
+from image_design.shared.images.runs import ImageRun
 from image_design.shared.images.store import directories
 
 # The key `open_app` files its request to open the browser under, when the client answers by retrying the call.
 OPEN_REQUEST = "open"
+# What a run the view starts is recorded as asked by.
+ORIGIN = "app"
 INSTRUCTIONS = (
     "Image Design has an app where the user sees the images in one directory. Call `open_app` when they ask for it."
 )
@@ -87,6 +110,12 @@ class AppServer:
         delete_image: Callable[[str, Path, Path], None],
         restore_image_version: Callable[[str, str, Path, Path], ImageSummary],
         read_image_activity: Callable[[str, Path, Path, str | None], ImageActivity],
+        list_image_methods: Callable[[], ImageMethods],
+        generate_openai_image: Callable[..., Awaitable[ImageRun]],
+        generate_chatgpt_image: Callable[..., Awaitable[ImageRun]],
+        preview_openai_image_request: Callable[..., ImageRequestPreview],
+        preview_chatgpt_image_request: Callable[..., ImageRequestPreview],
+        cancel_image: Callable[[str, Path, Path], None],
         settings_path: Path,
     ) -> None:
         self.directory, self.data_directory = directories(directory, data_directory)
@@ -97,6 +126,13 @@ class AppServer:
         self._delete_image = delete_image
         self._restore_image_version = restore_image_version
         self._read_image_activity = read_image_activity
+        self._list_image_methods = list_image_methods
+        self._generate = {GENERATE_OPENAI.name: generate_openai_image, GENERATE_CHATGPT.name: generate_chatgpt_image}
+        self._preview = {
+            PREVIEW_OPENAI.name: preview_openai_image_request,
+            PREVIEW_CHATGPT.name: preview_chatgpt_image_request,
+        }
+        self._cancel_image = cancel_image
         # The last listing the view was given, which the files it then reads are checked against.
         self._listing: ImageListing | None = None
         self._lock = threading.Lock()
@@ -153,25 +189,42 @@ class AppServer:
             if params.uri == VIEW_URI:
                 contents = TextResourceContents(uri=VIEW_URI, mime_type=APP_MIME_TYPE, text=view())
                 return ReadResourceResult(contents=[contents])
-            if is_image_resource(params.uri):
+            if is_image_resource(params.uri) or is_preview_resource(params.uri):
                 return ReadResourceResult(contents=[await asyncio.to_thread(self._image_resource, params.uri)])
         except ImageDesignError as error:
             raise MCPError(INVALID_PARAMS, str(error)) from None
         raise MCPError(
             INVALID_PARAMS,
             f"'{params.uri}' is not a resource of this server. It has {VIEW_URI}, each image's file at "
-            f"{IMAGE_FILE.uri_template}, its versions at {IMAGE_VERSION.uri_template}, and small copies of them at "
-            f"{IMAGE_THUMBNAIL.uri_template}.",
+            f"{IMAGE_FILE.uri_template}, its versions at {IMAGE_VERSION.uri_template}, small copies of them at "
+            f"{IMAGE_THUMBNAIL.uri_template}, and the in-progress images of its runs at {RUN_PREVIEW.uri_template}.",
         )
 
     def _image_resource(self, uri: str) -> BlobResourceContents:
         if self._listing is not None:
             try:
-                return read_image_resource(uri, self._listing)
+                return self._read_by(uri, self._listing)
             except ImageDesignError:
-                # The image or version may be newer than that listing.
+                # The image, version, or preview may be newer than that listing.
                 pass
-        return read_image_resource(uri, self._list())
+        return self._read_by(uri, self._list())
+
+    def _read_by(self, uri: str, listing: ImageListing) -> BlobResourceContents:
+        if not is_preview_resource(uri):
+            return read_image_resource(uri, listing)
+
+        def activity(name: str) -> ImageActivity:
+            return self._read_image_activity(name, listing.directory, listing.data_directory, None)
+
+        return read_preview_resource(uri, listing, activity)
+
+    def _request(self, arguments: dict[str, Any], tool: Tool) -> dict[str, Any]:
+        """What a request tool was called with, as the arguments of the library function it wraps, on the app's
+        directory."""
+        request = {name: arguments[name] for name in tool.input_schema["properties"] if name in arguments}
+        if isinstance(request.get("size"), list):
+            request["size"] = tuple(request["size"])
+        return {**request, "directory": self.directory, "data_directory": self.data_directory}
 
     def _list(self) -> ImageListing:
         directory = self.directory
@@ -235,6 +288,21 @@ class AppServer:
                 arguments.get("after"),
             )
             return _structured(activity.model_dump(mode="json"))
+        if params.name == LIST_METHODS.name:
+            methods = await asyncio.to_thread(self._list_image_methods)
+            return _structured(methods.model_dump(mode="json"))
+        if params.name in self._generate:
+            tool = GENERATE_OPENAI if params.name == GENERATE_OPENAI.name else GENERATE_CHATGPT
+            # In a process of its own, so the image goes on being made when the app or its host closes.
+            run = await self._generate[params.name](**self._request(arguments, tool), origin=ORIGIN, detach=True)
+            return _structured({"name": run.name, "run_id": run.run_id})
+        if params.name in self._preview:
+            tool = PREVIEW_OPENAI if params.name == PREVIEW_OPENAI.name else PREVIEW_CHATGPT
+            preview = await asyncio.to_thread(lambda: self._preview[params.name](**self._request(arguments, tool)))
+            return _structured(preview.model_dump(mode="json"))
+        if params.name == CANCEL_IMAGE.name:
+            await asyncio.to_thread(self._cancel_image, arguments["name"], self.directory, self.data_directory)
+            return _text(f"Asked the run on {arguments['name']} to stop.")
         if params.name == READ_SETTINGS.name:
             settings = await asyncio.to_thread(read_app_settings, self.settings_path)
             return _structured(settings.model_dump(mode="json"))

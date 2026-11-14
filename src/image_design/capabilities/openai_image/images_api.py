@@ -67,6 +67,25 @@ def preflight() -> None:
         )
 
 
+def parameters(request: ApiRequest) -> dict[str, str | int | bool]:
+    """What the request sets besides its prompt and images, by the names the Images API gives them. What it leaves
+    out is the API's choice."""
+    given: dict[str, str | int | None] = {
+        "model": request.model,
+        "size": f"{request.size[0]}x{request.size[1]}" if request.size else None,
+        "quality": request.quality,
+        "complexity": request.complexity,
+        "background": request.background,
+        "output_format": request.output_format,
+        "output_compression": request.compression,
+        "n": request.count,
+        "frame_count": request.frames,
+        "frame_duration_ms": request.frame_ms,
+        "partial_images": request.previews or None,
+    }
+    return {name: value for name, value in given.items() if value is not None}
+
+
 def client(timeout_seconds: int) -> "AsyncOpenAI":
     """The client requests are sent with. Tests replace it with one whose requests never leave the process."""
     from openai import AsyncOpenAI
@@ -79,22 +98,7 @@ async def send(request: ApiRequest, model: OpenAIImageModel, timeout_seconds: in
     """Send `request`, and pass each preview, image, and the usage to `output` as they arrive."""
     import openai
 
-    def given(value: Any) -> Any:
-        return openai.omit if value is None else value
-
-    settings: dict[str, Any] = {
-        "model": request.model,
-        "prompt": request.prompt,
-        "n": request.count,
-        "size": f"{request.size[0]}x{request.size[1]}" if request.size else openai.omit,
-        "quality": given(request.quality),
-        "complexity": given(request.complexity),
-        "background": given(request.background),
-        "output_format": request.output_format,
-        "output_compression": given(request.compression),
-        "frame_count": given(request.frames),
-        "frame_duration_ms": given(request.frame_ms),
-    }
+    settings: dict[str, Any] = {"prompt": request.prompt, **parameters(request)}
     try:
         async with client(timeout_seconds) as api:
             images = api.images
@@ -103,13 +107,13 @@ async def send(request: ApiRequest, model: OpenAIImageModel, timeout_seconds: in
                 settings["markup"] = _file(request.markup) if request.markup else openai.omit
                 settings["mask"] = _file(request.mask) if request.mask else openai.omit
                 if request.previews:
-                    stream = await images.edit(**settings, stream=True, partial_images=request.previews)
+                    stream = await images.edit(**settings, stream=True)
                     await _receive(stream, model, output)
                     return
                 response = await images.edit(**settings)
             else:
                 if request.previews:
-                    stream = await images.generate(**settings, stream=True, partial_images=request.previews)
+                    stream = await images.generate(**settings, stream=True)
                     await _receive(stream, model, output)
                     return
                 response = await images.generate(**settings)

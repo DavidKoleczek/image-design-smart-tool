@@ -19,7 +19,14 @@ from image_design.capabilities.chatgpt_image.generate import MARKS_NOTE
 from image_design.cli import app
 from image_design.intelligence.events import EventLog
 from image_design.intelligence.schemas import AgentEvent, AgentEventKind, AgentRequest, AgentResult, Steering
-from image_design.schemas import DEFAULT_INTELLIGENCE_MODELS, ImageDesignError, ImageEvent, ImageResult, Mark
+from image_design.schemas import (
+    DEFAULT_INTELLIGENCE_MODELS,
+    ImageDesignError,
+    ImageEvent,
+    ImageRequestImage,
+    ImageResult,
+    Mark,
+)
 from image_design.shared.images import runs
 from image_design.shared.images.store import LOCKS
 
@@ -258,6 +265,44 @@ async def test_a_run_that_makes_no_image_ends_saying_why_stops_its_agent_and_lea
     assert not result.path.exists()
     agent.behavior = makes("#3a86ff")
     assert (await made(agent, prompt="A cactus.", name="cactus.png")).status == "done"
+
+
+async def test_a_request_preview_is_what_the_agent_is_then_asked_and_starts_no_agent(
+    agent: FakeImageAgent,
+) -> None:
+    Path("palette.svg").write_text(SWATCH, encoding="utf-8")
+    edit: dict[str, Any] = {"prompt": "Make the pot blue.", "name": "cactus.png", "references": [Path("palette.svg")]}
+    creating = lib.preview_chatgpt_image_request("A paper-cut cactus.", name="cactus.png", transparent=True)
+    with pytest.raises(ImageDesignError, match="only PNG images"):
+        lib.preview_chatgpt_image_request("A cactus.", name="cactus.jpg")
+    started = len(agent.runs)
+    await made(agent, prompt="A paper-cut cactus.", name="cactus.png", transparent=True)
+    editing = lib.preview_chatgpt_image_request(marks=[CACTUS], reasoning_effort="medium", **edit)
+    await made(agent, marks=[CACTUS], reasoning_effort="medium", **edit)
+
+    asked = agent.runs[-1].request
+    assert (started, len(agent.runs)) == (0, 2)
+    assert (creating.method, creating.edits, creating.images) == ("chatgpt", False, [])
+    assert (creating.prompt, creating.added) == ("A paper-cut cactus.", None)
+    assert creating.parameters == {
+        "transparent_background": True,
+        "codex_model": DEFAULT_INTELLIGENCE_MODELS["codex"],
+        "reasoning_effort": "low",
+    }
+    # The images are in the order the image tool gets them: the image, its marked copy, then the references.
+    assert editing.images == [
+        ImageRequestImage(role="source", path=Path(".image-design/cactus.png").resolve()),
+        ImageRequestImage(role="marked-copy", path=None),
+        ImageRequestImage(role="reference", path=Path("palette.svg")),
+    ]
+    assert len(sent_paths(asked)) == len(editing.images)
+    assert f"-----\n{editing.prompt}\n-----" in asked.prompt
+    assert editing.added == f"{MARKS_NOTE}\n- Mark 1 is a red circle: this pot"
+    assert editing.parameters == {
+        "transparent_background": False,
+        "codex_model": asked.model,
+        "reasoning_effort": asked.reasoning_effort,
+    }
 
 
 def test_the_cli_prints_the_image_made_and_exits_with_the_run_s_status(agent: FakeImageAgent) -> None:
