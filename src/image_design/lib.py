@@ -6,11 +6,14 @@ from image_design.capabilities.app import mcp_server as app_server_module
 from image_design.capabilities.app import server as app_module
 from image_design.capabilities.app.mcp_server import AppServer
 from image_design.capabilities.chatgpt_image import generate as chatgpt_image
+from image_design.capabilities.chatgpt_image import method as chatgpt_method
 from image_design.capabilities.intelligence_models import intelligence_models
 from image_design.capabilities.manage_images import manage_images
 from image_design.capabilities.openai_image import generate
+from image_design.capabilities.openai_image import method as openai_method
 from image_design.capabilities.svg_image import check as svg_check
 from image_design.capabilities.svg_image import draw as svg_draw
+from image_design.capabilities.svg_image import method as svg_method
 from image_design.capabilities.svg_image import steering as svg_steering
 from image_design.capabilities.svg_image.runs import SvgRun
 from image_design.core import manifest
@@ -22,6 +25,8 @@ from image_design.schemas import (
     NOT_GIVEN,
     AgentProvider,
     ImageActivity,
+    ImageListing,
+    ImageMethods,
     ImageSummary,
     IntelligenceModels,
     Manifest,
@@ -300,6 +305,43 @@ def export_svg_image(
     A .jpg has no transparency, so what is see-through shows white. Returns the file written.
     """
     return svg_check.export_svg_image(name, output, scale, version, directory, data_directory)
+
+
+def list_images(directory: Path | None = None, data_directory: Path | None = None) -> ImageListing:
+    """Every image in the directory, in name order, with its versions and how its last run went.
+
+    An image file put in the directory by hand is listed too, with no versions until the tool changes it.
+    """
+    return manage_images.list_images(directory, data_directory)
+
+
+def view_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> ImageSummary:
+    """One image and its versions. Records it as the image viewed last, which the app opens on."""
+    return manage_images.view_image(name, directory, data_directory)
+
+
+def move_image(
+    name: str, new_name: str, directory: Path | None = None, data_directory: Path | None = None
+) -> ImageSummary:
+    """Rename an image, or move it to another folder of the directory. It keeps its versions and its history.
+
+    The new name keeps the extension, since moving an image does not convert it.
+    """
+    return manage_images.move_image(name, new_name, directory, data_directory)
+
+
+def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
+    """Delete an image's file and everything kept for it. A run working on it is stopped first."""
+    manage_images.delete_image(name, directory, data_directory)
+
+
+def list_image_methods() -> ImageMethods:
+    """The three ways of making an image, whether each is set up on this machine, and what each takes.
+
+    Set up means what a method needs is installed and, for the OpenAI API, that its key is set. Whether Codex or
+    Claude is signed in is checked when a request is sent.
+    """
+    return ImageMethods(openai=openai_method.describe(), chatgpt=chatgpt_method.describe(), svg=svg_method.describe())
 
 
 def restore_image_version(

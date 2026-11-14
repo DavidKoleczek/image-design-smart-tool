@@ -11,6 +11,7 @@ The data directory holds a folder per image, named by the image's id so it stays
     images/<id>/work/           where an agent draws an SVG
     images/<id>/sessions/       the agents' sessions, which a later run can resume
     locks/                      which process is working on which image
+    state.json                  which image was viewed last
 """
 
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ import os
 from pathlib import Path, PurePosixPath
 import secrets
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -38,6 +40,7 @@ from image_design.schemas import (
     ImageRecord,
     ImageRunRecord,
     ImageRuns,
+    ImagesState,
     ImageSummary,
     ImageVersion,
     ImageVersions,
@@ -57,6 +60,7 @@ RUNS = "runs.json"
 EVENTS = "events.jsonl"
 PROCESS_LOG = "process.log"
 SESSIONS = "sessions"
+STATE = "state.json"
 # Every extension an image's name can end in.
 KEPT_SUFFIXES = (*IMAGE_FORMATS, SVG_SUFFIX)
 GITIGNORE = Path(__file__).with_name("data.gitignore")
@@ -66,6 +70,10 @@ LOCK_WRITE_SECONDS = 10
 # replaced; both are brief.
 REPLACE_ATTEMPTS = 20
 REPLACE_WAIT_SECONDS = 0.05
+# What a summary says of a run whose process ended without ending it.
+CRASHED = "The process running the request ended before the request did."
+# How many files' facts are remembered before the memory is emptied.
+FACTS_KEPT = 2048
 
 
 def directories(directory: Path | None, data_directory: Path | None) -> tuple[Path, Path]:
@@ -221,15 +229,18 @@ class StoredImage:
 
     def summary(self) -> ImageSummary:
         last = self.runs[-1] if self.runs else None
-        status = last.status if last is not None else None
-        if last is not None and status == "running" and not alive(last.pid):
-            status = "failed"
-        return ImageSummary(
-            name=self.name,
-            path=self.path,
-            current=self.versions.current if self.current_file_matches() else None,
+        if last is not None and last.status == "running" and not alive(last.pid):
+            last = last.model_copy(update={"status": "failed", "error": CRASHED})
+        facts = file_facts(self.path)
+        current = self.versions.current
+        matches = facts is not None and current is not None and self.version(current).sha256 == facts.sha256
+        return _summary(
+            self.name,
+            self.path,
+            facts,
+            current=current if matches else None,
             versions=[self.located(version) for version in self.versions.versions],
-            status=status,
+            last_run=last,
         )
 
 
@@ -271,6 +282,120 @@ def new_image(root: Path, data: Path, name: str) -> StoredImage:
 
 def image_names(data: Path) -> list[str]:
     return sorted(_read(folder / RECORD, ImageRecord).name for folder in _image_folders(data))
+
+
+def kept_images(root: Path, data: Path) -> tuple[list[StoredImage], list[str]]:
+    """Every image the tool keeps data for, and why each one whose data cannot be read is left out."""
+    images: list[StoredImage] = []
+    unreadable: list[str] = []
+    for folder in _image_folders(data):
+        try:
+            images.append(_load(root, data, folder, _read(folder / RECORD, ImageRecord)))
+        except ImageDesignError as error:
+            unreadable.append(str(error))
+    return images, unreadable
+
+
+def found_names(root: Path, data: Path) -> list[str]:
+    """The name of every image file in the directory, whoever put it there.
+
+    Hidden files and folders are left out, and so is the data directory.
+    """
+    names: list[str] = []
+    if not root.is_dir():
+        return names
+    for folder, folders, files in root.walk():
+        folders[:] = [each for each in folders if not each.startswith(".") and (folder / each).resolve() != data]
+        names.extend(
+            (folder / file).relative_to(root).as_posix()
+            for file in files
+            if not file.startswith(".") and Path(file).suffix.lower() in KEPT_SUFFIXES
+        )
+    return sorted(names)
+
+
+def found_summary(root: Path, name: str) -> ImageSummary:
+    """A file in the directory the tool keeps no data for yet, as an image with no versions."""
+    return _summary(name, root / name, file_facts(root / name), current=None, versions=[], last_run=None)
+
+
+class FileFacts(NamedTuple):
+    """What a summary says of an image's file."""
+
+    sha256: str
+    picture: pictures.Picture | None  # None when the file is not an image the tool can read
+    modified: datetime
+
+
+_facts: dict[tuple[str, int, int], FileFacts] = {}
+
+
+def file_facts(path: Path) -> FileFacts | None:
+    """What the file at `path` holds, or None when there is no file.
+
+    Remembered by the file's size and when it was written, since a viewer lists a directory over and over and
+    reading every image each time is slow.
+    """
+    try:
+        status = path.stat()
+        if not stat.S_ISREG(status.st_mode):
+            return None
+        key = (str(path), status.st_mtime_ns, status.st_size)
+        if key not in _facts:
+            content = path.read_bytes()
+            if len(_facts) >= FACTS_KEPT:
+                _facts.clear()
+            _facts[key] = FileFacts(
+                sha256=hashlib.sha256(content).hexdigest(),
+                picture=pictures.describe(content),
+                modified=datetime.fromtimestamp(status.st_mtime, UTC),
+            )
+        return _facts[key]
+    except OSError:
+        return None
+
+
+def _summary(
+    name: str,
+    path: Path,
+    facts: FileFacts | None,
+    current: str | None,
+    versions: list[ImageVersion],
+    last_run: ImageRunRecord | None,
+) -> ImageSummary:
+    picture = facts.picture if facts is not None else None
+    return ImageSummary(
+        name=name,
+        path=path,
+        width=picture.width if picture is not None else None,
+        height=picture.height if picture is not None else None,
+        frames=picture.frames if picture is not None else None,
+        modified=facts.modified if facts is not None else None,
+        current=current,
+        versions=versions,
+        status=last_run.status if last_run is not None else None,
+        last_run=last_run,
+    )
+
+
+def read_state(data: Path) -> ImagesState:
+    path = data / STATE
+    return _read(path, ImagesState) if path.is_file() else ImagesState()
+
+
+def write_state(data: Path, state: ImagesState) -> None:
+    make_data_directory(data)
+    write_atomically(data / STATE, state.model_dump_json(indent=2))
+
+
+def remove_empty_folders(folder: Path, root: Path) -> None:
+    """Remove `folder` and each folder above it up to `root` that an image leaving it left empty."""
+    while folder != root and folder.is_relative_to(root):
+        try:
+            folder.rmdir()
+        except OSError:
+            return
+        folder = folder.parent
 
 
 def make_data_directory(data: Path) -> None:

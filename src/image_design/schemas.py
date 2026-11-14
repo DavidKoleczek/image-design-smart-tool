@@ -285,11 +285,34 @@ class ImageSummary(BaseModel):
 
     name: str
     path: Path
+    width: int | None = Field(description="Of the image's file; None when it has no file, or one that cannot be read")
+    height: int | None
+    frames: int | None = Field(description="More than 1 for an animation")
+    modified: datetime | None = Field(description="When the image's file was last written; None when it has no file")
     current: str | None = Field(
         description="The version in the image's file; None when the file has been changed by hand since"
     )
-    versions: list[ImageVersion]
+    versions: list[ImageVersion] = Field(description="Empty for a file the tool has made no change to yet")
     status: ImageRunStatus | None = Field(description="Its last run's status; None when it has had no run")
+    last_run: ImageRunRecord | None = Field(description="Its last run, with the request it was given")
+
+
+class ImageListing(BaseModel):
+    """Every image in a directory, in name order, and the one viewed last."""
+
+    directory: Path
+    data_directory: Path
+    images: list[ImageSummary]
+    last_viewed: str | None = Field(description="None when nothing was viewed, or that image is gone")
+    unreadable: list[str] = Field(
+        default_factory=list, description="Why each image whose data cannot be read was left out"
+    )
+
+
+class ImagesState(BaseModel):
+    """state.json in a data directory: what was last done with the images there."""
+
+    last_viewed: str | None = None
 
 
 class ImageActivity(BaseModel):
@@ -409,5 +432,133 @@ DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2.6-sunburst"
 
 # The agent only hands the request to the image tool, which needs little reasoning.
 DEFAULT_CHATGPT_REASONING_EFFORT: ReasoningEffort = "low"
+
+# endregion
+
+# region: Image methods
+
+
+class ImageMethodSetup(BaseModel):
+    """Whether a way of making images can run on this machine, and the names it makes."""
+
+    ready: bool = Field(
+        description="Whether what it needs is installed and configured; a sign-in is checked when a request is sent"
+    )
+    problem: str | None = Field(description="What to set up, when it is not ready")
+    formats: list[str] = Field(description="The extensions the name of an image it makes can end in")
+
+
+class OpenAIImageSizes(BaseModel):
+    """The sizes a still image can have. An animation only needs each side to be a multiple of `step`."""
+
+    step: int = Field(description="Each side is a multiple of this")
+    max_edge: int
+    max_ratio: float = Field(description="The most the long side can be of the short side")
+    min_pixels: int
+    max_pixels: int
+
+
+class OpenAIImageMethod(ImageMethodSetup):
+    """What `generate_openai_image` takes."""
+
+    models: list[OpenAIImageModel]
+    default_model: str
+    sizes: OpenAIImageSizes
+    qualities: list[OpenAIImageQuality]
+    complexities: list[OpenAIImageComplexity]
+    backgrounds: list[OpenAIImageBackground]
+    max_images: int = Field(description="The images a request can send, counting the image being edited")
+    max_count: int
+    max_previews: int
+    frames: tuple[int, int] = Field(description="The fewest and the most frames an animation can have")
+    frame_ms: tuple[int, int] = Field(description="The shortest and the longest a frame can last")
+
+
+class ChatGPTImageMethod(ImageMethodSetup):
+    """What `generate_chatgpt_image` takes."""
+
+    models: list[IntelligenceModel] = Field(description="The Codex models that can carry the request")
+    default_model: str
+    default_reasoning_effort: ReasoningEffort
+    max_images: int = Field(description="The images a request can send, counting the image being edited")
+
+
+class SvgImageMethod(ImageMethodSetup):
+    """What `draw_svg_image` takes."""
+
+    models: list[IntelligenceModel] = Field(description="Those of the agent providers that are installed")
+    default: IntelligenceChoice
+    default_canvas: tuple[int, int]
+    export_formats: list[str] = Field(description="The extensions `export_svg_image` renders to")
+
+
+class ImageMethods(BaseModel):
+    """The three ways of making an image."""
+
+    openai: OpenAIImageMethod
+    chatgpt: ChatGPTImageMethod
+    svg: SvgImageMethod
+
+    def describe(self) -> str:
+        """The methods as text, for a person or an agent to read."""
+        openai, chatgpt, svg = self.openai, self.chatgpt, self.svg
+        sizes = openai.sizes
+        size_limits = (
+            f"each side a multiple of {sizes.step}, at most {sizes.max_edge}; {sizes.min_pixels:,} to "
+            f"{sizes.max_pixels:,} pixels; the long side at most {sizes.max_ratio:g} times the short side"
+        )
+        limits = f"{openai.max_images} images sent, {openai.max_count} made, and {openai.max_previews} previews"
+        (fewest, most), (shortest, longest) = openai.frames, openai.frame_ms
+        agent = (
+            f"--agent-provider {svg.default.agent_provider} --model {svg.default.model} "
+            f"--reasoning-effort {svg.default.reasoning_effort}"
+        )
+        width, height = svg.default_canvas
+        blocks = [
+            _method_lines(
+                "generate-openai-image",
+                openai,
+                [
+                    "Models: " + _with_default([model.id for model in openai.models], openai.default_model),
+                    f"Sizes: {size_limits}",
+                    "Qualities: " + ", ".join(openai.qualities),
+                    "Complexities: " + ", ".join(openai.complexities),
+                    "Backgrounds: " + ", ".join(openai.backgrounds),
+                    f"At most {limits}",
+                    f"A .gif: {fewest} to {most} frames of {shortest} to {longest} ms",
+                ],
+            ),
+            _method_lines(
+                "generate-chatgpt-image",
+                chatgpt,
+                [
+                    "Codex models: " + _with_default([model.id for model in chatgpt.models], chatgpt.default_model),
+                    f"Reasoning effort: {chatgpt.default_reasoning_effort} by default",
+                    f"At most {chatgpt.max_images} images sent",
+                ],
+            ),
+            _method_lines(
+                "draw-svg-image",
+                svg,
+                [
+                    f"Agent: {agent} by default; `image-design list-intelligence-models` lists the others",
+                    f"Canvas: {width}x{height} by default",
+                    "Exports to: " + ", ".join(svg.export_formats),
+                ],
+            ),
+        ]
+        return "\n\n".join(blocks)
+
+
+def _method_lines(command: str, method: ImageMethodSetup, facts: list[str]) -> str:
+    ready = "ready" if method.ready else f"not set up. {method.problem}"
+    lines = [f"{command}: {ready}", f"- Names end in: {', '.join(method.formats)}"]
+    lines.extend(f"- {fact}" for fact in facts)
+    return "\n".join(lines)
+
+
+def _with_default(values: list[str], default: str) -> str:
+    return ", ".join(f"{value} (default)" if value == default else value for value in values) or "none installed"
+
 
 # endregion

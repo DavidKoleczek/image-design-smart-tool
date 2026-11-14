@@ -105,6 +105,6 @@ pythonpath = ["tests"]
 addopts = '--import-mode=importlib -n auto --maxprocesses 8 -m "not (mcp_process or detached or uv)"'
 markers = [
     "mcp_process: starts `image-design mcp` as a process. Run after changing adapters/mcp.py, the mcp command in cli.py, or open_app and what a client sees in capabilities/app/.",
-    "detached: starts a run in a process of its own. Run after changing shared/images/detach.py, DetachedRun in shared/images/runs.py, a capability's background.py, or cancel_image.",
+    "detached: starts a run in a process of its own. Run after changing shared/images/detach.py, DetachedRun in shared/images/runs.py, a capability's background.py, cancel_image, or delete_image.",
     "uv: runs a drawing's image.py with uv. Run after changing capabilities/svg_image/build.py.",
 ]

@@ -425,6 +425,72 @@ def export_svg_image(
 
 
 @app.command()
+def list_images(
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """Every image in the directory, with its versions and how its last run went. Deterministic."""
+    listing = lib.list_images(directory=directory, data_directory=data_directory)
+    if json:
+        typer.echo(listing.model_dump_json(indent=2))
+        return
+    if not listing.images:
+        typer.echo(f"There are no images in {_shown(listing.directory)}.")
+    for summary in listing.images:
+        facts = [fact for fact in (_dimensions(summary), _holds(summary), summary.status) if fact]
+        typer.echo(f"- {summary.name}: {', '.join(facts)}")
+    if listing.last_viewed is not None:
+        typer.echo(f"Viewed last: {listing.last_viewed}")
+    for problem in listing.unreadable:
+        typer.echo(f"Left out: {problem}", err=True)
+
+
+@app.command()
+def view_image(
+    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """One image and its versions, recorded as the image viewed last. Deterministic."""
+    summary = lib.view_image(name=name, directory=directory, data_directory=data_directory)
+    typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
+
+
+@app.command()
+def move_image(
+    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    new_name: Annotated[str, typer.Option("--new-name", help="The path to give it, with the same extension.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """Rename an image, or move it to another folder of the directory. Deterministic."""
+    summary = lib.move_image(name=name, new_name=new_name, directory=directory, data_directory=data_directory)
+    typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
+
+
+@app.command()
+def delete_image(
+    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+) -> None:
+    """Delete an image's file and everything kept for it. Deterministic."""
+    lib.delete_image(name=name, directory=directory, data_directory=data_directory)
+
+
+@app.command()
+def list_image_methods(
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """The ways of making an image, whether each is set up here, and what each takes. Deterministic."""
+    methods = lib.list_image_methods()
+    typer.echo(methods.model_dump_json(indent=2) if json else methods.describe())
+
+
+@app.command()
 def restore_image_version(
     name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
     version: Annotated[str, typer.Option("--version", help="The version to put back, such as v1.")],
@@ -558,13 +624,31 @@ def _shown(path: Path) -> str:
 
 
 def _describe(summary: ImageSummary) -> str:
-    holds = f"holds {summary.current}" if summary.current else "was changed by hand"
-    lines = [f"{_shown(summary.path)} {holds}.", ""]
+    if not summary.versions:
+        facts = [fact for fact in (_holds(summary), _dimensions(summary)) if fact]
+        return f"{_shown(summary.path)} {', '.join(facts)}."
+    lines = [f"{_shown(summary.path)} {_holds(summary)}.", ""]
     for version in summary.versions:
         current = " (in the file)" if version.id == summary.current else ""
         frames = f", {version.frames} frames" if version.frames > 1 else ""
         lines.append(f"- {version.id}{current}: {version.width}x{version.height}{frames}, {version.method}")
     return "\n".join(lines)
+
+
+def _holds(summary: ImageSummary) -> str:
+    """Which version is in the image's file, as far as the tool knows."""
+    if summary.modified is None:
+        return "has no file"
+    if summary.current is not None:
+        return f"holds {summary.current}"
+    return "was changed by hand" if summary.versions else "has no versions yet"
+
+
+def _dimensions(summary: ImageSummary) -> str:
+    if summary.width is None or summary.height is None:
+        return ""
+    frames = f", {summary.frames} frames" if summary.frames is not None and summary.frames > 1 else ""
+    return f"{summary.width}x{summary.height}{frames}"
 
 
 def _marks(path: Path | None) -> list[Mark] | None:

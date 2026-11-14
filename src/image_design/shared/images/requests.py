@@ -10,7 +10,7 @@ from pydantic import BaseModel, ValidationError
 
 from image_design.schemas import ImageDesignError
 from image_design.shared.images import pictures
-from image_design.shared.images.store import StoredImage, find_image, new_image, release_lock, take_lock
+from image_design.shared.images.store import CRASHED, StoredImage, find_image, new_image, release_lock, take_lock
 
 
 class Reference(NamedTuple):
@@ -85,5 +85,5 @@ def _end_crashed_run(image: StoredImage) -> None:
     last = image.runs[-1] if image.runs else None
     if last is not None and last.status == "running":
         last.status = "failed"
-        last.error = "The process running the request ended before the request did."
+        last.error = CRASHED
         image.save_runs()

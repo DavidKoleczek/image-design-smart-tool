@@ -273,11 +273,11 @@ def list_image_methods() -> ImageMethods
 - `list_images` returns every image in the directory with its versions and the status of its last run.
 - `view_image` returns one image and records it as the last one viewed. The app opens on that image.
 - `restore_image_version` replaces the image's file with an earlier version. For an SVG image, it also restores that version's `image.py`.
-- `move_image` renames an image or moves it to another folder. The image keeps its versions.
-- `delete_image` deletes an image and everything kept for it.
+- `move_image` renames an image or moves it to another folder. The image keeps its versions. The new name must keep the extension.
+- `delete_image` deletes an image and everything kept for it. If a run is working on the image, it's stopped first.
 - `cancel_image` stops the run that is working on an image. It can be called from any process.
 - `read_image_activity` returns the history of an image: each request, what the agent did, and how each run ended. Pass the `cursor` from an earlier call as `after` to get only what is new.
-- `list_image_methods` returns the three ways of making an image, whether each is set up on this machine, and the models and options each supports.
+- `list_image_methods` returns the three ways of making an image, whether each is set up on this machine, and the models and options each supports. Set up means installed, and for the OpenAI API that the key is set.
 
 An image's file is kept apart from the tool's data for it. With the default `data_directory`, the layout is:
 

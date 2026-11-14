@@ -9,7 +9,7 @@ import pytest
 
 from image_design import lib
 from image_design.capabilities.openai_image import generate
-from image_design.shared.images.store import directories, find_image
+from image_design.shared.images.store import alive, directories, find_image
 
 # A detached run starts a Python process of its own, which takes a while to import the library.
 DETACHED_TIMEOUT_SECONDS = 30
@@ -39,3 +39,19 @@ async def test_a_detached_run_goes_on_in_its_own_process_and_cancel_image_stops_
     assert done.path.is_file()
     assert [event.kind for event in events] == ["started", "version", "finished"]
     assert images_api.requests == []
+
+
+async def test_delete_image_stops_a_detached_run_and_then_removes_the_image(
+    images_api: FakeImagesAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(generate, "BACKGROUND_COMMAND", detached_openai.command("hang"))
+    await lib.generate_openai_image("A cactus.", name="cactus.png", detach=True)
+    image = find_image(*directories(None, None), "cactus.png")
+    assert image is not None
+    [run] = image.runs
+
+    lib.delete_image("cactus.png")
+
+    assert not alive(run.pid)
+    assert not image.folder.exists()
+    assert lib.list_images().images == []

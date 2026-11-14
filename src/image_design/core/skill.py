@@ -50,6 +50,36 @@ CAPABILITIES = (
         skill="capabilities/svg_image/skills/skill_export_svg_image.md",
     ),
     Capability(
+        "list-images",
+        "List the images in the directory, with their versions and how their last runs went.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_list_images.md",
+    ),
+    Capability(
+        "view-image",
+        "Show one image and its versions, and record it as the image viewed last.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_view_image.md",
+    ),
+    Capability(
+        "move-image",
+        "Rename an image, or move it to another folder of the directory.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_move_image.md",
+    ),
+    Capability(
+        "delete-image",
+        "Delete an image's file and everything kept for it.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_delete_image.md",
+    ),
+    Capability(
+        "list-image-methods",
+        "List the ways of making an image, whether each is set up here, and what each takes.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_list_image_methods.md",
+    ),
+    Capability(
         "restore-image-version",
         "Put an earlier version of an image back in its file.",
         model_backed=False,
