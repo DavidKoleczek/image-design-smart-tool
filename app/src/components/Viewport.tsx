@@ -834,7 +834,7 @@ export function Viewport({
                       key={corner}
                       onPointerDown={startResize(corner)}
                       className={cn(
-                        "pointer-events-auto absolute size-[7px] border border-accent-ink bg-panel",
+                        "pointer-events-auto absolute size-1.75 border border-accent-ink bg-panel",
                         corner.includes("t") ? "-top-1" : "-bottom-1",
                         corner.includes("l") ? "-left-1" : "-right-1",
                         corner === "tl" || corner === "br"
@@ -844,7 +844,7 @@ export function Viewport({
                     />
                   ))}
                 {selectedBox.w > 0.02 && (
-                  <span className="absolute bottom-[-22px] left-1/2 -translate-x-1/2 bg-accent px-1.5 py-px mono-annotation whitespace-nowrap text-on-accent">
+                  <span className="absolute -bottom-5.5 left-1/2 -translate-x-1/2 bg-accent px-1.5 py-px mono-annotation whitespace-nowrap text-on-accent">
                     {dimensions(
                       Math.round(selectedBox.w * width),
                       Math.round(selectedBox.h * height),
@@ -886,7 +886,7 @@ export function Viewport({
       {guiding === "markup" && (
         <div
           onPointerDown={(event) => event.stopPropagation()}
-          className="absolute top-8 left-8 z-30 flex min-h-8 cursor-default items-center gap-2 rounded-md border border-line bg-panel px-2 py-[3px]"
+          className="absolute top-8 left-8 z-30 flex min-h-8 cursor-default items-center gap-2 rounded-md border border-line bg-panel px-2 py-0.75"
         >
           <span className="text-label text-ink-muted">
             {selected ? `Mark ${selected.id}` : "Mark color"}
@@ -933,7 +933,7 @@ export function Viewport({
       {elsewhere !== null && (
         <div
           onPointerDown={(event) => event.stopPropagation()}
-          className="absolute top-8 left-8 z-30 flex min-h-8 cursor-default items-center gap-2 rounded-md border border-line bg-panel px-2 py-[3px]"
+          className="absolute top-8 left-8 z-30 flex min-h-8 cursor-default items-center gap-2 rounded-md border border-line bg-panel px-2 py-0.75"
         >
           <span className="text-label text-ink-muted">
             Marks are on frame {elsewhere + 1}
@@ -946,7 +946,7 @@ export function Viewport({
       {guiding === "mask" && (
         <div
           onPointerDown={(event) => event.stopPropagation()}
-          className="absolute top-8 left-8 z-30 flex min-h-8 cursor-default items-center gap-2 rounded-md border border-line bg-panel px-2 py-[3px]"
+          className="absolute top-8 left-8 z-30 flex min-h-8 cursor-default items-center gap-2 rounded-md border border-line bg-panel px-2 py-0.75"
         >
           <ValueField
             label="Brush"
@@ -980,7 +980,7 @@ export function Viewport({
       )}
       <div
         onPointerDown={(event) => event.stopPropagation()}
-        className="absolute top-8 right-3 z-30 flex cursor-default items-center gap-1 rounded-md border border-line bg-panel p-[3px]"
+        className="absolute top-8 right-3 z-30 flex cursor-default items-center gap-1 rounded-md border border-line bg-panel p-0.75"
       >
         <Tooltip content="Zoom out" keys="-">
           <Button

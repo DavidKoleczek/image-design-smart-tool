@@ -83,7 +83,7 @@ function Frame({
       {width >= NUMBERED_FROM && (
         <span
           className={cn(
-            "absolute bottom-[3px] left-[3px] px-1 mono-annotation",
+            "absolute bottom-0.75 left-0.75 px-1 mono-annotation",
             current ? "bg-accent text-on-accent" : "bg-panel/90 text-ink",
           )}
         >
@@ -335,7 +335,7 @@ export function Timeline({
             ref={track}
             onPointerDown={scrub}
             style={{ width: total * scale }}
-            className="relative h-[70px] min-w-full touch-none select-none"
+            className="relative h-17.5 min-w-full touch-none select-none"
           >
             <div
               aria-hidden
@@ -347,7 +347,7 @@ export function Timeline({
                   style={{ left: time * scale }}
                   className="absolute inset-y-0 border-l border-line-control"
                 >
-                  <span className="absolute top-0 left-1 leading-[14px]">
+                  <span className="absolute top-0 left-1 leading-3.5">
                     {seconds(time)}s
                   </span>
                 </span>
@@ -360,11 +360,11 @@ export function Timeline({
                     left: starts[marked] * scale,
                     width: durations[marked] * scale,
                   }}
-                  className="absolute top-[18px] h-1 bg-accent-ink"
+                  className="absolute top-4.5 h-1 bg-accent-ink"
                 />
               </Tooltip>
             )}
-            <div className="absolute inset-x-0 top-6 h-[46px]">
+            <div className="absolute inset-x-0 top-6 h-11.5">
               {durations?.map((duration, index) => (
                 <Frame
                   key={index}
@@ -380,7 +380,7 @@ export function Timeline({
               <span
                 aria-hidden
                 style={{ left: start * scale }}
-                className="pointer-events-none absolute inset-y-0 z-2 w-px bg-accent-ink before:absolute before:top-0 before:-left-1 before:size-[9px] before:bg-accent-ink"
+                className="pointer-events-none absolute inset-y-0 z-2 w-px bg-accent-ink before:absolute before:top-0 before:-left-1 before:size-2.25 before:bg-accent-ink"
               />
             )}
           </div>

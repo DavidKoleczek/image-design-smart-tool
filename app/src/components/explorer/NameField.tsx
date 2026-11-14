@@ -71,7 +71,7 @@ export function NameField({
           }
         }}
         onBlur={() => settle(problem === null, false)}
-        className="-mx-1 h-5 min-w-12 flex-1 rounded-[2px] border border-ink bg-panel px-[3px] font-normal text-ink outline-none select-text aria-invalid:border-danger"
+        className="-mx-1 h-5 min-w-12 flex-1 rounded-[2px] border border-ink bg-panel px-0.75 font-normal text-ink outline-none select-text aria-invalid:border-danger"
       />
       {extension && <span className="ml-1 text-ink-muted">{extension}</span>}
       {problem && (

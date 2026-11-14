@@ -85,7 +85,7 @@ function Tile({
       onClick={onView}
       ref={button}
       className={cn(
-        "flex shrink-0 cursor-default flex-col items-center gap-[3px] rounded-md border px-[3px] pt-[3px] pb-0.5 focus-visible:focus-ring focus-visible:outline-none",
+        "flex shrink-0 cursor-default flex-col items-center gap-0.75 rounded-md border px-0.75 pt-0.75 pb-0.5 focus-visible:focus-ring focus-visible:outline-none",
         viewed
           ? "border-accent-ink bg-accent-soft text-ink"
           : "border-transparent text-ink-muted hover:bg-hover",
@@ -262,7 +262,7 @@ export function Versions({
           {Array.from({ length: pending }, (_, index) => (
             <div
               key={index}
-              className="flex shrink-0 flex-col items-center gap-[3px] border border-transparent px-[3px] pt-[3px] pb-0.5 text-ink-muted"
+              className="flex shrink-0 flex-col items-center gap-0.75 border border-transparent px-0.75 pt-0.75 pb-0.5 text-ink-muted"
             >
               <span className="grid size-14 place-items-center rounded-sm border border-dashed border-line-control">
                 <LoadingMark size={12} />

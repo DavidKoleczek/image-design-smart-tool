@@ -26,7 +26,9 @@ export default defineConfig([
     // Prettier owns class order and wrapping.
     files: ["src/**/*.{ts,tsx}"],
     plugins: { "better-tailwindcss": betterTailwindcss },
-    settings: { "better-tailwindcss": { entryPoint: "src/index.css" } },
+    settings: {
+      "better-tailwindcss": { entryPoint: "src/index.css", rootFontSize: 16 },
+    },
     rules: {
       "better-tailwindcss/enforce-canonical-classes": "warn",
       "better-tailwindcss/no-conflicting-classes": "error",

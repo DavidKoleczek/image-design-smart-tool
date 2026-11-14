@@ -183,7 +183,7 @@ export function MarkList({
                 </svg>
                 <span
                   style={{ background: color.hex, color: color.on }}
-                  className="absolute bottom-0.5 left-0.5 grid h-4 min-w-4 place-items-center rounded-[2px] px-[3px] mono-annotation font-semibold"
+                  className="absolute bottom-0.5 left-0.5 grid h-4 min-w-4 place-items-center rounded-[2px] px-0.75 mono-annotation font-semibold"
                 >
                   {mark.id}
                 </span>

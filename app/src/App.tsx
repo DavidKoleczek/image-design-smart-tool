@@ -249,7 +249,7 @@ function App() {
       ref={root}
       className={cn(
         "flex flex-col overflow-hidden bg-canvas text-ink",
-        display.fullscreen ? "h-dvh" : "h-[560px]",
+        display.fullscreen ? "h-dvh" : "h-140",
       )}
     >
       <TopBar
