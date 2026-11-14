@@ -68,10 +68,46 @@ CAPABILITIES = (
         skill="capabilities/manage_images/skills/skill_move_image.md",
     ),
     Capability(
+        "copy-image",
+        "Copy an image with its versions and its history.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_copy_image.md",
+    ),
+    Capability(
+        "import-image",
+        "Bring an image file from anywhere on this machine into the directory as a new image.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_import_image.md",
+    ),
+    Capability(
         "delete-image",
         "Delete an image's file and everything kept for it.",
         model_backed=False,
         skill="capabilities/manage_images/skills/skill_delete_image.md",
+    ),
+    Capability(
+        "create-folder",
+        "Make a folder in the directory.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_create_folder.md",
+    ),
+    Capability(
+        "move-folder",
+        "Rename a folder, or move it into another, with everything in it.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_move_folder.md",
+    ),
+    Capability(
+        "delete-folder",
+        "Delete a folder and the images in it.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_delete_folder.md",
+    ),
+    Capability(
+        "relink-images",
+        "Find the images whose files were moved outside the tool, and keep each where its file is.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_relink_images.md",
     ),
     Capability(
         "list-image-methods",

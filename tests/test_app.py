@@ -20,6 +20,7 @@ from PIL import Image
 import pytest
 
 from image_design import lib
+from image_design.capabilities.app import library as library_module
 from image_design.capabilities.app import server as server_module
 from image_design.capabilities.app import uploads
 from image_design.capabilities.app.tools import VIEW_URI
@@ -34,12 +35,14 @@ from image_design.schemas import (
     ImageDesignError,
     ImageListing,
     ImageMethods,
+    ImageMove,
     ImageRequestPreview,
     ImageSummary,
     ImageView,
     PaneLayout,
     ReferenceEntry,
     ReferenceLibrary,
+    UsedReference,
 )
 
 TIMEOUT_SECONDS = 5
@@ -311,6 +314,99 @@ async def test_the_view_views_restores_moves_and_deletes_images_and_reads_their_
     assert gone.structured_content == {"reason": "no-such-image", "image": "plants/cactus.png"}
     emptied_listing = AppImages.model_validate(emptied.structured_content)
     assert ([image.name for image in emptied_listing.images], emptied_listing.shown) == (["photo.png"], None)
+
+
+async def listed(client: Client) -> AppImages:
+    return AppImages.model_validate((await client.call_tool("list_images", {})).structured_content)
+
+
+async def test_the_view_files_images_in_folders_copies_and_imports_them_and_follows_one_moved_outside_the_app(
+    open_app: Callable[..., lib.AppServer],
+    images_api: FakeImagesAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(uploads, "UPLOADS", tmp_path / "uploads")
+    await made("A paper-cut cactus.", "cactus.png")
+    root = Path(".image-design").resolve()
+    (root / "photo.png").write_bytes(picture(800, 600, "#336699"))
+    outside = tmp_path / "desk.jpeg"
+    outside.write_bytes(picture(640, 480, "#336699", "jpeg"))
+    text = tmp_path / "notes.png"
+    text.write_text("Not an image.", encoding="utf-8")
+    library_module.remember_used(root / ".agents", [UsedReference(name="cactus.png", path=root / "cactus.png")])
+    app_server = open_app()
+    monkeypatch.setattr(app_server, "_choose_files", lambda directory, title: [outside, text])
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        folder = await client.call_tool("create_folder", {"name": "plants"})
+        again = await client.call_tool("create_folder", {"name": "plants", "numbered": True})
+        taken = await client.call_tool("create_folder", {"name": "plants"})
+        await client.call_tool("show_image", {"name": "cactus.png"})
+        await client.call_tool("save_app_state", {"state": {"pins": [str(root / "cactus.png")]}})
+        moved = await client.call_tool("move_image", {"name": "cactus.png", "new_name": "plants/cactus.png"})
+        numbered = await client.call_tool(
+            "move_image", {"name": "photo.png", "new_name": "plants/cactus.png", "numbered": True}
+        )
+        renamed = await client.call_tool("move_folder", {"name": "plants", "new_name": "garden"})
+        followed = await listed(client)
+        state = AppState.model_validate((await client.call_tool("read_app_state", {})).structured_content)
+        offered = ReferenceLibrary.model_validate(
+            (await client.call_tool("read_reference_library", {})).structured_content
+        )
+        copied = await client.call_tool(
+            "copy_image", {"name": "garden/cactus.png", "new_name": "garden/cactus.png", "numbered": True}
+        )
+        await upload(client, "a" * 32, "desk.jpeg", outside.read_bytes())
+        imported = await client.call_tool("import_image", {"upload": "a" * 32, "folder": "garden"})
+        cleared = await client.call_tool("import_image", {"upload": "a" * 32, "folder": "garden"})
+        chosen = await client.call_tool("choose_image_files", {"folder": "plants (2)"})
+        # As a file manager would: one image moved as it is, and one changed and then moved.
+        (root / "garden/cactus.png").rename(root / "cactus-moved.png")
+        (root / "garden/desk.jpg").unlink()
+        (root / "desk.jpg").write_bytes(picture(320, 200, "#993366", "jpeg"))
+        relinked = await listed(client)
+        again_listed = await listed(client)
+        took = await client.call_tool("relink_image", {"name": "garden/desk.jpg"})
+        settled = await listed(client)
+        left = await client.call_tool("delete_folder", {"name": "garden"})
+        emptied = await listed(client)
+
+    assert (folder.structured_content, again.structured_content) == ({"name": "plants"}, {"name": "plants (2)"})
+    assert taken.structured_content == {"reason": "name-in-use", "image": None}
+    assert ImageSummary.model_validate(moved.structured_content).name == "plants/cactus.png"
+    assert ImageSummary.model_validate(numbered.structured_content).name == "plants/cactus (2).png"
+    assert renamed.structured_content == {"name": "garden"}
+    # What the app keeps by an image's name or path went with it: the image shown, a pin, and a reference used before.
+    assert (followed.shown, followed.folders) == ("garden/cactus.png", ["garden", "plants (2)"])
+    assert state.pins == [root / "garden/cactus.png"]
+    assert [(entry.name, entry.path) for entry in offered.used] == [("cactus.png", root / "garden/cactus.png")]
+    assert ImageSummary.model_validate(copied.structured_content).name == "garden/cactus (3).png"
+    desk = ImageSummary.model_validate(imported.structured_content)
+    assert (desk.name, desk.current, desk.width) == ("garden/desk.jpg", "v1", 640)
+    assert cleared.structured_content == {"reason": "bad-upload", "image": None}
+    picked = chosen.structured_content or {}
+    assert [image["name"] for image in picked["images"]] == ["plants (2)/desk.jpg"]
+    assert [(refused["name"], refused["reason"]) for refused in picked["refused"]] == [("notes.png", "not-an-image")]
+    # The image moved as it is keeps its versions under its file's name, and the other is offered, not taken.
+    moved_by_hand = next(image for image in relinked.images if image.name == "cactus-moved.png")
+    assert (relinked.shown, moved_by_hand.current) == ("cactus-moved.png", "v1")
+    assert relinked.likely == [ImageMove(name="garden/desk.jpg", new_name="desk.jpg")]
+    assert again_listed == relinked
+    assert (took.structured_content or {})["relinked"] == [{"name": "garden/desk.jpg", "new_name": "desk.jpg"}]
+    assert settled.likely == []
+    assert [(image.name, len(image.versions)) for image in settled.images] == [
+        ("cactus-moved.png", 1),
+        ("desk.jpg", 1),
+        ("garden/cactus (2).png", 0),
+        ("garden/cactus (3).png", 1),
+        ("plants (2)/desk.jpg", 1),
+    ]
+    assert left.structured_content == {"left": []}
+    assert ([image.name for image in emptied.images], emptied.folders) == (
+        ["cactus-moved.png", "desk.jpg", "plants (2)/desk.jpg"],
+        ["plants (2)"],
+    )
 
 
 async def test_the_view_reads_an_image_s_file_its_versions_and_small_copies_of_them_and_no_other_file(

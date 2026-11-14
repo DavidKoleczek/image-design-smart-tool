@@ -143,6 +143,28 @@ async def test_budgets_are_told_the_agent_kept_on_an_edit_and_cleared_with_none(
     assert check.describe().splitlines()[1:3] == ["Shapes: 3.", "Colors: 3: #1d3557, #8d5524, #e9c46a."]
 
 
+async def test_a_copied_drawing_is_edited_on_its_own_from_its_script_and_its_agent_s_session(
+    agent: FakeDrawingAgent,
+) -> None:
+    await drawn(agent)
+    copy = lib.copy_image("sailboat.svg", "boats/sailboat.svg")
+    agent.behavior = draws("#457b9d", finding=sailboat())
+    edited, _ = await drawn(agent, prompt="Make the sail blue.", name="boats/sailboat.svg", resume_session=True)
+
+    creating, editing = agent.runs
+    original, copied = lib.view_image("sailboat.svg"), lib.view_image("boats/sailboat.svg")
+    assert (copy.current, edited.status) == ("v1", "done")
+    assert editing.request.resume == creating.session_id
+    # It is drawn in the copy's own folders, so the drawing it was copied from stays as it was.
+    assert creating.request.workspace is not None
+    assert editing.request.workspace is not None
+    assert editing.request.workspace.path == IMAGES.resolve() / str(copied.id) / "work"
+    assert editing.request.workspace.path != creating.request.workspace.path
+    assert editing.request.session_directory == IMAGES.resolve() / str(copied.id) / "sessions"
+    assert ([version.id for version in copied.versions], copied.current) == (["v1", "v2"], "v2")
+    assert ([version.id for version in original.versions], original.current) == (["v1"], "v1")
+
+
 async def test_a_resumed_session_goes_on_from_an_unfinished_run_s_work_and_keeps_its_agent_provider(
     agent: FakeDrawingAgent,
 ) -> None:

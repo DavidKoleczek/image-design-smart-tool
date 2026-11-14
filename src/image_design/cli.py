@@ -41,6 +41,7 @@ DIRECTORY_HELP = "Where images are kept; .image-design here when omitted."
 DATA_DIRECTORY_HELP = "Where the tool keeps versions and runs; .agents in the directory when omitted."
 APP_DIRECTORY_HELP = "Where the images to show are kept; .image-design here when omitted."
 JSON_HELP = "Print JSON instead of text."
+NUMBERED_HELP = "Take the next free name like it, such as 'cactus (2).png', when the name is taken."
 
 
 class CapabilityCommand(TyperCommand):
@@ -435,6 +436,12 @@ def list_images(
     for summary in listing.images:
         facts = [fact for fact in (_dimensions(summary), _holds(summary), summary.status) if fact]
         typer.echo(f"- {summary.name}: {', '.join(facts)}")
+    # A folder with an image in it shows in that image's name.
+    for folder in listing.folders:
+        if not any(summary.name.startswith(f"{folder}/") for summary in listing.images):
+            typer.echo(f"- {folder}/: no images")
+    if any(summary.versions and summary.modified is None for summary in listing.images):
+        typer.echo("An image has no file. If it was moved outside the tool, find it with: image-design relink-images")
     for problem in listing.unreadable:
         typer.echo(f"Left out: {problem}", err=True)
 
@@ -477,10 +484,51 @@ def move_image(
     new_name: Annotated[str, typer.Option("--new-name", help="The path to give it, with the same extension.")],
     directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
     data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    numbered: Annotated[bool, typer.Option("--numbered", help=NUMBERED_HELP)] = False,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
     """Rename an image, or move it to another folder of the directory. Deterministic."""
-    summary = lib.move_image(name=name, new_name=new_name, directory=directory, data_directory=data_directory)
+    summary = lib.move_image(
+        name=name, new_name=new_name, directory=directory, data_directory=data_directory, numbered=numbered
+    )
+    typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
+
+
+@app.command()
+def copy_image(
+    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    new_name: Annotated[str, typer.Option("--new-name", help="The copy's path, with the same extension.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    numbered: Annotated[bool, typer.Option("--numbered", help=NUMBERED_HELP)] = False,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """Copy an image with its versions and its history. Deterministic."""
+    summary = lib.copy_image(
+        name=name, new_name=new_name, directory=directory, data_directory=data_directory, numbered=numbered
+    )
+    typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
+
+
+@app.command()
+def import_image(
+    path: Annotated[Path, typer.Option("--path", help="The image file to bring in, which is left as it is.")],
+    name: Annotated[
+        str | None,
+        typer.Option(
+            "--name",
+            help="The image's path in the directory, or a folder ending in a slash; the file's own name when omitted.",
+        ),
+    ] = None,
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    numbered: Annotated[bool, typer.Option("--numbered", help=NUMBERED_HELP)] = False,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """Bring an image file into the directory as a new image. Deterministic."""
+    summary = lib.import_image(
+        path=path, name=name, directory=directory, data_directory=data_directory, numbered=numbered
+    )
     typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
 
 
@@ -492,6 +540,60 @@ def delete_image(
 ) -> None:
     """Delete an image's file and everything kept for it. Deterministic."""
     lib.delete_image(name=name, directory=directory, data_directory=data_directory)
+
+
+@app.command()
+def create_folder(
+    name: Annotated[str, typer.Option("--name", help="The folder's path in the directory.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    numbered: Annotated[bool, typer.Option("--numbered", help=NUMBERED_HELP)] = False,
+) -> None:
+    """Make a folder in the directory. Deterministic."""
+    made = lib.create_folder(name=name, directory=directory, data_directory=data_directory, numbered=numbered)
+    typer.echo(made)
+
+
+@app.command()
+def move_folder(
+    name: Annotated[str, typer.Option("--name", help="The folder's path in the directory.")],
+    new_name: Annotated[str, typer.Option("--new-name", help="The path to give it.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    numbered: Annotated[bool, typer.Option("--numbered", help=NUMBERED_HELP)] = False,
+) -> None:
+    """Rename a folder, or move it into another, with everything in it. Deterministic."""
+    moved = lib.move_folder(
+        name=name, new_name=new_name, directory=directory, data_directory=data_directory, numbered=numbered
+    )
+    typer.echo(moved)
+
+
+@app.command()
+def delete_folder(
+    name: Annotated[str, typer.Option("--name", help="The folder's path in the directory.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+) -> None:
+    """Delete a folder and the images in it. Deterministic."""
+    left = lib.delete_folder(name=name, directory=directory, data_directory=data_directory)
+    if left:
+        typer.echo(f"Deleted the images in {name}. It still holds what the tool does not delete: {', '.join(left)}")
+
+
+@app.command()
+def relink_images(
+    likely: Annotated[
+        list[str] | None,
+        typer.Option("--likely", help="An image to relink to its likely file as well; repeat for each."),
+    ] = None,
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """Find the images whose files were moved outside the tool, and keep each where its file is. Deterministic."""
+    relinking = lib.relink_images(likely=likely, directory=directory, data_directory=data_directory)
+    typer.echo(relinking.model_dump_json(indent=2) if json else relinking.describe())
 
 
 @app.command()

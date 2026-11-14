@@ -65,7 +65,13 @@ image-design list-images                                         the images in t
 image-design view-image --name <name> [--frames-output <dir>]   one image, its versions, and its frames
 image-design restore-image-version --name <name> --version <v>   put an earlier version back
 image-design move-image --name <name> --new-name <name>          rename or move an image
+image-design copy-image --name <name> --new-name <name>          copy an image and its data
+image-design import-image --path <file> [--name <name>]          bring an image file in
 image-design delete-image --name <name>                          delete an image and its data
+image-design create-folder --name <folder>                       make a folder
+image-design move-folder --name <folder> --new-name <folder>     rename or move a folder
+image-design delete-folder --name <folder>                       delete a folder and its images
+image-design relink-images                                       find images moved outside the tool
 image-design cancel-image --name <name>                          stop the run on an image
 image-design read-image-activity --name <name>                   the history of an image
 image-design steer-svg-image --name <name> --message <text>      send a message to the agent
@@ -80,7 +86,9 @@ image-design mcp                                                 serve the app o
 
 Every command that works on images also takes `--directory` and `--data-directory`.
 
-`steer-svg-image`, `cancel-image`, and `delete-image` print nothing. `manifest` prints JSON. The others print text, or JSON with `--json`.
+`steer-svg-image`, `cancel-image`, and `delete-image` print nothing. `delete-folder` prints only the files it left. `create-folder` and `move-folder` print the folder's name. `manifest` prints JSON. The others print text, or JSON with `--json`.
+
+`move-image`, `copy-image`, `import-image`, `create-folder`, and `move-folder` take `--numbered`. For `relink-images`, repeat `--likely <name>` for each image.
 
 `app` calls `lib.app_server().open()`, prints its URL, and keeps serving until Ctrl+C, which exits 0.
 `mcp` calls `image_design.adapters.mcp.run_stdio()`, for MCP clients that launch the server themselves. stdin and stdout carry only MCP messages until the client disconnects.

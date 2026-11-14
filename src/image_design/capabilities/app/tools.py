@@ -15,6 +15,11 @@ REFERENCE_PREFIX = "image-design://references/"
 FILE = "file"
 APP_ONLY = {"ui": {"resourceUri": VIEW_URI, "visibility": ["app"]}}
 IMAGE_NAME = {"type": "string", "description": "The image's path in the directory, such as concepts/cactus.png"}
+NUMBERED = {
+    "type": "boolean",
+    "description": "When the name is taken, take the next free name like it, such as `cactus (2).png`, and return it",
+}
+FOLDER_NAME = {"type": "string", "description": "The folder's path in the directory, such as concepts/drafts"}
 OPEN_APP = Tool(
     name="open_app",
     description="Show the Image Design app, where the user sees the images in a directory, and return its browser "
@@ -43,7 +48,8 @@ OPEN_APP = Tool(
 LIST_IMAGES = Tool(
     name="list_images",
     description="The images in the app's directory, in name order, with their versions and how their last runs went, "
-    "and the one the app showed last. Called by the view.",
+    "its folders, and the image the app showed last. An image whose file was moved outside the app is first kept "
+    "under the name its file has, when that file is certainly its own. Called by the view.",
     input_schema={"type": "object", "properties": {}},
     _meta=APP_ONLY,
 )
@@ -111,8 +117,52 @@ MOVE_IMAGE = Tool(
         "properties": {
             "name": IMAGE_NAME,
             "new_name": {"type": "string", "description": "Its new path in the directory, with the same extension"},
+            "numbered": NUMBERED,
         },
         "required": ["name", "new_name"],
+    },
+    _meta=APP_ONLY,
+)
+COPY_IMAGE = Tool(
+    name="copy_image",
+    description="Make another image with a copy of an image's file and of everything kept for it, and return the "
+    "copy. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": IMAGE_NAME,
+            "new_name": {"type": "string", "description": "The copy's path in the directory, with the same extension"},
+            "numbered": NUMBERED,
+        },
+        "required": ["name", "new_name"],
+    },
+    _meta=APP_ONLY,
+)
+IMPORT_IMAGE = Tool(
+    name="import_image",
+    description="Bring a file sent with `upload_file` into the app's directory as a new image, under the file's own "
+    "name, and return the image. The upload is cleared. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "upload": {"type": "string", "description": "The upload holding the image file"},
+            "folder": {"type": "string", "description": "The folder to put it in. Omit it for the top of the directory"},
+            "numbered": NUMBERED,
+        },
+        "required": ["upload"],
+    },
+    _meta=APP_ONLY,
+)
+CHOOSE_IMAGES = Tool(
+    name="choose_image_files",
+    description="Ask the person for image files in their platform's file dialog, and bring each into the app's "
+    "directory as a new image, under a numbered name when its own is taken. Returns the images, and why each file "
+    "that was refused was. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "folder": {"type": "string", "description": "The folder to put them in. Omit it for the top of the directory"}
+        },
     },
     _meta=APP_ONLY,
 )
@@ -120,6 +170,41 @@ DELETE_IMAGE = Tool(
     name="delete_image",
     description="Delete an image's file and everything kept for it, stopping a run working on it first. Called by the "
     "view.",
+    input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
+    _meta=APP_ONLY,
+)
+CREATE_FOLDER = Tool(
+    name="create_folder",
+    description="Make a folder in the app's directory, and return its name. Called by the view.",
+    input_schema={"type": "object", "properties": {"name": FOLDER_NAME, "numbered": NUMBERED}, "required": ["name"]},
+    _meta=APP_ONLY,
+)
+MOVE_FOLDER = Tool(
+    name="move_folder",
+    description="Rename a folder, or move it into another, with everything in it, and return its name. Its images "
+    "keep their versions. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": FOLDER_NAME,
+            "new_name": {"type": "string", "description": "Its new path in the directory"},
+            "numbered": NUMBERED,
+        },
+        "required": ["name", "new_name"],
+    },
+    _meta=APP_ONLY,
+)
+DELETE_FOLDER = Tool(
+    name="delete_folder",
+    description="Delete every image in a folder, with everything kept for each, then the folder. Returns the files in "
+    "it that are not images, which are left with the folder. Called by the view.",
+    input_schema={"type": "object", "properties": {"name": FOLDER_NAME}, "required": ["name"]},
+    _meta=APP_ONLY,
+)
+RELINK_IMAGE = Tool(
+    name="relink_image",
+    description="Keep an image that has no file under the name of the file that is likely its own, one of those "
+    "`list_images` returns as `likely`. Called by the view.",
     input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
     _meta=APP_ONLY,
 )
@@ -435,7 +520,14 @@ VIEW_TOOLS = [
     SHOW_IMAGE,
     VIEW_IMAGE,
     MOVE_IMAGE,
+    COPY_IMAGE,
+    IMPORT_IMAGE,
+    CHOOSE_IMAGES,
     DELETE_IMAGE,
+    CREATE_FOLDER,
+    MOVE_FOLDER,
+    DELETE_FOLDER,
+    RELINK_IMAGE,
     RESTORE_VERSION,
     READ_ACTIVITY,
     LIST_METHODS,

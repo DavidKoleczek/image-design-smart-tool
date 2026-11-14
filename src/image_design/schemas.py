@@ -177,7 +177,9 @@ class ImageVersion(BaseModel):
     height: int
     frames: int = Field(default=1, description="More than 1 for an animation")
     sha256: str
-    method: ImageMethod = Field(description="What made it; `imported` for a file the tool found in place")
+    method: ImageMethod = Field(
+        description="What made it; `imported` for a file the tool found in place or was given to bring in"
+    )
     run_id: str | None = None
     created: datetime
     script: Path | None = Field(
@@ -286,6 +288,10 @@ class ImageSummary(BaseModel):
     """An image, its versions, and how its last run went."""
 
     name: str
+    id: str | None = Field(
+        description="Names what the tool keeps for the image, and stays the same when it moves; None for a file the "
+        "tool keeps nothing for"
+    )
     path: Path
     width: int | None = Field(description="Of the image's file; None when it has no file, or one that cannot be read")
     height: int | None
@@ -301,14 +307,44 @@ class ImageSummary(BaseModel):
 
 
 class ImageListing(BaseModel):
-    """Every image in a directory, in name order."""
+    """Every image in a directory, in name order, and its folders."""
 
     directory: Path
     data_directory: Path
     images: list[ImageSummary]
+    folders: list[str] = Field(
+        description="Every folder in the directory, by its path with forward slashes, whether or not it holds an image"
+    )
     unreadable: list[str] = Field(
         default_factory=list, description="Why each image whose data cannot be read was left out"
     )
+
+
+class ImageMove(BaseModel):
+    """An image whose file is under another name than the tool has for it."""
+
+    name: str = Field(description="The name the tool had for the image")
+    new_name: str = Field(description="Where its file is")
+
+
+class ImageRelinking(BaseModel):
+    """What `relink_images` found for the images whose files were moved outside the tool."""
+
+    relinked: list[ImageMove] = Field(description="The images now kept under the name their file has")
+    likely: list[ImageMove] = Field(
+        description="Left as they are: the file has the image's file name but not what its current version holds"
+    )
+    gone: list[str] = Field(description="The images that still have no file, and no file that could be theirs")
+
+    def describe(self) -> str:
+        lines = [f"Relinked {move.name} to {move.new_name}." for move in self.relinked]
+        lines += [
+            f"{move.name} has no file, and {move.new_name} may be it, with other content than its current version. "
+            f"To take it: image-design relink-images --likely {move.name}"
+            for move in self.likely
+        ]
+        lines += [f"{name} has no file, and no file in the directory could be it." for name in self.gone]
+        return "\n".join(lines) or "Every image has its file."
 
 
 ImageRequestRole = Literal["source", "marked-copy", "reference", "marks", "mask"]
@@ -787,6 +823,10 @@ class AppImages(ImageListing):
     """The images as the app lists them: every image in its directory, and the one it showed last."""
 
     shown: str | None = Field(description="None when the app has shown none, or that image is gone")
+    likely: list[ImageMove] = Field(
+        default_factory=list,
+        description="The images with no file that `relink_image` can point at the file that may be theirs",
+    )
 
 
 # endregion

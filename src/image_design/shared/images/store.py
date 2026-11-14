@@ -13,6 +13,7 @@ The data directory holds a folder per image, named by the image's id so it stays
     locks/                      which process is working on which image
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
@@ -104,6 +105,45 @@ def image_name(name: str, root: Path, data: Path) -> str:
     return posix.as_posix()
 
 
+def folder_name(name: str, root: Path, data: Path) -> str:
+    """`name` with forward slashes, once it is known to be a path to a folder inside `root` that a listing shows."""
+    posix = PurePosixPath(name.replace("\\", "/"))
+    if not posix.parts or Path(name).anchor or posix.is_absolute() or ".." in posix.parts:
+        raise ImageDesignError(
+            f"{name!r} cannot name a folder. Use a path inside the directory, such as 'concepts' or 'concepts/drafts'.",
+            "invalid-name",
+        )
+    if any(part.startswith(".") for part in posix.parts):
+        raise ImageDesignError(
+            f"{name!r} has a part that starts with a dot, which hides a folder and the images in it from every "
+            "listing. Choose another name.",
+            "invalid-name",
+        )
+    folder = (root / posix).resolve()
+    if folder.is_relative_to(data) or data.is_relative_to(folder):
+        raise ImageDesignError(
+            f"{name!r} holds the data directory, {data}, or is inside it. That is where the tool keeps its own files. "
+            "Choose another name.",
+            "invalid-name",
+        )
+    return posix.as_posix()
+
+
+def free_name(name: str, taken: Callable[[str], bool]) -> str:
+    """`name`, or when it is taken the first of `name (2)`, `name (3)`, and so on that is not.
+
+    The number goes before an image's extension, as in `cactus (2).png`.
+    """
+    posix = PurePosixPath(name)
+    image = posix.suffix.lower() in KEPT_SUFFIXES
+    stem, suffix = (posix.stem, posix.suffix) if image else (posix.name, "")
+    number, free = 2, name
+    while taken(free):
+        free = posix.with_name(f"{stem} ({number}){suffix}").as_posix()
+        number += 1
+    return free
+
+
 class Script(NamedTuple):
     """The image.py that builds a drawn SVG, and the lock uv keeps for its dependencies."""
 
@@ -140,7 +180,7 @@ class StoredImage:
         write_atomically(self.folder / RUNS, ImageRuns(runs=self.runs).model_dump_json(indent=2))
 
     def save_record(self) -> None:
-        write_atomically(self.folder / RECORD, self.record.model_dump_json(indent=2, exclude_none=True))
+        save_record(self.folder, self.record)
 
     def version(self, version_id: str) -> ImageVersion:
         for version in self.versions.versions:
@@ -233,6 +273,7 @@ class StoredImage:
         matches = facts is not None and current is not None and self.version(current).sha256 == facts.sha256
         return _summary(
             self.name,
+            self.record.id,
             self.path,
             facts,
             current=current if matches else None,
@@ -293,27 +334,55 @@ def kept_images(root: Path, data: Path) -> tuple[list[StoredImage], list[str]]:
     return images, unreadable
 
 
-def found_names(root: Path, data: Path) -> list[str]:
-    """The name of every image file in the directory, whoever put it there.
+class Found(NamedTuple):
+    """What is in a directory, whoever put it there, by paths with forward slashes."""
+
+    names: list[str]  # every image file
+    folders: list[str]  # every folder, whether or not it holds an image
+
+
+def found(root: Path, data: Path) -> Found:
+    """The image files and the folders in the directory, each in name order.
 
     Hidden files and folders are left out, and so is the data directory.
     """
     names: list[str] = []
+    kept: list[str] = []
     if not root.is_dir():
-        return names
+        return Found(names, kept)
     for folder, folders, files in root.walk():
         folders[:] = [each for each in folders if not each.startswith(".") and (folder / each).resolve() != data]
+        kept.extend((folder / each).relative_to(root).as_posix() for each in folders)
         names.extend(
             (folder / file).relative_to(root).as_posix()
             for file in files
             if not file.startswith(".") and Path(file).suffix.lower() in KEPT_SUFFIXES
         )
-    return sorted(names)
+    return Found(sorted(names), sorted(kept, key=str.casefold))
+
+
+def found_names(root: Path, data: Path) -> list[str]:
+    """The name of every image file in the directory, whoever put it there."""
+    return found(root, data).names
+
+
+def records(data: Path) -> list[tuple[Path, ImageRecord]]:
+    """Each image the tool keeps data for, as its folder in the data directory and its record."""
+    return [(folder, _read(folder / RECORD, ImageRecord)) for folder in _image_folders(data)]
+
+
+def save_record(folder: Path, record: ImageRecord) -> None:
+    write_atomically(folder / RECORD, record.model_dump_json(indent=2, exclude_none=True))
+
+
+def within(name: str, folder: str) -> bool:
+    """Whether the image or folder named `name` is inside the folder named `folder`, ignoring case."""
+    return name.casefold().startswith(f"{folder.casefold()}/")
 
 
 def found_summary(root: Path, name: str) -> ImageSummary:
     """A file in the directory the tool keeps no data for yet, as an image with no versions."""
-    return _summary(name, root / name, file_facts(root / name), current=None, versions=[], last_run=None)
+    return _summary(name, None, root / name, file_facts(root / name), current=None, versions=[], last_run=None)
 
 
 class FileFacts(NamedTuple):
@@ -354,6 +423,7 @@ def file_facts(path: Path) -> FileFacts | None:
 
 def _summary(
     name: str,
+    id: str | None,
     path: Path,
     facts: FileFacts | None,
     current: str | None,
@@ -363,6 +433,7 @@ def _summary(
     picture = facts.picture if facts is not None else None
     return ImageSummary(
         name=name,
+        id=id,
         path=path,
         width=picture.width if picture is not None else None,
         height=picture.height if picture is not None else None,
@@ -374,16 +445,6 @@ def _summary(
         status=last_run.status if last_run is not None else None,
         last_run=last_run,
     )
-
-
-def remove_empty_folders(folder: Path, root: Path) -> None:
-    """Remove `folder` and each folder above it up to `root` that an image leaving it left empty."""
-    while folder != root and folder.is_relative_to(root):
-        try:
-            folder.rmdir()
-        except OSError:
-            return
-        folder = folder.parent
 
 
 def make_data_directory(data: Path) -> None:

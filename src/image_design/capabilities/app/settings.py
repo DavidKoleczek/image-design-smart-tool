@@ -9,7 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from image_design.core.skill import DISTRIBUTION
 from image_design.schemas import AppSettings, AppState, ImageDesignError
-from image_design.shared.images.store import make_data_directory, write_atomically
+from image_design.shared.images.store import make_data_directory, within, write_atomically
 
 SETTINGS = "app-settings.json"
 STATE_FOLDER = "app"
@@ -66,6 +66,26 @@ def save_app_state(state: dict[str, Any], data: Path) -> AppState:
 def show_image(name: str | None, data: Path) -> None:
     """Keep `name` as the image the app shows, which it opens on; None for none."""
     _write_state(read_app_state(data).model_copy(update={"shown": name}), data)
+
+
+def follow_move(old: str, new: str, root: Path, data: Path) -> None:
+    """Point what the app keeps for `data` at an image, or at everything in a folder, that went from `old` to `new`
+    in `root`: the image shown, and the pins."""
+    state = read_app_state(data)
+    shown = state.shown
+    if shown is not None and shown.casefold() == old.casefold():
+        shown = new
+    elif shown is not None and within(shown, old):
+        shown = f"{new}{shown[len(old) :]}"
+    pins = [moved_path(pin, root / old, root / new) for pin in state.pins]
+    if shown != state.shown or pins != state.pins:
+        _write_state(state.model_copy(update={"shown": shown, "pins": pins}), data)
+
+
+def moved_path(path: Path, old: Path, new: Path) -> Path:
+    """Where `path` is once `old`, a file or a folder, is at `new`; `path` itself when it is neither `old` nor in
+    it."""
+    return new / path.relative_to(old) if path.is_relative_to(old) else path
 
 
 def _write_state(checked: AppState, data: Path) -> AppState:

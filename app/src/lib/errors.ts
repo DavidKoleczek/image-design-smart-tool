@@ -27,7 +27,13 @@ function worded(error: AppError): string | null {
     case "invalid-name":
       return "That name can't be used. Give a path inside the directory that keeps the image's extension, such as concepts/cactus.png.";
     case "name-in-use":
-      return "Another image already has that name. Choose another, or delete that image first.";
+      return "That name is already taken. Choose another.";
+    case "no-such-folder":
+      return "That folder is no longer there. It may have been moved or deleted outside the app.";
+    case "not-an-image":
+      return "That file is not an image the app can read.";
+    case "no-such-file":
+      return "That file is no longer there.";
     case "already-running":
       return "A request is still working on this image. Wait for it to end, or stop it first.";
     case "not-running":

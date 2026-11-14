@@ -1,5 +1,6 @@
 `delete-image` deletes an image's file and everything kept for it: its versions, its runs, and for a drawn SVG its
 script and sessions. A run working on the image is stopped first. Nothing of the image can be restored afterward.
+The folder it was in stays, even when it is left empty; `delete-folder` removes a folder.
 
 ```bash
 image-design delete-image --name concepts/cactus.png

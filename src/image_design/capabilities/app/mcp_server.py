@@ -49,6 +49,7 @@ from image_design.capabilities.app.resources import (
 )
 from image_design.capabilities.app.server import App, serve_app, view
 from image_design.capabilities.app.settings import (
+    follow_move,
     read_app_settings,
     read_app_state,
     save_app_settings,
@@ -59,7 +60,11 @@ from image_design.capabilities.app.tools import (
     CANCEL_IMAGE,
     CHOOSE_FILES,
     CHOOSE_FOLDER,
+    CHOOSE_IMAGES,
     CLEAR_OPENAI_KEY,
+    COPY_IMAGE,
+    CREATE_FOLDER,
+    DELETE_FOLDER,
     DELETE_IMAGE,
     DRAW_SVG,
     ENTER_OPENAI_KEY,
@@ -72,10 +77,12 @@ from image_design.capabilities.app.tools import (
     IMAGE_RESOURCES,
     IMAGE_THUMBNAIL,
     IMAGE_VERSION,
+    IMPORT_IMAGE,
     KEEP_REFERENCE,
     LIST_FOLDER,
     LIST_IMAGES,
     LIST_METHODS,
+    MOVE_FOLDER,
     MOVE_IMAGE,
     OPEN_APP,
     PREVIEW_CHATGPT,
@@ -86,6 +93,7 @@ from image_design.capabilities.app.tools import (
     READ_SETTINGS,
     READ_STATE,
     REFERENCE,
+    RELINK_IMAGE,
     RESTORE_VERSION,
     RUN_PREVIEW,
     SAVE_SETTINGS,
@@ -104,6 +112,8 @@ from image_design.schemas import (
     ImageDesignError,
     ImageListing,
     ImageMethods,
+    ImageMove,
+    ImageRelinking,
     ImageRequestPreview,
     ImageSummary,
     ImageView,
@@ -122,6 +132,7 @@ OPEN_REQUEST = "open"
 ORIGIN = "app"
 CHOOSE_FILES_TITLE = "Choose reference images"
 CHOOSE_FOLDER_TITLE = "Choose a folder to pin"
+CHOOSE_IMAGES_TITLE = "Choose images to add"
 EXPORT_TITLE = "Export the drawing"
 ENTER_KEY_TITLE = "Image Design: OpenAI API key"
 ENTER_KEY_LABEL = "Paste your OpenAI API key. It is saved in this computer's credential store."
@@ -147,8 +158,14 @@ class AppServer:
         data_directory: Path | None,
         list_images: Callable[[Path, Path], ImageListing],
         view_image: Callable[[str, str | None, Path | None, Path, Path], ImageView],
-        move_image: Callable[[str, str, Path, Path], ImageSummary],
+        move_image: Callable[[str, str, Path, Path, bool], ImageSummary],
+        copy_image: Callable[[str, str, Path, Path, bool], ImageSummary],
+        import_image: Callable[[Path, str | None, Path, Path, bool], ImageSummary],
         delete_image: Callable[[str, Path, Path], None],
+        create_folder: Callable[[str, Path, Path, bool], str],
+        move_folder: Callable[[str, str, Path, Path, bool], str],
+        delete_folder: Callable[[str, Path, Path], list[str]],
+        relink_images: Callable[[list[str] | None, Path, Path], ImageRelinking],
         restore_image_version: Callable[[str, str, Path, Path], ImageSummary],
         read_image_activity: Callable[[str, Path, Path, str | None], ImageActivity],
         list_image_methods: Callable[[], ImageMethods],
@@ -174,7 +191,13 @@ class AppServer:
         self._list_images = list_images
         self._view_image = view_image
         self._move_image = move_image
+        self._copy_image = copy_image
+        self._import_image = import_image
         self._delete_image = delete_image
+        self._create_folder = create_folder
+        self._move_folder = move_folder
+        self._delete_folder = delete_folder
+        self._relink_images = relink_images
         self._restore_image_version = restore_image_version
         self._read_image_activity = read_image_activity
         self._list_image_methods = list_image_methods
@@ -208,6 +231,9 @@ class AppServer:
         uploads.clear_old(time.time())
         # The last listing the view was given, which the files it then reads are checked against.
         self._listing: ImageListing | None = None
+        # What the images with no file were last relinked from, and the likely files it left, so a listing that has
+        # nothing new to relink from does not look again.
+        self._relinked: tuple[object, list[ImageMove]] | None = None
         self._lock = threading.Lock()
         self._app: App | None = None
         # Whether the client was asked to open the app in the browser, so it is asked once a session.
@@ -461,11 +487,53 @@ class AppServer:
     def _list(self) -> AppImages:
         directory, data = self.directory, self.data_directory
         listing = self._list_images(directory, data)
+        likely: list[ImageMove] = []
+        unlinked = _unlinked(listing)
+        if unlinked is not None:
+            if self._relinked is None or self._relinked[0] != (data, unlinked):
+                found = self._relink_images(None, directory, data)
+                for move in found.relinked:
+                    self._follow(move.name, move.new_name, directory, data)
+                if found.relinked:
+                    listing = self._list_images(directory, data)
+                self._relinked = ((data, _unlinked(listing)), found.likely)
+            likely = self._relinked[1]
         # A listing that took long enough for `open_app` to switch directory is not the one to read files by.
         self._listing = listing if directory == self.directory else None
         shown = read_app_state(data).shown
         known = any(image.name == shown for image in listing.images)
-        return AppImages(**dict(listing), shown=shown if known else None)
+        return AppImages(**dict(listing), shown=shown if known else None, likely=likely)
+
+    def _follow(self, old: str, new: str, directory: Path, data: Path) -> None:
+        """Point what the app keeps at an image, or at everything in a folder, that went from `old` to `new`."""
+        follow_move(old, new, directory, data)
+        library.follow_move(data, directory / old, directory / new)
+
+    def _import(self, arguments: dict[str, Any]) -> ImageSummary:
+        upload = arguments["upload"]
+        image = self._import_image(
+            uploads.staged(upload),
+            _in_folder(arguments.get("folder")),
+            self.directory,
+            self.data_directory,
+            bool(arguments.get("numbered")),
+        )
+        uploads.clear(upload)
+        self._uploads.discard(upload)
+        return image
+
+    def _import_chosen(self, chosen: list[Path], folder: str | None) -> dict[str, Any]:
+        """Bring each chosen file in, and say why each that was refused was, so one bad file does not stop the rest."""
+        images: list[dict[str, Any]] = []
+        refused: list[dict[str, Any]] = []
+        for path in chosen:
+            try:
+                image = self._import_image(path, _in_folder(folder), self.directory, self.data_directory, True)
+            except ImageDesignError as error:
+                refused.append({"name": path.name, "reason": error.reason, "message": str(error)})
+            else:
+                images.append(image.model_dump(mode="json"))
+        return {"images": images, "refused": refused}
 
     async def _call_tool_or_explain(
         self, ctx: ServerRequestContext[Any], params: CallToolRequestParams
@@ -499,18 +567,58 @@ class AppServer:
                 self._view_image, arguments["name"], arguments.get("version"), None, self.directory, self.data_directory
             )
             return _structured(image.model_dump(mode="json"))
+        numbered = bool(arguments.get("numbered"))
         if params.name == MOVE_IMAGE.name:
+            directory, data = self.directory, self.data_directory
             image = await asyncio.to_thread(
-                self._move_image, arguments["name"], arguments["new_name"], self.directory, self.data_directory
+                self._move_image, arguments["name"], arguments["new_name"], directory, data, numbered
             )
             self._listing = None
-            if read_app_state(self.data_directory).shown == arguments["name"]:
-                await asyncio.to_thread(show_image, image.name, self.data_directory)
+            await asyncio.to_thread(self._follow, arguments["name"].replace("\\", "/"), image.name, directory, data)
             return _structured(image.model_dump(mode="json"))
+        if params.name == COPY_IMAGE.name:
+            image = await asyncio.to_thread(
+                self._copy_image, arguments["name"], arguments["new_name"], self.directory, self.data_directory, numbered
+            )
+            return _structured(image.model_dump(mode="json"))
+        if params.name == IMPORT_IMAGE.name:
+            image = await asyncio.to_thread(self._import, arguments)
+            return _structured(image.model_dump(mode="json"))
+        if params.name == CHOOSE_IMAGES.name:
+            chosen = await self._in_dialog(self._choose_files, self._dialog_folder(), CHOOSE_IMAGES_TITLE)
+            if chosen:
+                self._last_folder = chosen[0].parent
+            return _structured(await asyncio.to_thread(self._import_chosen, chosen, arguments.get("folder")))
         if params.name == DELETE_IMAGE.name:
             await asyncio.to_thread(self._delete_image, arguments["name"], self.directory, self.data_directory)
             self._listing = None
             return _text(f"Deleted {arguments['name']}.")
+        if params.name == CREATE_FOLDER.name:
+            made = await asyncio.to_thread(
+                self._create_folder, arguments["name"], self.directory, self.data_directory, numbered
+            )
+            return _structured({"name": made})
+        if params.name == MOVE_FOLDER.name:
+            directory, data = self.directory, self.data_directory
+            moved = await asyncio.to_thread(
+                self._move_folder, arguments["name"], arguments["new_name"], directory, data, numbered
+            )
+            self._listing = None
+            await asyncio.to_thread(self._follow, arguments["name"].replace("\\", "/"), moved, directory, data)
+            return _structured({"name": moved})
+        if params.name == DELETE_FOLDER.name:
+            left = await asyncio.to_thread(
+                self._delete_folder, arguments["name"], self.directory, self.data_directory
+            )
+            self._listing = None
+            return _structured({"left": left})
+        if params.name == RELINK_IMAGE.name:
+            directory, data = self.directory, self.data_directory
+            found = await asyncio.to_thread(self._relink_images, [arguments["name"]], directory, data)
+            for move in found.relinked:
+                await asyncio.to_thread(self._follow, move.name, move.new_name, directory, data)
+            self._listing = self._relinked = None
+            return _structured(found.model_dump(mode="json"))
         if params.name == RESTORE_VERSION.name:
             image = await asyncio.to_thread(
                 self._restore_image_version,
@@ -664,6 +772,23 @@ def _structured(structured: dict[str, Any]) -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(structured))], structured_content=structured
     )
+
+
+def _unlinked(listing: ImageListing) -> tuple[tuple[str, ...], tuple[tuple[str, str | None], ...]] | None:
+    """What `relink_images` works from in a listing: the images with no file, and the files nothing is kept for. None
+    when there is none of either, so there is nothing to relink."""
+    gone = tuple(
+        image.name
+        for image in listing.images
+        if image.id is not None and image.modified is None and image.versions and image.status != "running"
+    )
+    free = tuple((image.name, image.sha256) for image in listing.images if image.id is None)
+    return (gone, free) if gone and free else None
+
+
+def _in_folder(folder: str | None) -> str | None:
+    """A folder as `import_image` takes it for a name: ending in a slash, so the image keeps its file's name."""
+    return f"{folder.rstrip('/')}/" if folder else None
 
 
 def _upload_of(reference: dict[str, Any]) -> str | None:

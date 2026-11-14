@@ -10,7 +10,10 @@ from image_design.capabilities.app.mcp_server import AppServer
 from image_design.capabilities.chatgpt_image import generate as chatgpt_image
 from image_design.capabilities.chatgpt_image import method as chatgpt_method
 from image_design.capabilities.intelligence_models import intelligence_models
+from image_design.capabilities.manage_images import folders as image_folders
+from image_design.capabilities.manage_images import imports as image_imports
 from image_design.capabilities.manage_images import manage_images
+from image_design.capabilities.manage_images import relink as image_relink
 from image_design.capabilities.openai_image import generate
 from image_design.capabilities.openai_image import key as openai_key
 from image_design.capabilities.openai_image import method as openai_method
@@ -30,6 +33,7 @@ from image_design.schemas import (
     ImageActivity,
     ImageListing,
     ImageMethods,
+    ImageRelinking,
     ImageRequestPreview,
     ImageSummary,
     ImageView,
@@ -396,7 +400,7 @@ def export_svg_image(
 
 
 def list_images(directory: Path | None = None, data_directory: Path | None = None) -> ImageListing:
-    """Every image in the directory, in name order, with its versions and how its last run went.
+    """Every image in the directory, in name order, with its versions and how its last run went, and every folder.
 
     An image file put in the directory by hand is listed too, with no versions until the tool changes it.
     """
@@ -428,18 +432,120 @@ def view_image(
 
 
 def move_image(
-    name: str, new_name: str, directory: Path | None = None, data_directory: Path | None = None
+    name: str,
+    new_name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    numbered: bool = False,
 ) -> ImageSummary:
     """Rename an image, or move it to another folder of the directory. It keeps its versions and its history.
 
-    The new name keeps the extension, since moving an image does not convert it.
+    The new name keeps the extension, since moving an image does not convert it. A name that is taken is refused, or
+    with `numbered` becomes the first free one of `name (2)`, `name (3)`, and so on, which the summary returned has.
     """
-    return manage_images.move_image(name, new_name, directory, data_directory)
+    return manage_images.move_image(name, new_name, directory, data_directory, numbered)
+
+
+def copy_image(
+    name: str,
+    new_name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    numbered: bool = False,
+) -> ImageSummary:
+    """Make another image under `new_name`, with a copy of the image's file and of everything kept for it: its
+    versions, its runs, and for a drawn SVG its script and sessions. The two are separate images from then on.
+
+    The new name keeps the extension. A name that is taken is refused, or with `numbered` becomes the first free one
+    of `name (2)`, `name (3)`, and so on. An image a run is working on is refused until the run ends.
+    """
+    return manage_images.copy_image(name, new_name, directory, data_directory, numbered)
+
+
+def import_image(
+    path: Path,
+    name: str | None = None,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    numbered: bool = False,
+) -> ImageSummary:
+    """Bring an image file from anywhere on this machine into the directory as a new image.
+
+    The file is copied and left as it is, and the copy is the image's first version, so a later edit can go back to
+    it. A PNG, JPEG, WebP, GIF, or SVG is kept as it is, and any other still image, such as a BMP or TIFF, as a PNG.
+
+    Args:
+        path: The image file to bring in.
+        name: The image's path in `directory`. It takes the file's own name at the top of the directory when None,
+            and the file's name in a folder when it ends in a slash, such as `photos/`. A file already in the
+            directory under that name stays where it is and is kept from then on.
+        directory: Where images are kept; `.image-design` in the working directory when None.
+        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        numbered: Take the first free one of `name (2)`, `name (3)`, and so on when the name is taken, rather than
+            refuse.
+    """
+    return image_imports.import_image(path, name, directory, data_directory, numbered)
 
 
 def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
     """Delete an image's file and everything kept for it. A run working on it is stopped first."""
     manage_images.delete_image(name, directory, data_directory)
+
+
+def create_folder(
+    name: str, directory: Path | None = None, data_directory: Path | None = None, numbered: bool = False
+) -> str:
+    """Make a folder in the directory, and any above it, and return its name. A folder stays until it is deleted.
+
+    A name that is taken is refused, or with `numbered` becomes the first free one of `name (2)`, `name (3)`, and so
+    on.
+    """
+    return image_folders.create_folder(name, directory, data_directory, numbered)
+
+
+def move_folder(
+    name: str,
+    new_name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    numbered: bool = False,
+) -> str:
+    """Rename a folder, or move it into another, with everything in it, and return its name.
+    Its images keep their versions and their history.
+
+    It is refused while a run works on an image in it. A name that is taken is refused, or with `numbered` becomes
+    the first free one of `name (2)`, `name (3)`, and so on.
+    """
+    return image_folders.move_folder(name, new_name, directory, data_directory, numbered)
+
+
+def delete_folder(name: str, directory: Path | None = None, data_directory: Path | None = None) -> list[str]:
+    """Delete every image in a folder as `delete_image` does, then the folder and the folders in it.
+
+    Returns what is left, by paths in the directory: the files in it that are not images, which the tool never
+    deletes, so the folder stays to hold them. Empty when the folder is gone.
+    """
+    return image_folders.delete_folder(name, directory, data_directory)
+
+
+def relink_images(
+    likely: list[str] | None = None, directory: Path | None = None, data_directory: Path | None = None
+) -> ImageRelinking:
+    """Find the images whose files were moved or renamed outside the tool, and keep each under the name its file has.
+
+    An image is relinked when a file the tool keeps nothing for holds exactly what the image's current version does.
+    A file that only has the image's file name, as after it was changed and then moved, is reported as likely and
+    left alone.
+
+    Args:
+        likely: The images to relink to their likely file as well, by the names they are kept under.
+        directory: Where images are kept; `.image-design` in the working directory when None.
+        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+
+    Returns:
+        What was relinked, what is likely, and the images that still have no file.
+    """
+    return image_relink.relink_images(likely, directory, data_directory)
 
 
 def list_image_methods() -> ImageMethods:
@@ -548,7 +654,13 @@ def app_server(directory: Path | None = None, data_directory: Path | None = None
         list_images,
         view_image,
         move_image,
+        copy_image,
+        import_image,
         delete_image,
+        create_folder,
+        move_folder,
+        delete_folder,
+        relink_images,
         restore_image_version,
         read_image_activity,
         list_image_methods,

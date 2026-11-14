@@ -1,5 +1,7 @@
 `move-image` renames an image, or moves it to another folder of the directory. The image keeps its versions and its
-history. The new name keeps the extension, since moving an image does not convert it.
+history. The new name keeps the extension, since moving an image does not convert it. Move images with this rather
+than a file manager, which leaves the tool without the image's new name; `relink-images` repairs that. A folder the
+image leaves stays, even when it is left empty.
 
 ```bash
 image-design move-image --name cactus.png --new-name concepts/cactus.png
@@ -17,6 +19,8 @@ summary = move_image(name="cactus.png", new_name="concepts/cactus.png")
 - `--new-name`: The path to give it, with the same extension.
 - `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
 - `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--numbered`: When the new name is taken, take the next free name like it, such as `cactus (2).png`, instead of
+  failing.
 - `--json` (library: the `ImageSummary` returned): the image as JSON instead of text.
 
 ## Result

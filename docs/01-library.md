@@ -325,8 +325,42 @@ def view_image(
     data_directory: Path | None = None,
 ) -> ImageView
 def restore_image_version(name: str, version: str, directory: Path | None = None, data_directory: Path | None = None) -> ImageSummary
-def move_image(name: str, new_name: str, directory: Path | None = None, data_directory: Path | None = None) -> ImageSummary
+def move_image(
+    name: str,
+    new_name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    numbered: bool = False,
+) -> ImageSummary
+def copy_image(
+    name: str,
+    new_name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    numbered: bool = False,
+) -> ImageSummary
+def import_image(
+    path: Path,
+    name: str | None = None,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    numbered: bool = False,
+) -> ImageSummary
 def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None
+def create_folder(name: str, directory: Path | None = None, data_directory: Path | None = None, numbered: bool = False) -> str
+def move_folder(
+    name: str,
+    new_name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    numbered: bool = False,
+) -> str
+def delete_folder(name: str, directory: Path | None = None, data_directory: Path | None = None) -> list[str]
+def relink_images(
+    likely: list[str] | None = None,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+) -> ImageRelinking
 def cancel_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None
 def read_image_activity(
     name: str,
@@ -337,11 +371,18 @@ def read_image_activity(
 def list_image_methods() -> ImageMethods
 ```
 
-- `list_images` returns every image in the directory with its versions and the status of its last run.
+- `list_images` returns every image in the directory with its versions and the status of its last run, and every folder in `folders`, including empty ones. An image's `id` names what the tool keeps for it and stays the same when the image moves. It is None for a file the tool keeps nothing for.
 - `view_image` returns one image with its versions, and in `viewed` the image's file, or the `version` you pass, frame by frame with how long each frame is shown. A still image has one frame. Pass a folder as `frames_output` to also write each frame there as a PNG named `frame-<index>.png`. Nothing else is written.
 - `restore_image_version` replaces the image's file with an earlier version. For an SVG image, it also restores that version's `image.py`.
 - `move_image` renames an image or moves it to another folder. The image keeps its versions. The new name must keep the extension.
+- `copy_image` makes another image with a copy of the image's file and of everything kept for it: its versions, its runs, and for an SVG image its script and sessions. It is refused while a run is working on the image.
+- `import_image` copies an image file from anywhere on the machine into the directory as a new image, with the file as its first version. A PNG, JPEG, WebP, GIF, or SVG is kept as it is. Any other still image, such as a BMP or TIFF, is kept as a PNG. Without `name` the image has the file's name. A `name` that ends in a slash is the folder to put it in.
 - `delete_image` deletes an image and everything kept for it. If a run is working on the image, it's stopped first.
+- `create_folder` makes a folder and returns its name. A folder stays until `delete_folder` removes it, even when a move or a delete leaves it empty.
+- `move_folder` renames a folder or moves it into another, with everything in it, and returns its name. Its images keep their versions. It is refused while a run is working on an image in the folder.
+- `delete_folder` deletes every image in a folder, then the folder. It never deletes a file that is not an image. It returns the paths of those files, and the folder stays to hold them.
+- `relink_images` finds the images whose files were moved or renamed outside the tool, and keeps each under the name its file has. An image is relinked when a file the tool keeps nothing for has exactly the content of the image's current version. A file that only has the image's file name is returned in `likely`. Pass the image's name in `likely` to relink it as well.
+- With `numbered`, a name that is taken becomes the first free one of `name (2)`, `name (3)`, and so on, as in `cactus (2).png`. Without it, a name that is taken is refused.
 - `cancel_image` stops the run that is working on an image. It can be called from any process.
 - `read_image_activity` returns the history of an image: each request, what the agent did, and how each run ended. Pass the `cursor` from an earlier call as `after` to get only what is new. Each run's `started` event has its request, which names the files the run was given relative to the event's `run_folder`.
 - `list_image_methods` returns the three ways of making an image, whether each is set up on this machine, and the models and options each supports. Set up means installed, and for the OpenAI API that the key is set.
@@ -363,6 +404,17 @@ class ImageFrame(BaseModel):
     index: int  # from 0, as `frame` names it in generate_openai_image
     duration_ms: int  # 0 for a still image
     path: Path | None  # the PNG written for it, when `frames_output` was passed
+
+
+class ImageRelinking(BaseModel):
+    relinked: list[ImageMove]
+    likely: list[ImageMove]  # not relinked
+    gone: list[str]  # the images that still have no file, and no file that could be theirs
+
+
+class ImageMove(BaseModel):
+    name: str  # the name the tool had for the image
+    new_name: str  # where its file is
 ```
 
 An image's file is kept apart from the tool's data for it. With the default `data_directory`, the layout is:
@@ -385,7 +437,8 @@ An image's file is kept apart from the tool's data for it. With the default `dat
 
 `data_directory` has a `.gitignore` that ignores everything except each image's `image.json`, `image.py`, and `image.py.lock`.
 If you set `data_directory`, pass the same one in every call. The tool does not record where it is.
-An image file that you put in the directory yourself is listed like any other.
+An image file that you put in the directory yourself is listed like any other. The tool keeps nothing for it until the first request on it, which keeps the file as the image's first version.
+Move and rename images and folders with these functions. A file manager moves the file but not the name the tool keeps for the image, which `relink_images` then repairs.
 
 ## App
 
@@ -421,7 +474,10 @@ class AppServer:
 The server has one tool for an agent, `open_app`. It opens the browser page and returns its URL. It also takes `directory` and `data_directory`, and switches the app to them when the directory can be listed, and `name`, an image to bring up as `show` does.
 The other tools are for the view. They are listed only to hosts that render MCP Apps, and marked for the app alone. The view and the resource templates are listed to the same hosts.
 
-- `list_images`, `view_image`, `move_image`, `delete_image`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's directory. `view_image` writes no frames out, and `list_images` also returns `shown`, the image the app showed last.
+- `list_images`, `view_image`, `move_image`, `copy_image`, `delete_image`, `create_folder`, `move_folder`, `delete_folder`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's directory. `view_image` writes no frames out. After an image or a folder moves, the image the app shows, the pins, and the used references follow it.
+- `list_images` first calls `relink_images`, so an image moved outside the app is listed where its file is. It also returns `shown`, the image the app showed last, and `likely`, the images `relink_images` left as likely.
+- `relink_image` relinks one of those images to its likely file.
+- `import_image` brings an upload into the app's directory as a new image, in a `folder` or at the top. `choose_image_files` asks the user for files in the platform's file dialog and imports each. It returns the images, and the reason for each file it refused.
 - `show_image` records the image the user is looking at, which the app opens on next time.
 - `generate_openai_image` and `generate_chatgpt_image` start a run on the app's directory with `detach=True` and `origin="app"`, so the image goes on being made when the app closes. They return the image's name and the run's ID once the run has started. They take the prompt, the name, the version to edit, the model and output options, and what guides the request: `references`, `marks`, and for the OpenAI API a `mask`. For the OpenAI API they also take `frame`, `frames`, and `frame_ms`. Each reference is a `path` the app offers or an `upload`, and the mask is an upload. A `path` can have a `frame`, which sends that one frame of an animation as a still image. A started run has copied what it was given, so the uploads it took are cleared, and the result's `references` says where each is offered from now.
 - `preview_openai_image_request` and `preview_chatgpt_image_request` take the same arguments and return the `ImageRequestPreview`.

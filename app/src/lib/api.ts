@@ -7,7 +7,14 @@ const LIST_TOOL = "list_images";
 const SHOW_TOOL = "show_image";
 const VIEW_TOOL = "view_image";
 const MOVE_TOOL = "move_image";
+const COPY_TOOL = "copy_image";
+const IMPORT_TOOL = "import_image";
+const CHOOSE_IMAGES_TOOL = "choose_image_files";
 const DELETE_TOOL = "delete_image";
+const CREATE_FOLDER_TOOL = "create_folder";
+const MOVE_FOLDER_TOOL = "move_folder";
+const DELETE_FOLDER_TOOL = "delete_folder";
+const RELINK_TOOL = "relink_image";
 const RESTORE_TOOL = "restore_image_version";
 const ACTIVITY_TOOL = "read_image_activity";
 const METHODS_TOOL = "list_image_methods";
@@ -104,6 +111,8 @@ export type ImageRun = {
 export type ImageSummary = {
   /** The image's path in the directory, with forward slashes. */
   name: string;
+  /** Names what is kept for the image, and stays the same when it moves; null for a file nothing is kept for. */
+  id: string | null;
   /** The image's file, on the machine the app runs on. */
   path: string;
   /** Of the image's file; null when it has none, or one that cannot be read. */
@@ -161,9 +170,23 @@ export type ImageListing = {
   directory: string;
   data_directory: string;
   images: ImageSummary[];
+  /** Every folder in the directory, by its path with forward slashes, whether or not it holds an image. */
+  folders: string[];
   /** The image the app showed last; null when it has shown none, or that image is gone. */
   shown: string | null;
+  /** The images with no file that `relinkImage` can point at the file that may be theirs. */
+  likely: ImageMove[];
   unreadable: string[];
+};
+
+/** `ImageMove` in schemas.py: an image whose file is under another name than the tool has for it. */
+export type ImageMove = { name: string; new_name: string };
+
+/** A file the app would not bring in, and which failure it was, as `describe` words them. */
+export type RefusedFile = {
+  name: string;
+  reason: string | null;
+  message: string;
 };
 
 /** `PaneLayout` in schemas.py. */
@@ -491,15 +514,107 @@ export async function viewImage(
   )) as ImageView;
 }
 
-/** Rename the image, or move it to another folder of the directory. */
+/**
+ * Rename the image, or move it to another folder of the directory. With `numbered`, a name that is taken becomes the
+ * next free one like it, which the image returned has.
+ */
 export async function moveImage(
   name: string,
   newName: string,
+  numbered = false,
 ): Promise<ImageSummary> {
   return (await structuredFrom(MOVE_TOOL, {
     name,
     new_name: newName,
+    numbered,
   })) as ImageSummary;
+}
+
+/** Make another image with a copy of the image's file and of everything kept for it. */
+export async function copyImage(
+  name: string,
+  newName: string,
+  numbered = false,
+): Promise<ImageSummary> {
+  return (await structuredFrom(COPY_TOOL, {
+    name,
+    new_name: newName,
+    numbered,
+  })) as ImageSummary;
+}
+
+/**
+ * Bring a file sent up under `upload` into the directory as a new image, in `folder` or at the top when null, under
+ * the file's own name.
+ */
+export async function importImage(
+  upload: string,
+  folder: string | null,
+  numbered = false,
+): Promise<ImageSummary> {
+  return (await structuredFrom(
+    IMPORT_TOOL,
+    folder === null ? { upload, numbered } : { upload, folder, numbered },
+    START_TIMEOUT_MS,
+  )) as ImageSummary;
+}
+
+/**
+ * Ask the person for image files in their platform's file dialog, and bring each into `folder`, or the top when
+ * null.
+ */
+export async function chooseImageFiles(
+  folder: string | null,
+): Promise<{ images: ImageSummary[]; refused: RefusedFile[] }> {
+  return (await structuredFrom(
+    CHOOSE_IMAGES_TOOL,
+    folder === null ? {} : { folder },
+    DIALOG_TIMEOUT_MS,
+  )) as { images: ImageSummary[]; refused: RefusedFile[] };
+}
+
+/** Make a folder in the directory, and return its name. */
+export async function createFolder(
+  name: string,
+  numbered = false,
+): Promise<string> {
+  const structured = await structuredFrom(CREATE_FOLDER_TOOL, {
+    name,
+    numbered,
+  });
+  return structured.name as string;
+}
+
+/** Rename a folder, or move it into another, with everything in it, and return its name. */
+export async function moveFolder(
+  name: string,
+  newName: string,
+  numbered = false,
+): Promise<string> {
+  const structured = await structuredFrom(MOVE_FOLDER_TOOL, {
+    name,
+    new_name: newName,
+    numbered,
+  });
+  return structured.name as string;
+}
+
+/**
+ * Delete every image in a folder, then the folder. Returns the files in it that are not images, which are left with
+ * the folder.
+ */
+export async function deleteFolder(name: string): Promise<string[]> {
+  const structured = await structuredFrom(
+    DELETE_FOLDER_TOOL,
+    { name },
+    START_TIMEOUT_MS,
+  );
+  return structured.left as string[];
+}
+
+/** Keep an image that has no file under the name of the file that is likely its own. */
+export async function relinkImage(name: string): Promise<void> {
+  await call(RELINK_TOOL, { name });
 }
 
 /** Delete the image's file and everything kept for it. */

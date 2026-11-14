@@ -7,7 +7,7 @@ import uuid
 
 from PIL import Image, UnidentifiedImageError
 
-from image_design.capabilities.app.settings import STATE_FOLDER
+from image_design.capabilities.app.settings import STATE_FOLDER, moved_path
 from image_design.schemas import (
     AppState,
     ImageDesignError,
@@ -72,6 +72,23 @@ def remember_used(data: Path, given: list[UsedReference]) -> None:
     make_data_directory(data)
     (data / STATE_FOLDER).mkdir(exist_ok=True)
     write_atomically(data / STATE_FOLDER / USED, kept.model_dump_json(indent=2))
+
+
+def follow_move(data: Path, old: Path, new: Path) -> None:
+    """Point what was used before in `data` at a file, or at everything in a folder, that went from `old` to `new`."""
+    used = _read_used(data).used
+    moved = [
+        each.model_copy(
+            update={
+                "path": moved_path(each.path, old, new),
+                # A reference named after its file takes the file's new name.
+                "name": moved_path(each.path, old, new).name if each.name == each.path.name else each.name,
+            }
+        )
+        for each in used
+    ]
+    if moved != used:
+        write_atomically(data / STATE_FOLDER / USED, UsedReferences(used=moved).model_dump_json(indent=2))
 
 
 def is_used(data: Path, path: Path) -> bool:

@@ -1,12 +1,14 @@
-"""Work on any image, whichever method made it: list, view, move, and delete images, put an earlier version back, stop
-a run, and read an image's history."""
+"""Work on any image, whichever method made it: list, view, move, copy, and delete images, put an earlier version
+back, stop a run, and read an image's history."""
 
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import secrets
 import shutil
 import time
+import uuid
 
+from image_design.capabilities.manage_images.names import find, name_of, settled, summary_of, with_same_extension
 from image_design.schemas import (
     ImageActivity,
     ImageDesignError,
@@ -22,18 +24,17 @@ from image_design.shared.images import pictures
 from image_design.shared.images.runs import CANCEL
 from image_design.shared.images.store import (
     EVENTS,
+    IMAGES,
     StoredImage,
     directories,
-    find_image,
-    found_names,
+    found,
     found_summary,
-    image_name,
     kept_images,
     load_runs,
     read_events,
     release_lock,
-    remove_empty_folders,
     require_image,
+    save_record,
     take_lock,
 )
 from image_design.shared.images.store import alive as process_alive
@@ -46,7 +47,7 @@ EXIT_WAIT_SECONDS = 1
 
 
 def list_images(directory: Path | None = None, data_directory: Path | None = None) -> ImageListing:
-    """Every image in the directory, in name order. Reads only.
+    """Every image in the directory, in name order, and every folder. Reads only.
 
     An image file the tool keeps no data for, such as one put there by hand, is listed with no versions.
     """
@@ -56,9 +57,12 @@ def list_images(directory: Path | None = None, data_directory: Path | None = Non
     kept, unreadable = kept_images(root, data)
     images = [image.summary() for image in kept]
     names = {image.name.casefold() for image in kept}
-    images.extend(found_summary(root, name) for name in found_names(root, data) if name.casefold() not in names)
+    there = found(root, data)
+    images.extend(found_summary(root, name) for name in there.names if name.casefold() not in names)
     images.sort(key=lambda summary: summary.name.casefold())
-    return ImageListing(directory=root, data_directory=data, images=images, unreadable=unreadable)
+    return ImageListing(
+        directory=root, data_directory=data, images=images, folders=there.folders, unreadable=unreadable
+    )
 
 
 def view_image(
@@ -71,10 +75,10 @@ def view_image(
     """The image's summary, with its file or one of its versions frame by frame. Writes only to `frames_output`, a
     folder each frame is written to as a PNG named after its index."""
     root, data = directories(directory, data_directory)
-    found = _find(root, data, name)
-    summary = _summary(found, root)
+    viewing = find(root, data, name)
+    summary = summary_of(viewing, root)
     if version is not None:
-        image = found if isinstance(found, StoredImage) else require_image(root, data, name)
+        image = viewing if isinstance(viewing, StoredImage) else require_image(root, data, name)
         viewed = _frames(image.folder / image.version(version).file, version)
     elif summary.width is not None:
         viewed = _frames(root / summary.name, None)
@@ -93,35 +97,24 @@ def view_image(
 
 
 def move_image(
-    name: str, new_name: str, directory: Path | None = None, data_directory: Path | None = None
+    name: str,
+    new_name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    numbered: bool = False,
 ) -> ImageSummary:
-    """Give the image another name, which moves its file, and return its summary there. Its versions stay with it."""
+    """Give the image another name, which moves its file, and return its summary there. Its versions stay with it.
+
+    A name that is taken is refused, or with `numbered` becomes the first free one of `name (2)`, `name (3)`, and on.
+    """
     root, data = directories(directory, data_directory)
-    found = _find(root, data, name)
-    old = _name(found)
-    new = image_name(new_name, root, data)
-    kept, wanted = PurePosixPath(old).suffix.lower(), PurePosixPath(new).suffix.lower()
-    if kept != wanted:
-        raise ImageDesignError(
-            f"{new_name!r} ends in {wanted} and {old} is a {kept}. Moving an image does not convert it, so end the "
-            f"new name in {kept}.",
-            "invalid-name",
-            old,
-        )
+    moving = find(root, data, name)
+    old = name_of(moving)
+    new = with_same_extension(old, new_name, root, data)
     if new == old:
-        return _summary(found, root)
+        return summary_of(moving, root)
+    new = settled(root, data, new, moving, numbered, old)
     source, target = root / old, root / new
-    taken = find_image(root, data, new)
-    if isinstance(found, StoredImage) and taken is not None and taken.record.id == found.record.id:
-        taken = None
-    # The same file under another case is the image itself, on a file system that ignores case.
-    if taken is not None or (target.exists() and not (source.exists() and target.samefile(source))):
-        raise ImageDesignError(
-            f"{target} already exists, so {old} cannot take its name. Choose another name, or delete that image first "
-            f"with `image-design delete-image --name {new}`.",
-            "name-in-use",
-            new,
-        )
     holder = f"move-{secrets.token_hex(3)}"
     locks = [take_lock(data, old, holder)]
     try:
@@ -138,58 +131,102 @@ def move_image(
                     None,
                     old,
                 ) from None
-            remove_empty_folders(source.parent, root)
-        if isinstance(found, StoredImage):
-            found.record.name = new
-            found.save_record()
+        if isinstance(moving, StoredImage):
+            moving.record.name = new
+            moving.save_record()
     finally:
         for lock in locks:
             release_lock(lock, holder)
-    return _summary(_find(root, data, new), root)
+    return summary_of(find(root, data, new), root)
+
+
+def copy_image(
+    name: str,
+    new_name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    numbered: bool = False,
+) -> ImageSummary:
+    """Make another image under `new_name` with a copy of the image's file and of everything kept for it, and return
+    its summary.
+
+    A name that is taken is refused, or with `numbered` becomes the first free one of `name (2)`, `name (3)`, and on.
+    """
+    root, data = directories(directory, data_directory)
+    original = find(root, data, name)
+    old = name_of(original)
+    new = settled(root, data, with_same_extension(old, new_name, root, data), None, numbered, f"a copy of {old}")
+    source, target = root / old, root / new
+    holder = f"copy-{secrets.token_hex(3)}"
+    # Claimed as a run claims it, so what is kept for the image does not change while it is copied.
+    locks = [take_lock(data, old, holder)]
+    try:
+        locks.append(take_lock(data, new, holder))
+        try:
+            if isinstance(original, StoredImage):
+                _copy_kept(original, new)
+            if source.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+        except OSError as error:
+            raise ImageDesignError(
+                f"{old} could not be copied to {target}: {error}. Check that {root} and {data} can be written and "
+                "have room.",
+                None,
+                old,
+            ) from None
+    finally:
+        for lock in locks:
+            release_lock(lock, holder)
+    return summary_of(find(root, data, new), root)
 
 
 def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
     """Delete the image's file and everything kept for it, stopping a run working on it first."""
     root, data = directories(directory, data_directory)
-    found = _find(root, data, name)
-    if isinstance(found, str):
-        _remove_file(root / found, found)
-        remove_empty_folders((root / found).parent, root)
+    deleting = find(root, data, name)
+    if isinstance(deleting, str):
+        _remove_file(root / deleting, deleting)
         return
-    run = found.running()
+    refuse_run_here(deleting)
+    run = deleting.running()
+    if run is not None:
+        _stop(deleting, run)
+    holder = f"delete-{secrets.token_hex(3)}"
+    lock = take_lock(data, deleting.name, holder)
+    try:
+        # Moved aside in one step first, so what is kept for the image is either all there or all gone.
+        aside = data / f".deleting-{deleting.record.id}"
+        try:
+            deleting.folder.rename(aside)
+        except OSError as error:
+            raise ImageDesignError(
+                f"What is kept for {deleting.name} in {deleting.folder} could not be removed: {error}. Close whatever "
+                "has a file in it open, then delete the image again.",
+                None,
+                deleting.name,
+            ) from None
+        try:
+            _remove_file(deleting.path, deleting.name)
+        except ImageDesignError:
+            aside.rename(deleting.folder)
+            raise
+        shutil.rmtree(aside, ignore_errors=True)
+    finally:
+        release_lock(lock, holder)
+
+
+def refuse_run_here(image: StoredImage) -> None:
+    """Raise when a run in this process is working on the image, which deleting it cannot stop."""
+    run = image.running()
     if run is not None and run.pid == os.getpid():
         # Its handle is here, and waiting for it to end could hold up the very loop that ends it.
         raise ImageDesignError(
-            f"Image {found.name} is being worked on by a run in this process. Stop it with `await run.cancel()` on its "
+            f"Image {image.name} is being worked on by a run in this process. Stop it with `await run.cancel()` on its "
             "handle, then delete the image.",
             "already-running",
-            found.name,
+            image.name,
         )
-    if run is not None:
-        _stop(found, run)
-    holder = f"delete-{secrets.token_hex(3)}"
-    lock = take_lock(data, found.name, holder)
-    try:
-        # Moved aside in one step first, so what is kept for the image is either all there or all gone.
-        aside = data / f".deleting-{found.record.id}"
-        try:
-            found.folder.rename(aside)
-        except OSError as error:
-            raise ImageDesignError(
-                f"What is kept for {found.name} in {found.folder} could not be removed: {error}. Close whatever has a "
-                "file in it open, then delete the image again.",
-                None,
-                found.name,
-            ) from None
-        try:
-            _remove_file(found.path, found.name)
-        except ImageDesignError:
-            aside.rename(found.folder)
-            raise
-        shutil.rmtree(aside, ignore_errors=True)
-        remove_empty_folders(found.path.parent, root)
-    finally:
-        release_lock(lock, holder)
 
 
 def restore_image_version(
@@ -244,6 +281,10 @@ def read_image_activity(
     cursor = after
     for index in range(first, len(ids)):
         read, end = read_events(image.run_folder(ids[index]) / EVENTS, offset if index == first else 0)
+        for event in read:
+            if event.kind == "started":
+                # Where the run's folder is now, which is not where it started for a copy or a project that moved.
+                event.data["run_folder"] = str(image.run_folder(ids[index]))
         events.extend(read)
         cursor = f"{ids[index]}:{end}"
     return ImageActivity(name=image.name, events=events, status=image.summary().status, cursor=cursor)
@@ -281,34 +322,18 @@ def _write_frames(viewed: ImageFrames, output: Path, name: str) -> None:
         ) from None
 
 
-def _find(root: Path, data: Path, name: str) -> StoredImage | str:
-    """The image named `name`: what the tool keeps for it, or only its name when it is a file the tool has not kept.
-
-    Case is ignored, as Windows and macOS do, and the name returned is the one the file has.
-    """
-    wanted = image_name(name, root, data)
-    image = find_image(root, data, wanted)
-    if image is not None:
-        return image
-    found = found_names(root, data)
-    for each in found:
-        if each.casefold() == wanted.casefold():
-            return each
-    known = ", ".join(found) or "none"
-    raise ImageDesignError(
-        f"There is no image named {name!r} in {root}. The images there: {known}. Name one of them, or pass the "
-        "--directory and --data-directory it was made with.",
-        "no-such-image",
-        name,
-    )
-
-
-def _name(found: StoredImage | str) -> str:
-    return found.name if isinstance(found, StoredImage) else found
-
-
-def _summary(found: StoredImage | str, root: Path) -> ImageSummary:
-    return found.summary() if isinstance(found, StoredImage) else found_summary(root, found)
+def _copy_kept(original: StoredImage, new: str) -> None:
+    """Keep for the image named `new` a copy of everything kept for `original`."""
+    record = original.record.model_copy(update={"id": uuid.uuid4().hex, "name": new})
+    # Copied aside and moved into place in one step, so a listing never reads a copy that is half there.
+    aside = original.data / f".copying-{record.id}"
+    try:
+        shutil.copytree(original.folder, aside)
+        save_record(aside, record)
+        aside.rename(original.data / IMAGES / record.id)
+    except OSError:
+        shutil.rmtree(aside, ignore_errors=True)
+        raise
 
 
 def _remove_file(path: Path, name: str) -> None:
