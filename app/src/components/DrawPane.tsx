@@ -1,0 +1,1310 @@
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type ReactNode,
+} from "react";
+
+import { Message, MarkChip } from "@/components/activity/Message";
+import {
+  LiveStrip,
+  RunDivider,
+  RunResult,
+} from "@/components/activity/RunParts";
+import { StepBlock } from "@/components/activity/StepBlock";
+import { PromptPicker } from "@/components/PromptPicker";
+import { ReferenceLibrary } from "@/components/ReferenceLibrary";
+import { References } from "@/components/References";
+import { ReferenceThumb } from "@/components/ReferenceThumb";
+import { Button } from "@/components/ui/button";
+import { Dimension } from "@/components/ui/dimension";
+import { Textarea } from "@/components/ui/field";
+import { Icon } from "@/components/ui/icon";
+import { LoadingMark } from "@/components/ui/loading-mark";
+import { Markdown } from "@/components/ui/markdown";
+import {
+  Menu,
+  MenuContent,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "@/components/ui/menu";
+import { Notice } from "@/components/ui/notice";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Section } from "@/components/ui/section";
+import { Select } from "@/components/ui/select";
+import { Thumb } from "@/components/ui/thumb";
+import { Tooltip } from "@/components/ui/tooltip";
+import {
+  cancelImage,
+  drawSvgImage,
+  steerSvgImage,
+  type AppSvgRequest,
+  type ImageListing,
+  type ImageMethods,
+  type ImageSummary,
+} from "@/lib/api";
+import {
+  clearGuides,
+  clearMarks,
+  removeMark,
+  useGuides,
+  type CanvasMode,
+} from "@/lib/canvas";
+import { NEW_IMAGE, updateDraft, useDraft } from "@/lib/drafts";
+import {
+  agentOf,
+  budgetsOf,
+  CANVASES,
+  changeDrawing,
+  conversationOf,
+  drawOf,
+  effortLabel,
+  providerLabel,
+  sentDrawing,
+  sizeOf,
+  useDrawing,
+  type Agent,
+  type Budgets,
+} from "@/lib/drawing";
+import { describe } from "@/lib/errors";
+import { dimensions } from "@/lib/format";
+import { sentMark } from "@/lib/marks";
+import { versionPicture } from "@/lib/pictures";
+import { earlierPrompts } from "@/lib/prompts";
+import {
+  addFiles,
+  clearReferences,
+  imageFiles,
+  removeReference,
+  sentReferences,
+  useReferences,
+} from "@/lib/references";
+import {
+  DRAWING,
+  freeName,
+  stem,
+  typedName,
+  type Problem,
+  type Source,
+  type Target,
+} from "@/lib/request";
+import type { Runs } from "@/lib/runs";
+import { flushAppState, updateAppState, useAppState } from "@/lib/state";
+import {
+  currentCall,
+  runsOf,
+  toggleOpened,
+  useOpened,
+  type Block,
+  type Run,
+} from "@/lib/thread";
+import { cn } from "@/lib/utils";
+import type { Shown } from "@/lib/viewed";
+
+// How close to the bottom still counts as at it, so new entries keep it scrolled down.
+const PINNED_PX = 48;
+const MATCH = "match";
+const CUSTOM = "custom";
+const FIXED = "fixed";
+const KB = 1024;
+const MINUTE = 60;
+const FIXED_CANVAS =
+  "A drawing keeps its canvas. Ask for another in a message.";
+
+function updateSvg(change: Partial<AppSvgRequest>) {
+  updateAppState((current) => ({
+    ...current,
+    svg: { ...current.svg, ...change },
+  }));
+}
+
+function same(a: [number, number], b: [number, number] | null): boolean {
+  return b !== null && a[0] === b[0] && a[1] === b[1];
+}
+
+/**
+ * What a new drawing will be called, or the drawing a request changes, and the image a new one is drawn from, over
+ * what else the request is picked with.
+ */
+function DrawTarget({
+  target,
+  typed,
+  canRestart,
+  onRestart,
+  onUseInNew,
+  children,
+}: {
+  target: Target;
+  /** A new drawing's name as it stands in the field. */
+  typed: string;
+  /** Whether "Start a new conversation" can be picked: the drawing has one, and the next request continues it. */
+  canRestart: boolean;
+  onRestart: () => void;
+  onUseInNew: (name: string) => void;
+  children?: ReactNode;
+}) {
+  const source: Source | null = target.image ? target : target.from;
+  return (
+    <div className="flex shrink-0 flex-col gap-2 border-b border-line p-3">
+      <div className="flex items-center gap-2.5">
+        {source ? (
+          <>
+            <Thumb
+              picture={
+                source.shown.picture && { ...source.shown.picture, small: true }
+              }
+              shape={source.shown}
+              className="size-11"
+            />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="truncate mono-value">{source.image.name}</span>
+              {target.image ? (
+                <span className="flex gap-2 mono-annotation text-ink-muted">
+                  {source.shown.version && (
+                    <span>{source.shown.version.id}</span>
+                  )}
+                  {source.shown.width !== null &&
+                    source.shown.height !== null && (
+                      <span>
+                        {dimensions(source.shown.width, source.shown.height)}
+                      </span>
+                    )}
+                </span>
+              ) : (
+                <span className="flex min-w-0 gap-1.5 text-caption text-ink-muted">
+                  Makes
+                  <span className="truncate mono-value text-ink">
+                    {target.name}
+                    {DRAWING}
+                  </span>
+                </span>
+              )}
+            </div>
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button size="sm" icon aria-label="More for the source" />
+                }
+              >
+                <Icon name="more" />
+              </MenuTrigger>
+              <MenuContent align="end">
+                <MenuItem onClick={() => onUseInNew(source.image.name)}>
+                  <Icon name="image" />
+                  Use as a reference instead
+                </MenuItem>
+                {target.image && (
+                  <MenuItem disabled={!canRestart} onClick={onRestart}>
+                    <Icon name="add" />
+                    Start a new conversation
+                  </MenuItem>
+                )}
+              </MenuContent>
+            </Menu>
+          </>
+        ) : (
+          <>
+            <span className="grid size-11 shrink-0 place-items-center rounded-sm border border-dashed border-line-control text-ink-muted">
+              <Icon name="add" size={20} />
+            </span>
+            <label className="flex h-7 min-w-0 flex-1 items-center gap-0.5 rounded-sm border border-line-control bg-field px-2 focus-within:border-ink focus-within:bg-panel focus-within:focus-ring">
+              <input
+                aria-label="Name"
+                spellCheck={false}
+                autoComplete="off"
+                value={typed}
+                onChange={(event) =>
+                  updateDraft(NEW_IMAGE, { name: event.target.value })
+                }
+                className="min-w-0 flex-1 bg-transparent mono-value text-ink outline-none"
+              />
+              <span className="mono-value text-ink-muted">{DRAWING}</span>
+            </label>
+          </>
+        )}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** A version a run made, as a card that shows it when clicked. */
+function Result({
+  drawing,
+  version,
+  viewing,
+  onView,
+}: {
+  drawing: ImageSummary;
+  version: string;
+  /** Whether that version is the one that shows. */
+  viewing: boolean;
+  onView: (version: string) => void;
+}) {
+  const kept = drawing.versions.find((each) => each.id === version);
+  if (!kept) {
+    return null;
+  }
+  return (
+    <li className="shrink-0">
+      <button
+        type="button"
+        aria-label={`Show ${drawing.name} ${kept.id}`}
+        aria-current={viewing || undefined}
+        onClick={() => onView(kept.id)}
+        className={cn(
+          "flex w-full cursor-default items-center gap-2.5 rounded-md border p-1.5 text-left focus-visible:focus-ring focus-visible:outline-none",
+          viewing
+            ? "border-accent-ink bg-accent-soft"
+            : "border-line bg-panel hover:bg-hover",
+        )}
+      >
+        <Thumb
+          picture={versionPicture(drawing, kept, true)}
+          shape={kept}
+          className="size-12"
+        />
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="truncate mono-value">{drawing.name}</span>
+          <span className="shrink-0 mono-annotation text-ink-muted">
+            {kept.id}
+          </span>
+          <span className="shrink-0 mono-annotation text-ink-muted">
+            {dimensions(kept.width, kept.height)}
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+}
+
+/** One part of a run as the activity shows it. */
+function RunBlock({
+  drawing,
+  run,
+  block,
+  opened,
+  viewing,
+  onView,
+}: {
+  drawing: ImageSummary;
+  run: Run;
+  block: Block;
+  opened: Record<string, boolean>;
+  viewing: string | null;
+  onView: (version: string) => void;
+}) {
+  switch (block.kind) {
+    case "message":
+      return <Message block={block} />;
+    case "said":
+      return (
+        <li className="shrink-0">
+          <Markdown>{block.text}</Markdown>
+        </li>
+      );
+    case "steps": {
+      const key = `${drawing.name}:${block.key}`;
+      const open = opened[key] ?? block.latest;
+      return (
+        <StepBlock
+          calls={block.calls}
+          started={block.started}
+          finished={block.finished}
+          state={block.state}
+          open={open}
+          onToggle={() => toggleOpened(key, !open)}
+        />
+      );
+    }
+    case "ended":
+      return (
+        <RunResult
+          status={block.status}
+          started={run.started}
+          ended={block.ended}
+          error={block.error}
+          usage={block.usage}
+        />
+      );
+    case "result":
+      return (
+        <Result
+          drawing={drawing}
+          version={block.version}
+          viewing={viewing === block.version}
+          onView={onView}
+        />
+      );
+  }
+}
+
+/**
+ * The drawing's activity, run by run: what was asked of it and by whom, what its agent said and did, how each run
+ * ended, and what it made.
+ */
+function Activity({
+  drawing,
+  runs,
+  label,
+  viewing,
+  ending,
+  onView,
+}: {
+  drawing: ImageSummary | null;
+  runs: Run[];
+  /** What a model is called, by its id. */
+  label: (model: string) => string;
+  /** The version that shows, by its id. */
+  viewing: string | null;
+  /** What closes the activity, such as the line a new conversation starts under. */
+  ending: ReactNode;
+  onView: (version: string) => void;
+}) {
+  const opened = useOpened();
+  const list = useRef<HTMLOListElement>(null);
+  const pinned = useRef(true);
+  const [behind, setBehind] = useState(false);
+  const size = runs.reduce(
+    (total, run) => total + run.blocks.length + run.calls.length,
+    0,
+  );
+
+  useEffect(() => {
+    if (pinned.current && list.current) {
+      list.current.scrollTop = list.current.scrollHeight;
+    }
+  }, [size, ending, drawing?.name]);
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <ol
+        ref={list}
+        onScroll={(event) => {
+          const element = event.currentTarget;
+          pinned.current =
+            element.scrollHeight - element.scrollTop - element.clientHeight <
+            PINNED_PX;
+          setBehind(!pinned.current);
+        }}
+        className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3"
+      >
+        {drawing &&
+          runs.map((run) => (
+            <Fragment key={run.id}>
+              <RunDivider run={run} label={label} />
+              {run.blocks.map((block) => (
+                <RunBlock
+                  key={block.key}
+                  drawing={drawing}
+                  run={run}
+                  block={block}
+                  opened={opened}
+                  viewing={viewing}
+                  onView={onView}
+                />
+              ))}
+            </Fragment>
+          ))}
+        {ending}
+      </ol>
+      {behind && (
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() =>
+            list.current?.scrollTo({
+              top: list.current.scrollHeight,
+              behavior: "smooth",
+            })
+          }
+          className="absolute bottom-2.5 left-1/2 -translate-x-1/2 shadow-popover"
+        >
+          <Icon name="arrow-down" />
+          Jump to latest
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** The agent that draws, by its agent provider, and how hard it thinks. */
+function AgentPicker({
+  agent,
+  methods,
+}: {
+  agent: Agent;
+  methods: ImageMethods;
+}) {
+  const { models } = methods.svg;
+  const providers = [...new Set(models.map((model) => model.agent_provider))];
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <Button
+            size="sm"
+            disabled={models.length === 0}
+            aria-label="Agent and reasoning effort"
+            className="min-w-0"
+          />
+        }
+      >
+        <span className="truncate">{agent.entry?.label ?? agent.model}</span>
+        <span className="text-ink-muted">{effortLabel(agent.effort)}</span>
+      </MenuTrigger>
+      <MenuContent side="top" align="start" className="w-60">
+        <MenuRadioGroup
+          value={`${agent.provider}/${agent.model}`}
+          onValueChange={(value: string) => {
+            const [provider, ...model] = value.split("/");
+            updateSvg({ agent_provider: provider, model: model.join("/") });
+          }}
+        >
+          {providers.map((provider) => (
+            <MenuGroup key={provider}>
+              <MenuGroupLabel>{providerLabel(provider)}</MenuGroupLabel>
+              {models
+                .filter((model) => model.agent_provider === provider)
+                .map((model) => (
+                  <MenuRadioItem
+                    key={model.id}
+                    value={`${provider}/${model.id}`}
+                    closeOnClick
+                  >
+                    {model.label}
+                  </MenuRadioItem>
+                ))}
+            </MenuGroup>
+          ))}
+        </MenuRadioGroup>
+        {agent.entry && (
+          <>
+            <MenuSeparator />
+            <MenuGroup>
+              <MenuGroupLabel>Reasoning effort</MenuGroupLabel>
+              <MenuRadioGroup
+                value={agent.effort}
+                onValueChange={(value: string) =>
+                  updateSvg({ reasoning_effort: value })
+                }
+              >
+                {agent.entry.reasoning_efforts.map((effort) => (
+                  <MenuRadioItem key={effort} value={effort} closeOnClick>
+                    {effortLabel(effort)}
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
+          </>
+        )}
+      </MenuContent>
+    </Menu>
+  );
+}
+
+/** A control beside its label. `off` says why it does not apply now, and greys the label. */
+function Row({
+  label,
+  off,
+  children,
+}: {
+  label: string;
+  off?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div title={off} className="flex min-h-7 items-center gap-2">
+      <span
+        className={cn(
+          "w-21 shrink-0 text-label",
+          off ? "text-ink-faint" : "text-ink-muted",
+        )}
+      >
+        {label}
+      </span>
+      <div className="flex min-w-0 flex-1 gap-1.5">{children}</div>
+    </div>
+  );
+}
+
+/** A number in a unit that is `scale` of it, as it reads; empty for null. */
+function scaled(number: number | null, scale: number): string {
+  return number === null
+    ? ""
+    : String(Math.round((number / scale) * 100) / 100);
+}
+
+/**
+ * A number typed in, in `unit`, which is `scale` of what it stands for; left empty, it is null. What was typed stays
+ * as typed while it says the same number, so a half-typed one such as `2.` is not rewritten.
+ */
+function NumberField({
+  label,
+  value,
+  unit,
+  scale = 1,
+  empty,
+  onChange,
+}: {
+  label: string;
+  value: number | null;
+  unit?: string;
+  scale?: number;
+  /** What an empty field means, shown in it and on the button that empties it; without one, it takes no empty value. */
+  empty?: string;
+  onChange: (value: number | null) => void;
+}) {
+  const asText = (number: number | null) => scaled(number, scale);
+  const parse = (typed: string): number | null | undefined => {
+    if (typed.trim() === "") {
+      return empty === undefined ? undefined : null;
+    }
+    const number = Number(typed);
+    return number > 0 ? Math.max(1, Math.round(number * scale)) : undefined;
+  };
+  const [typed, setTyped] = useState(asText(value));
+  const [last, setLast] = useState(value);
+  if (value !== last) {
+    setLast(value);
+    if (parse(typed) !== value) {
+      setTyped(asText(value));
+    }
+  }
+  const invalid = parse(typed) === undefined;
+  return (
+    <label className="flex h-7 min-w-0 flex-1 items-center gap-1 rounded-sm border border-line-control bg-field px-2 focus-within:border-ink focus-within:bg-panel focus-within:focus-ring has-aria-invalid:border-danger">
+      <input
+        aria-label={label}
+        aria-invalid={invalid || undefined}
+        inputMode="decimal"
+        autoComplete="off"
+        placeholder={empty}
+        value={typed}
+        onChange={(event) => {
+          setTyped(event.target.value);
+          const parsed = parse(event.target.value);
+          if (parsed !== undefined) {
+            onChange(parsed);
+          }
+        }}
+        className="w-full min-w-0 bg-transparent mono-value text-ink outline-none placeholder:font-sans placeholder:text-ink-muted"
+      />
+      {unit && (
+        <span className="shrink-0 mono-value text-ink-muted">{unit}</span>
+      )}
+      {empty !== undefined && typed !== "" && (
+        <Tooltip content={empty}>
+          <button
+            type="button"
+            aria-label={`${empty} for ${label.toLowerCase()}`}
+            onClick={() => {
+              setTyped("");
+              onChange(null);
+            }}
+            className="-mr-1 grid size-5 shrink-0 cursor-default place-items-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink focus-visible:focus-ring focus-visible:outline-none"
+          >
+            <Icon name="close" />
+          </button>
+        </Tooltip>
+      )}
+    </label>
+  );
+}
+
+/** The agent that draws and how hard it thinks, as rows of a form. */
+function AgentRows({
+  agent,
+  methods,
+}: {
+  agent: Agent;
+  methods: ImageMethods;
+}) {
+  const { models } = methods.svg;
+  return (
+    <>
+      <Row label="Agent">
+        <Select
+          label="Agent"
+          value={`${agent.provider}/${agent.model}`}
+          disabled={models.length === 0}
+          onChange={(value) => {
+            const [provider, ...model] = value.split("/");
+            updateSvg({ agent_provider: provider, model: model.join("/") });
+          }}
+          items={models.map((model) => ({
+            value: `${model.agent_provider}/${model.id}`,
+            label: model.label,
+            group: providerLabel(model.agent_provider),
+          }))}
+        />
+      </Row>
+      <Row label="Reasoning">
+        <Select
+          label="Reasoning effort"
+          value={agent.effort}
+          disabled={!agent.entry}
+          onChange={(reasoning_effort) => updateSvg({ reasoning_effort })}
+          items={(agent.entry?.reasoning_efforts ?? [agent.effort]).map(
+            (effort) => ({ value: effort, label: effortLabel(effort) }),
+          )}
+        />
+      </Row>
+    </>
+  );
+}
+
+type BudgetProps = {
+  budgets: Budgets;
+  /** Whether the canvas is the drawing's own, which a message can ask to change. */
+  fixed: boolean;
+  /** The size of the image a new drawing is made from, which it can match; null when there is none. */
+  match: [number, number] | null;
+  /** In seconds; null for no limit. */
+  timeout: number | null;
+  onChange: (change: Partial<Budgets>) => void;
+};
+
+/** What the drawing is held to, as rows of a form. The agent is told, and the drawing is measured against it. */
+function BudgetRows({ budgets, fixed, match, timeout, onChange }: BudgetProps) {
+  const [custom, setCustom] = useState(false);
+  const preset = CANVASES.find(({ size }) => same(size, budgets.canvas));
+  const choice = fixed
+    ? FIXED
+    : custom
+      ? CUSTOM
+      : match && same(budgets.canvas, match)
+        ? MATCH
+        : preset
+          ? preset.size.join("x")
+          : CUSTOM;
+  const [width, height] = budgets.canvas;
+  return (
+    <>
+      <Row label="Canvas" off={fixed ? FIXED_CANVAS : undefined}>
+        <Select
+          label="Canvas"
+          value={choice}
+          disabled={fixed}
+          onChange={(value) => {
+            setCustom(value === CUSTOM);
+            if (value === MATCH && match) {
+              onChange({ canvas: match });
+            }
+            const found = CANVASES.find(({ size }) => size.join("x") === value);
+            if (found) {
+              onChange({ canvas: found.size });
+            }
+          }}
+          items={
+            fixed
+              ? [{ value: FIXED, label: dimensions(width, height) }]
+              : [
+                  ...(match
+                    ? [
+                        {
+                          value: MATCH,
+                          label: "Match source",
+                          aside: dimensions(match[0], match[1]),
+                        },
+                      ]
+                    : []),
+                  ...CANVASES.map(({ label, size }) => ({
+                    value: size.join("x"),
+                    label,
+                    aside: dimensions(size[0], size[1]),
+                  })),
+                  { value: CUSTOM, label: "Custom" },
+                ]
+          }
+        />
+      </Row>
+      {choice === CUSTOM && (
+        <Row label="">
+          <NumberField
+            label="Width"
+            value={width}
+            unit="w"
+            onChange={(value) =>
+              value !== null && onChange({ canvas: [value, height] })
+            }
+          />
+          <NumberField
+            label="Height"
+            value={height}
+            unit="h"
+            onChange={(value) =>
+              value !== null && onChange({ canvas: [width, value] })
+            }
+          />
+        </Row>
+      )}
+      <Row label="File size">
+        <NumberField
+          label="File size"
+          value={budgets.max_bytes}
+          unit="KB"
+          scale={KB}
+          empty="No limit"
+          onChange={(max_bytes) => onChange({ max_bytes })}
+        />
+      </Row>
+      <Row label="Time limit">
+        <NumberField
+          label="Time limit"
+          value={timeout}
+          unit="min"
+          scale={MINUTE}
+          empty="No limit"
+          onChange={(timeout_seconds) => updateSvg({ timeout_seconds })}
+        />
+      </Row>
+    </>
+  );
+}
+
+/** The budgets of a drawing already made, in a popover from the message box, with the limits set beside its name. */
+function BudgetPicker(props: BudgetProps) {
+  const { budgets, timeout } = props;
+  const limits = [
+    budgets.max_bytes !== null && `${scaled(budgets.max_bytes, KB)} KB`,
+    timeout !== null && `${scaled(timeout, MINUTE)} min`,
+  ].filter(Boolean);
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={<Button size="sm" variant="ghost" className="min-w-0" />}
+      >
+        <Icon name="sliders" />
+        Budget
+        {limits.length > 0 && (
+          <span className="truncate text-ink-muted">{limits.join(", ")}</span>
+        )}
+      </PopoverTrigger>
+      <PopoverContent
+        label="Budget"
+        side="top"
+        align="start"
+        className="flex w-80 flex-col gap-2 p-3"
+      >
+        <BudgetRows {...props} />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Why the message cannot be sent as it stands; null when it can. */
+function problemOf(
+  target: Target,
+  message: string,
+  methods: ImageMethods,
+  listing: ImageListing | null,
+  references: { name: string; state: string }[],
+  steering: boolean,
+): Problem | null {
+  if (!steering && !methods.svg.ready) {
+    return {
+      title: "No agent to draw with is set up where the app runs.",
+      text: methods.svg.problem ?? "",
+      quiet: false,
+    };
+  }
+  if (!target.image) {
+    if (target.name === "") {
+      return { text: "Give the drawing a name.", quiet: true };
+    }
+    const wanted = `${target.name}${DRAWING}`.toLowerCase();
+    if (listing?.images.some((image) => image.name.toLowerCase() === wanted)) {
+      return { text: "Another image already has that name.", quiet: false };
+    }
+  }
+  const failed = references.find((reference) => reference.state === "failed");
+  if (failed) {
+    return {
+      text: `${failed.name} did not reach the app. Remove it and add it again.`,
+      quiet: false,
+    };
+  }
+  if (references.some((reference) => reference.state === "uploading")) {
+    return { text: "A reference is still being added.", quiet: true };
+  }
+  return message.trim() === ""
+    ? {
+        text: target.image ? "Write a message." : "Describe the drawing.",
+        quiet: true,
+      }
+    : null;
+}
+
+/**
+ * Drawing an SVG with an agent. A new drawing is a form like an image model's request; one already made is a
+ * conversation: its activity, and a message box that starts a run or, while one works, steers it.
+ */
+export function DrawPane({
+  methods,
+  listing,
+  image,
+  shown,
+  runs,
+  mode,
+  onUseInNew,
+  onCreated,
+  onChanged,
+  onView,
+}: {
+  methods: ImageMethods;
+  listing: ImageListing | null;
+  image: ImageSummary | null;
+  shown: Shown | null;
+  runs: Runs;
+  mode: CanvasMode | null;
+  onUseInNew: (name: string) => void;
+  onCreated: (name: string) => Promise<void>;
+  onChanged: () => Promise<void>;
+  onView: (version: string | null) => void;
+}) {
+  const { state } = useAppState();
+  const options = state.svg;
+  const key = image ? image.name : NEW_IMAGE;
+  const draft = useDraft(key);
+  const newDraft = useDraft(NEW_IMAGE);
+  const references = useReferences(key);
+  const guides = useGuides(key, shown?.picture?.key ?? null);
+  const drawing = useDrawing(key);
+  const [picking, setPicking] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [over, setOver] = useState(false);
+  const [open, setOpen] = useState({
+    prompt: true,
+    references: true,
+    budget: true,
+  });
+
+  const typed = newDraft.name ?? freeName(listing, DRAWING);
+  const editing = image !== null && image.name.toLowerCase().endsWith(DRAWING);
+  const from: Source | null =
+    image && shown && !editing ? { image, shown } : null;
+  const target: Target =
+    image && shown && editing
+      ? { image, shown }
+      : from
+        ? {
+            image: null,
+            name: freeName(listing, DRAWING, stem(from.image.name)),
+            from,
+          }
+        : { image: null, name: typedName(typed, []), from: null };
+  const agent = agentOf(options, methods);
+  const conversation = editing ? conversationOf(image) : null;
+  const providerChanged =
+    conversation !== null && conversation.provider !== agent.provider;
+  const resume = conversation !== null && !drawing.fresh && !providerChanged;
+  // A drawing and one made from an image in view keep what is changed for the session; a new one's are remembered.
+  const local = editing || from !== null;
+  const base = budgetsOf(editing ? image : null, from, options, methods);
+  const budgets: Budgets = local ? { ...base, ...drawing.budgets } : base;
+  const run = editing ? image.last_run : null;
+  const running = editing && image.status === "running" && run !== null;
+  const marks = editing && mode === "markup" ? guides.marks : [];
+  const activity = editing ? runsOf(image, runs) : [];
+  const problem = problemOf(
+    target,
+    draft.prompt,
+    methods,
+    listing,
+    references,
+    running,
+  );
+  const label = (model: string) =>
+    methods.svg.models.find((each) => each.id === model)?.label ?? model;
+
+  const changeBudgets = (change: Partial<Budgets>) => {
+    if (local) {
+      changeDrawing(key, { budgets: { ...drawing.budgets, ...change } });
+    } else {
+      updateSvg(change);
+    }
+  };
+
+  const send = async () => {
+    if (problem !== null || sending) {
+      return;
+    }
+    setSending(true);
+    setFailure(null);
+    const message = draft.prompt;
+    const sent = sentReferences(references);
+    const sentMarks = marks.map(sentMark);
+    try {
+      // The server sends only references it knows the app offers, a pin among them once the pin is saved.
+      await flushAppState();
+      if (running && target.image) {
+        await steerSvgImage({
+          name: target.image.name,
+          message,
+          ...(sent.length > 0 ? { references: sent } : {}),
+          ...(sentMarks.length > 0 ? { marks: sentMarks } : {}),
+        });
+        clearMarks(target.image.name);
+      } else {
+        const started = await drawSvgImage(
+          drawOf(
+            target,
+            message,
+            agent,
+            options,
+            budgets,
+            drawing.budgets,
+            resume,
+            sent,
+            sentMarks,
+          ),
+        );
+        sentDrawing(key);
+        if (target.image) {
+          clearGuides(target.image.name);
+          // What the run makes lands in the drawing's file, so that is what shows while it works.
+          onView(null);
+          await onChanged();
+        } else {
+          if (!target.from) {
+            updateDraft(NEW_IMAGE, { name: null });
+          }
+          await onCreated(started.name);
+        }
+      }
+      // What a message was given goes with it; the next one starts empty.
+      updateDraft(key, { prompt: "" });
+      clearReferences(key);
+    } catch (cause) {
+      setFailure(
+        `${running ? "The message did not reach the agent." : "The drawing did not start."} ${describe(cause)}`,
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const stop = async () => {
+    if (!image || !run) {
+      return;
+    }
+    setStopping(run.id);
+    setFailure(null);
+    try {
+      await cancelImage(image.name);
+    } catch (cause) {
+      setStopping(null);
+      setFailure(`Could not stop the drawing. ${describe(cause)}`);
+    }
+  };
+
+  const notes = (failure || (problem && !problem.quiet)) && (
+    <>
+      {failure && <Notice onDismiss={() => setFailure(null)}>{failure}</Notice>}
+      {problem && !problem.quiet && (
+        <Notice tone="neutral" icon="warning" title={problem.title}>
+          {problem.text}
+        </Notice>
+      )}
+    </>
+  );
+  const targetBlock = (
+    <DrawTarget
+      target={target}
+      typed={typed}
+      canRestart={resume}
+      onRestart={() => changeDrawing(key, { fresh: true })}
+      onUseInNew={onUseInNew}
+    >
+      {!editing && <AgentRows agent={agent} methods={methods} />}
+    </DrawTarget>
+  );
+  const pasted = (event: ClipboardEvent) => {
+    const files = imageFiles(event.clipboardData);
+    if (files.length > 0) {
+      event.preventDefault();
+      addFiles(key, files, Infinity);
+    }
+  };
+
+  // A new drawing is asked for as an image model is; once the drawing is made, it is a conversation with its agent.
+  if (!editing) {
+    return (
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        onPaste={pasted}
+        onKeyDown={(event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+            event.preventDefault();
+            void send();
+          }
+        }}
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {targetBlock}
+          <Section
+            title="Prompt"
+            open={open.prompt}
+            onOpenChange={(prompt) => setOpen({ ...open, prompt })}
+            aside={
+              <PromptPicker
+                editing={false}
+                prompts={earlierPrompts(target, runs, listing)}
+                current={draft.prompt}
+                onPick={(prompt) => updateDraft(key, { prompt })}
+              />
+            }
+          >
+            <Textarea
+              aria-label="Prompt"
+              value={draft.prompt}
+              onChange={(event) =>
+                updateDraft(key, { prompt: event.target.value })
+              }
+              placeholder="Describe the drawing: subject, composition, style, and anything it must not have"
+              className="block field-sizing-content max-h-80 min-h-19 resize-none"
+            />
+          </Section>
+          <References
+            open={open.references}
+            onOpenChange={(shown) => setOpen({ ...open, references: shown })}
+            target={key}
+            references={references}
+            room={Infinity}
+            full={null}
+            first={target.from ? 2 : 1}
+            noun="reference"
+            listing={listing}
+            source={image?.name ?? null}
+            onError={setFailure}
+          />
+          <Section
+            title="Budget"
+            open={open.budget}
+            onOpenChange={(budget) => setOpen({ ...open, budget })}
+          >
+            <div className="flex flex-col gap-2">
+              <BudgetRows
+                budgets={budgets}
+                fixed={false}
+                match={from && sizeOf(from)}
+                timeout={options.timeout_seconds}
+                onChange={changeBudgets}
+              />
+            </div>
+          </Section>
+        </div>
+        <footer className="shrink-0 border-t border-line bg-panel">
+          {notes && (
+            <div className="flex flex-col gap-2 px-3 pt-2.5">{notes}</div>
+          )}
+          <div className="flex px-3 pt-2.5 pb-3">
+            <span
+              title={problem?.title ?? problem?.text}
+              className="flex min-w-0 flex-1"
+            >
+              <Button
+                variant="primary"
+                size="lg"
+                className="flex-1"
+                disabled={problem !== null || sending}
+                onClick={() => void send()}
+              >
+                {sending && <LoadingMark />}
+                {sending ? "Starting" : "Generate"}
+              </Button>
+            </span>
+          </div>
+        </footer>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" onPaste={pasted}>
+      {targetBlock}
+      <Activity
+        drawing={image}
+        runs={activity}
+        label={label}
+        viewing={shown?.version?.id ?? null}
+        onView={onView}
+        ending={
+          activity.length > 0 &&
+          (providerChanged || drawing.fresh) && (
+            <li className="flex shrink-0 items-center gap-2">
+              <Dimension tone="accent" className="flex-1">
+                Next, a new conversation
+              </Dimension>
+              {!providerChanged && (
+                <Button
+                  size="sm"
+                  onClick={() => changeDrawing(key, { fresh: false })}
+                >
+                  Undo
+                </Button>
+              )}
+            </li>
+          )
+        }
+      />
+      {running && run && (
+        <LiveStrip
+          since={activity.at(-1)?.started ?? run.started}
+          current={currentCall(activity.at(-1))}
+          stopping={stopping === run.id}
+          onStop={() => void stop()}
+        />
+      )}
+      <footer className="shrink-0 border-t border-line bg-panel p-3">
+        {notes && <div className="mb-2.5 flex flex-col gap-2">{notes}</div>}
+        <div
+          onDragOver={(event) => {
+            event.preventDefault();
+            setOver(true);
+          }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setOver(false);
+            addFiles(key, imageFiles(event.dataTransfer), Infinity);
+          }}
+          className={cn(
+            "flex flex-col gap-2 rounded-md border border-line-control bg-field p-2 focus-within:border-ink focus-within:bg-panel",
+            over &&
+              "outline-1 outline-offset-2 outline-accent-ink outline-dashed",
+          )}
+        >
+          {(marks.length > 0 || references.length > 0) && (
+            <div className="flex flex-wrap gap-1">
+              {marks.map((mark) => (
+                <MarkChip
+                  key={mark.id}
+                  chip={{
+                    kind: "mark",
+                    number: mark.id,
+                    color: mark.color,
+                    shape: mark.shape,
+                  }}
+                >
+                  <button
+                    type="button"
+                    aria-label={`Remove mark ${mark.id}`}
+                    onClick={() => removeMark(key, mark.id)}
+                    className="-mr-1 grid size-4 shrink-0 cursor-default place-items-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink focus-visible:focus-ring focus-visible:outline-none"
+                  >
+                    <Icon name="close" />
+                  </button>
+                </MarkChip>
+              ))}
+              {references.map((reference) => (
+                <span
+                  key={reference.id}
+                  className="inline-flex h-6 max-w-full items-center gap-1.5 rounded-sm border border-line bg-panel pr-1 pl-0.5"
+                >
+                  <ReferenceThumb reference={reference} className="size-4.5" />
+                  <span
+                    title={reference.name}
+                    className="max-w-32 truncate mono-annotation"
+                  >
+                    {reference.name}
+                  </span>
+                  {reference.state === "uploading" && <LoadingMark size={12} />}
+                  {reference.state === "failed" && (
+                    <Icon name="warning" className="text-danger" />
+                  )}
+                  <button
+                    type="button"
+                    aria-label={`Remove ${reference.name}`}
+                    onClick={() => removeReference(key, reference.id)}
+                    className="grid size-4 shrink-0 cursor-default place-items-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink focus-visible:focus-ring focus-visible:outline-none"
+                  >
+                    <Icon name="close" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <textarea
+            aria-label="Message to the drawing agent"
+            value={draft.prompt}
+            onChange={(event) =>
+              updateDraft(key, { prompt: event.target.value })
+            }
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void send();
+              }
+            }}
+            placeholder={
+              running
+                ? "Steer the agent while it works"
+                : `Describe a change to ${key}`
+            }
+            className="block field-sizing-content max-h-60 min-h-12 w-full resize-none bg-transparent text-body text-ink outline-none placeholder:text-ink-muted"
+          />
+          <div className="flex items-center gap-1">
+            <Tooltip content="Add references" side="top">
+              <Button
+                size="sm"
+                icon
+                variant="ghost"
+                aria-label="Add references"
+                onClick={() => setPicking(true)}
+              >
+                <Icon name="attach" />
+              </Button>
+            </Tooltip>
+            <AgentPicker agent={agent} methods={methods} />
+            <BudgetPicker
+              key={key}
+              budgets={budgets}
+              fixed
+              match={null}
+              timeout={options.timeout_seconds}
+              onChange={changeBudgets}
+            />
+            <span className="flex-1" />
+            <span title={problem?.title ?? problem?.text}>
+              <Button
+                variant="primary"
+                size="sm"
+                icon
+                aria-label={running ? "Send to the working agent" : "Send"}
+                disabled={problem !== null || sending}
+                onClick={() => void send()}
+              >
+                {sending ? <LoadingMark /> : <Icon name="send" />}
+              </Button>
+            </span>
+          </div>
+        </div>
+      </footer>
+      <ReferenceLibrary
+        open={picking}
+        onOpenChange={setPicking}
+        target={key}
+        references={references}
+        room={Infinity}
+        full={null}
+        listing={listing}
+        source={image.name}
+      />
+    </div>
+  );
+}

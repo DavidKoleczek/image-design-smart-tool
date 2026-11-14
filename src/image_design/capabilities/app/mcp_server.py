@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import threading
 import time
 from typing import Any
@@ -31,9 +31,11 @@ from mcp.types import (
     TextResourceContents,
     Tool,
 )
+from pydantic import ValidationError
 
 from image_design.capabilities.app import library, uploads
 from image_design.capabilities.app.resources import (
+    IMAGE_TYPES,
     is_image_resource,
     is_preview_resource,
     is_reference_resource,
@@ -55,7 +57,9 @@ from image_design.capabilities.app.tools import (
     CHOOSE_FOLDER,
     CLEAR_OPENAI_KEY,
     DELETE_IMAGE,
+    DRAW_SVG,
     ENTER_OPENAI_KEY,
+    EXPORT_SVG,
     GENERATE_CHATGPT,
     GENERATE_OPENAI,
     IMAGE_FILE,
@@ -80,6 +84,7 @@ from image_design.capabilities.app.tools import (
     RUN_PREVIEW,
     SAVE_SETTINGS,
     SAVE_STATE,
+    STEER_SVG,
     UPLOAD_FILE,
     VIEW,
     VIEW_IMAGE,
@@ -93,12 +98,13 @@ from image_design.schemas import (
     ImageMethods,
     ImageRequestPreview,
     ImageSummary,
+    Mark,
     OpenAIKeyStatus,
     ReferenceEntry,
     UsedReference,
 )
 from image_design.shared.images.runs import ImageRun
-from image_design.shared.images.store import directories
+from image_design.shared.images.store import IMAGES, directories
 
 # The key `open_app` files its request to open the browser under, when the client answers by retrying the call.
 OPEN_REQUEST = "open"
@@ -106,8 +112,11 @@ OPEN_REQUEST = "open"
 ORIGIN = "app"
 CHOOSE_FILES_TITLE = "Choose reference images"
 CHOOSE_FOLDER_TITLE = "Choose a folder to pin"
+EXPORT_TITLE = "Export the drawing"
 ENTER_KEY_TITLE = "Image Design: OpenAI API key"
 ENTER_KEY_LABEL = "Paste your OpenAI API key. It is saved in this computer's credential store."
+# The tools whose arguments are a request to a library function, by their names.
+REQUEST_TOOLS = {tool.name: tool for tool in (GENERATE_OPENAI, GENERATE_CHATGPT, DRAW_SVG, PREVIEW_OPENAI, PREVIEW_CHATGPT)}
 INSTRUCTIONS = (
     "Image Design has an app where the user sees the images in one directory. Call `open_app` when they ask for it."
 )
@@ -137,9 +146,13 @@ class AppServer:
         generate_chatgpt_image: Callable[..., Awaitable[ImageRun]],
         preview_openai_image_request: Callable[..., ImageRequestPreview],
         preview_chatgpt_image_request: Callable[..., ImageRequestPreview],
+        draw_svg_image: Callable[..., Awaitable[ImageRun]],
+        steer_svg_image: Callable[..., None],
+        export_svg_image: Callable[[str, Path, float, str | None, Path, Path], Path],
         cancel_image: Callable[[str, Path, Path], None],
         choose_files: Callable[[Path, str], list[Path]],
         choose_folder: Callable[[Path, str], Path | None],
+        choose_save_path: Callable[[Path, str, str], Path | None],
         openai_api_key_status: Callable[[], OpenAIKeyStatus],
         save_openai_api_key: Callable[[str], None],
         clear_openai_api_key: Callable[[], None],
@@ -155,14 +168,21 @@ class AppServer:
         self._restore_image_version = restore_image_version
         self._read_image_activity = read_image_activity
         self._list_image_methods = list_image_methods
-        self._generate = {GENERATE_OPENAI.name: generate_openai_image, GENERATE_CHATGPT.name: generate_chatgpt_image}
+        self._generate = {
+            GENERATE_OPENAI.name: generate_openai_image,
+            GENERATE_CHATGPT.name: generate_chatgpt_image,
+            DRAW_SVG.name: draw_svg_image,
+        }
         self._preview = {
             PREVIEW_OPENAI.name: preview_openai_image_request,
             PREVIEW_CHATGPT.name: preview_chatgpt_image_request,
         }
+        self._steer_svg_image = steer_svg_image
+        self._export_svg_image = export_svg_image
         self._cancel_image = cancel_image
         self._choose_files = choose_files
         self._choose_folder = choose_folder
+        self._choose_save_path = choose_save_path
         self._openai_api_key_status = openai_api_key_status
         self._save_openai_api_key = save_openai_api_key
         self._clear_openai_api_key = clear_openai_api_key
@@ -280,6 +300,7 @@ class AppServer:
             or any(folder.shows == "files" and folder.path == path.parent for folder in state.folders)
             or library.is_kept(self.data_directory, path)
             or library.is_used(self.data_directory, path)
+            or self._kept_for_images(path)
             or (self._listing is not None and any(image.path == path for image in self._listing.images))
             # The image may be newer than that listing.
             or any(image.path == path for image in self._list().images)
@@ -291,12 +312,24 @@ class AppServer:
             "not-a-reference",
         )
 
+    def _kept_for_images(self, path: Path) -> bool:
+        """Whether `path` is an image the tool keeps for the app's images: a version, or a copy of what a run was
+        given."""
+        try:
+            kept = path.resolve().relative_to((self.data_directory / IMAGES).resolve())
+        except ValueError:
+            return False
+        return kept.parts[1:2] in {("versions",), ("runs",)} and path.suffix.lower() in IMAGE_TYPES
+
     def _request(self, arguments: dict[str, Any], tool: Tool) -> dict[str, Any]:
         """What a request tool was called with, as the arguments of the library function it wraps, on the app's
         directory."""
         request = {name: arguments[name] for name in tool.input_schema["properties"] if name in arguments}
-        if isinstance(request.get("size"), list):
-            request["size"] = tuple(request["size"])
+        for pair in ("size", "canvas"):
+            if isinstance(request.get(pair), list):
+                request[pair] = tuple(request[pair])
+        if "marks" in request:
+            request["marks"] = [_mark(number, mark) for number, mark in enumerate(request["marks"], 1)]
         if "references" in request:
             request["references"] = [self._reference(reference) for reference in request["references"]]
         if "mask" in request:
@@ -321,11 +354,15 @@ class AppServer:
             if copies:
                 given.append(UsedReference(name=name, path=copies[0]))
         library.remember_used(self.data_directory, given)
+        self._clear_taken(arguments)
+        return [each.path for each in given]
+
+    def _clear_taken(self, arguments: dict[str, Any]) -> None:
+        """Clear the uploads a request took, once what it started has copied them."""
         taken = [reference["upload"] for reference in arguments.get("references") or [] if "upload" in reference]
         for upload in [*taken, *([arguments["mask"]] if "mask" in arguments else [])]:
             uploads.clear(upload)
             self._uploads.discard(upload)
-        return [each.path for each in given]
 
     def _entries(self, paths: list[Path]) -> list[dict[str, Any]]:
         entries = (library.entry(path) for path in paths)
@@ -358,6 +395,27 @@ class AppServer:
             return await asyncio.to_thread(ask, first, second)
         finally:
             self._asking = False
+
+    async def _export(self, arguments: dict[str, Any]) -> str | None:
+        """Render a drawing where the person says in the save dialog; None when they cancel."""
+        name = arguments["name"]
+        suggested = f"{PurePosixPath(name).stem}{arguments['format']}"
+        chosen = await self._in_dialog(
+            lambda folder, title: self._choose_save_path(folder, title, suggested), self._dialog_folder(), EXPORT_TITLE
+        )
+        if chosen is None:
+            return None
+        self._last_folder = chosen.parent
+        written = await asyncio.to_thread(
+            self._export_svg_image,
+            name,
+            chosen,
+            arguments.get("scale", 1),
+            arguments.get("version"),
+            self.directory,
+            self.data_directory,
+        )
+        return str(written)
 
     def _dialog_folder(self) -> Path:
         folder = self._last_folder
@@ -429,17 +487,24 @@ class AppServer:
             methods = await asyncio.to_thread(self._list_image_methods)
             return _structured(methods.model_dump(mode="json"))
         if params.name in self._generate:
-            tool = GENERATE_OPENAI if params.name == GENERATE_OPENAI.name else GENERATE_CHATGPT
             # In a process of its own, so the image goes on being made when the app or its host closes.
-            request = await asyncio.to_thread(self._request, arguments, tool)
+            request = await asyncio.to_thread(self._request, arguments, REQUEST_TOOLS[params.name])
             run = await self._generate[params.name](**request, origin=ORIGIN, detach=True)
             references = await asyncio.to_thread(self._took, arguments, run)
             started = {"name": run.name, "run_id": run.run_id, "references": [str(path) for path in references]}
             return _structured(started)
         if params.name in self._preview:
-            tool = PREVIEW_OPENAI if params.name == PREVIEW_OPENAI.name else PREVIEW_CHATGPT
+            tool = REQUEST_TOOLS[params.name]
             preview = await asyncio.to_thread(lambda: self._preview[params.name](**self._request(arguments, tool)))
             return _structured(preview.model_dump(mode="json"))
+        if params.name == STEER_SVG.name:
+            request = await asyncio.to_thread(self._request, arguments, STEER_SVG)
+            await asyncio.to_thread(lambda: self._steer_svg_image(**request, origin=ORIGIN))
+            # The message left for the run holds copies of what it was given.
+            await asyncio.to_thread(self._clear_taken, arguments)
+            return _text(f"Left the message for the agent drawing {arguments['name']}.")
+        if params.name == EXPORT_SVG.name:
+            return _structured({"path": await self._export(arguments)})
         if params.name == CANCEL_IMAGE.name:
             await asyncio.to_thread(self._cancel_image, arguments["name"], self.directory, self.data_directory)
             return _text(f"Asked the run on {arguments['name']} to stop.")
@@ -550,6 +615,15 @@ def _structured(structured: dict[str, Any]) -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(structured))], structured_content=structured
     )
+
+
+def _mark(number: int, mark: Any) -> Mark:
+    try:
+        return Mark.model_validate(mark)
+    except ValidationError as error:
+        problem = error.errors()[0]
+        where = ".".join(str(part) for part in problem["loc"])
+        raise ImageDesignError(f"Mark {number}: {where}: {problem['msg']}.", "invalid-request") from None
 
 
 def _takes_url_elicitation(ctx: ServerRequestContext[Any]) -> bool:

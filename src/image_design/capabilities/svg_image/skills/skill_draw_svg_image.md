@@ -33,14 +33,13 @@ and the agent is told which named parts of the drawing are under each.
 - `--reference`: An image to show the agent with the prompt, such as a style or a subject. Repeatable. Any format.
 - `--marks`: A JSON file of marks to draw on the render the agent is shown.
 - `--canvas`: `WIDTHxHEIGHT`. Defaults to 512x512 for a new drawing, and to the image's own for an edit.
-- `--max-shapes`, `--max-colors`, `--max-bytes`: The most elements that draw, distinct colors, and bytes of SVG, or
-  `none` for no limit. None by default. The agent is told them, and `check-svg-image` measures them; an edit keeps
-  each one left out.
+- `--max-bytes`: The most bytes of SVG, or `none` for no limit. None by default. The agent is told it, and
+  `check-svg-image` measures it; an edit keeps it when left out.
 - `--resume-session`: `true` to go on in the image's last agent session, so the agent remembers the earlier requests,
   or a session ID. `false` by default.
 - `--agent-provider`: `codex` or `claude`. Defaults to the resumed session's, else the first installed.
 - `--model`, `--reasoning-effort`: The agent's model and its effort. See `image-design list-intelligence-models`.
-- `--timeout-seconds`: How long the agent may work. Defaults to 600.
+- `--timeout-seconds`: How long the agent may work, or `none` for no limit. Defaults to 600.
 - `--origin`: Who asked, such as `app`.
 - `--detach`: Leave the agent going in a process of its own once it starts. Follow it with `read-image-activity`,
   message it with `steer-svg-image`, and stop it with `cancel-image`.

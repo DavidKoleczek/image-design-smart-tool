@@ -31,7 +31,7 @@ A few arguments are written differently on the command line:
 - `references`: Repeat `--reference <path>` for each file.
 - `marks`: Pass `--marks <path>`, a JSON file that holds a list of marks.
 - `size` and `canvas`: The width and height joined by `x`, such as `--size 1024x1024`.
-- `max_shapes`, `max_colors`, `max_bytes`: A number, or `none` for no limit.
+- `max_bytes`, and `timeout_seconds` for `draw-svg-image`: A number, or `none` for no limit.
 - `resume_session`: `true`, `false`, or a session ID.
 
 `intelligence` is not available from the CLI.

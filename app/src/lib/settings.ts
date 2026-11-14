@@ -8,6 +8,7 @@ import { setThemePreference } from "@/lib/theme";
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
   images_view: "details",
+  advanced: false,
   wide: {
     images: { size: null, open: true },
     request: { size: null, open: true },

@@ -291,14 +291,12 @@ async def draw_svg_image(
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     canvas: tuple[int, int] | NotGiven = NOT_GIVEN,
-    max_shapes: int | NotGiven | None = NOT_GIVEN,
-    max_colors: int | NotGiven | None = NOT_GIVEN,
     max_bytes: int | NotGiven | None = NOT_GIVEN,
     resume_session: bool | str = False,
     agent_provider: AgentProvider | None = None,
     model: str | None = None,
     reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT,
-    timeout_seconds: int = 600,
+    timeout_seconds: int | None = 600,
     origin: str | None = None,
     detach: bool = False,
     intelligence: Intelligence | None = None,
@@ -320,15 +318,13 @@ async def draw_svg_image(
             told which named parts of the drawing are under each.
         canvas: The drawing's width and height. The agent is told the budgets, and `check_svg_image` measures them.
             A new drawing defaults to 512 by 512, and an edit keeps the earlier value of each budget left out.
-        max_shapes: The most elements that draw; None for no limit.
-        max_colors: The most distinct colors; None for no limit.
         max_bytes: The largest the SVG file may be; None for no limit.
         resume_session: True to go on in the image's last agent session, so the agent remembers earlier requests, or
             the ID of an earlier session to go on in.
         agent_provider: `codex` or `claude`; the resumed session's, else the first installed, when None.
         model: The agent provider's model; its default when None. See `list_intelligence_models`.
         reasoning_effort: The model's reasoning effort.
-        timeout_seconds: How long the agent may work before it is stopped.
+        timeout_seconds: How long the agent may work before it is stopped; None for no limit.
         origin: Who asked, such as `app`.
         detach: Run the agent in a process of its own, which goes on when the caller exits.
         intelligence: An agent to use in place of the agent provider's, such as a fake in tests. Not with `detach`.
@@ -346,8 +342,6 @@ async def draw_svg_image(
         references=references,
         marks=marks,
         canvas=canvas,
-        max_shapes=max_shapes,
-        max_colors=max_colors,
         max_bytes=max_bytes,
         resume_session=resume_session,
         agent_provider=agent_provider,
@@ -541,9 +535,13 @@ def app_server(directory: Path | None = None, data_directory: Path | None = None
         generate_chatgpt_image,
         preview_openai_image_request,
         preview_chatgpt_image_request,
+        draw_svg_image,
+        steer_svg_image,
+        export_svg_image,
         cancel_image,
         app_folders.choose_files,
         app_folders.choose_folder,
+        app_folders.choose_save_path,
         openai_api_key_status,
         save_openai_api_key,
         clear_openai_api_key,

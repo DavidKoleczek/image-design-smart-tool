@@ -1,15 +1,21 @@
-import { useRef, useState, type FormEvent, type RefObject } from "react";
+import {
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/field";
 import { Icon } from "@/components/ui/icon";
 import {
-  Menu,
-  MenuContent,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
   MenuItem,
   MenuSeparator,
-  MenuTrigger,
 } from "@/components/ui/menu";
 import { Notice } from "@/components/ui/notice";
 import { deleteImage, moveImage } from "@/lib/api";
@@ -61,30 +67,20 @@ export function ImageMenuItems({
   );
 }
 
-/** The button on an image that opens what can be done to it. */
-export function ImageMenu({
+/** What can be done to an image, on a right click anywhere in `children`. */
+export function ImageContextMenu({
   name,
   className,
+  children,
   ...actions
-}: ImageActions & { name: string; className?: string }) {
+}: ImageActions & { name: string; className?: string; children: ReactNode }) {
   return (
-    <Menu>
-      <MenuTrigger
-        render={
-          <Button
-            size="sm"
-            icon
-            aria-label={`More for ${name}`}
-            className={className}
-          />
-        }
-      >
-        <Icon name="more" />
-      </MenuTrigger>
-      <MenuContent align="end">
+    <ContextMenu>
+      <ContextMenuTrigger className={className}>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
         <ImageMenuItems name={name} {...actions} />
-      </MenuContent>
-    </Menu>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -255,8 +251,9 @@ export function DeleteDialog({
       >
         <div className="px-5 pt-4 pb-5">
           <p>
-            Its file and every version kept for it are deleted. This cannot be
-            undone.
+            Its file and everything kept for it are deleted: every version,
+            every run, and for a drawing its script and the conversations with
+            its agent. This cannot be undone.
           </p>
           {error && error.name === shown && (
             <Notice className="mt-3">{error.text}</Notice>

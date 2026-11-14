@@ -96,7 +96,7 @@ class InProcessRun:
         image: StoredImage,
         run: ImageRunRecord,
         work: Work,
-        timeout_seconds: int,
+        timeout_seconds: int | None,
         lock: Path,
         suffix: str,
         stop: Callable[[], Awaitable[None]] | None = None,
@@ -127,6 +127,8 @@ class InProcessRun:
                 "directory": str(self.directory),
                 "origin": run.origin,
                 "prompt": run.prompt,
+                # The request names the files it was given relative to this.
+                "run_folder": str(image.run_folder(run.id)),
                 **run.request,
             },
         )

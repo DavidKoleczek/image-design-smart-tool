@@ -230,8 +230,15 @@ export function Viewport({
   image: ImageSummary;
   shown: Shown;
   before: ImageVersion | null;
-  /** While a run works on the image: its latest in-progress image, and the size it was asked for, if any. */
-  live: { preview: Picture | null; size: [number, number] | null } | null;
+  /**
+   * While a run works on the image: its latest in-progress image, the size it was asked for, if any, and whether marks
+   * can be drawn over it to steer the run.
+   */
+  live: {
+    preview: Picture | null;
+    size: [number, number] | null;
+    steering: boolean;
+  } | null;
   /** What is drawn over the image to guide a request; null when it can take neither marks nor a mask. */
   mode: CanvasMode | null;
 }) {
@@ -268,9 +275,13 @@ export function Viewport({
   const id = compared ? compared.id : (shown.version?.id ?? null);
   const { url, error } = usePicture(picture);
   const vector = image.name.toLowerCase().endsWith(".svg");
-  // Marks and the mask are drawn on what the next request edits, so not on the version before or an image forming.
+  // Marks and the mask are drawn on what the next request edits, so not on the version before or an image forming,
+  // except the marks of a message to the agent drawing it, which go on its latest render.
   const guiding =
-    mode !== null && url !== null && compared === null && live === null
+    mode !== null &&
+    url !== null &&
+    compared === null &&
+    (live === null || live.steering)
       ? mode
       : null;
   const marks = guiding === "markup" ? guides.marks : [];

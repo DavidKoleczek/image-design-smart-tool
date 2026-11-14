@@ -18,6 +18,9 @@ const PREVIEW_TOOLS = {
   openai: "preview_openai_image_request",
   chatgpt: "preview_chatgpt_image_request",
 };
+const DRAW_TOOL = "draw_svg_image";
+const STEER_TOOL = "steer_svg_image";
+const EXPORT_TOOL = "export_svg_image";
 const CANCEL_TOOL = "cancel_image";
 const UPLOAD_TOOL = "upload_file";
 const LIBRARY_TOOL = "read_reference_library";
@@ -65,6 +68,8 @@ export type ImageVersion = {
   /** More than 1 for an animation. */
   frames: number;
   sha256: string;
+  /** Where it is kept, on the machine the app runs on. */
+  file: string;
   method: ImageMethod;
   run_id: string | null;
   /** ISO 8601. */
@@ -78,6 +83,12 @@ export type ImageRun = {
   prompt: string;
   /** The settings it was sent with, by the names the method records them under. */
   request: Record<string, unknown>;
+  /** Who asked, such as `app`; null when the caller did not say. */
+  origin: string | null;
+  /** For a drawing, what ran its agent. */
+  agent_provider: string | null;
+  /** For a drawing, the agent's session, which a later run can continue. */
+  session_id: string | null;
   /** The versions it has made so far. */
   versions: string[];
   /** ISO 8601. */
@@ -155,6 +166,7 @@ export type ImagesView = "details" | "grid";
 export type AppSettings = {
   theme: "system" | "light" | "dark";
   images_view: ImagesView;
+  advanced: boolean;
   wide: AppLayout;
   medium: AppLayout;
 };
@@ -187,6 +199,7 @@ export type OpenAIImageMethod = MethodSetup & {
 
 /** The fields of `IntelligenceModel` in schemas.py that the view reads. */
 export type IntelligenceModel = {
+  agent_provider: string;
   id: string;
   label: string;
   reasoning_efforts: string[];
@@ -202,11 +215,28 @@ export type ChatGPTImageMethod = MethodSetup & {
   max_images: number;
 };
 
+/** `IntelligenceChoice` in schemas.py: an agent provider, its model, and the reasoning effort. */
+export type IntelligenceChoice = {
+  agent_provider: string;
+  model: string;
+  reasoning_effort: string;
+};
+
+/** The fields of `SvgImageMethod` in schemas.py that the view reads. */
+export type SvgImageMethod = MethodSetup & {
+  /** Those of the agent providers that are installed. */
+  models: IntelligenceModel[];
+  default: IntelligenceChoice;
+  default_canvas: [number, number];
+  /** The extensions a drawing can be exported to. */
+  export_formats: string[];
+};
+
 /** `ImageMethods` in schemas.py. */
 export type ImageMethods = {
   openai: OpenAIImageMethod;
   chatgpt: ChatGPTImageMethod;
-  svg: MethodSetup;
+  svg: SvgImageMethod;
 };
 
 /** `AppImageRequest` in schemas.py: what was last picked for a request to an image model. */
@@ -226,6 +256,19 @@ export type AppImageRequest = {
   /** The Codex model that carries a request to ChatGPT; null for the default. */
   codex_model: string | null;
   reasoning_effort: string | null;
+};
+
+/** `AppSvgRequest` in schemas.py: what was last picked for drawing an SVG. */
+export type AppSvgRequest = {
+  /** Null for the default, here and below. */
+  agent_provider: string | null;
+  model: string | null;
+  reasoning_effort: string | null;
+  /** A new drawing's width and height. */
+  canvas: [number, number] | null;
+  /** Null for no limit, here and below. */
+  max_bytes: number | null;
+  timeout_seconds: number | null;
 };
 
 /** `Mark` in schemas.py, as a request sends one: its points are fractions of the image from its top left. */
@@ -297,6 +340,20 @@ export type ImageRequest =
       };
     };
 
+/** What `draw_svg_image` takes, as lib.py names it. A budget left out of an edit keeps the drawing's. */
+export type DrawRequest = RequestGuides & {
+  prompt: string;
+  name: string;
+  canvas?: [number, number];
+  max_bytes?: number | null;
+  resume_session: boolean;
+  agent_provider: string;
+  model: string;
+  reasoning_effort: string;
+  /** Null for no limit. */
+  timeout_seconds: number | null;
+};
+
 /** `ImageRequestPreview` in schemas.py: what a request would send. */
 export type ImageRequestPreview = {
   method: ImageMethod;
@@ -318,6 +375,7 @@ export type ImageRequestPreview = {
 export type AppState = {
   method: AppMethod;
   request: AppImageRequest;
+  svg: AppSvgRequest;
   /** The folders closed in Your images, by their paths. */
   closed_folders: string[];
   /** The image files pinned as references, by their paths, newest first. */
@@ -459,6 +517,45 @@ export async function previewImageRequest(
     PREVIEW_TOOLS[request.method],
     request.arguments,
   )) as ImageRequestPreview;
+}
+
+/** Start drawing or changing an SVG. It answers once the agent has started. */
+export async function drawSvgImage(
+  request: DrawRequest,
+): Promise<StartedRequest> {
+  return (await structuredFrom(
+    DRAW_TOOL,
+    request,
+    START_TIMEOUT_MS,
+  )) as StartedRequest;
+}
+
+/** Leave a message for the agent drawing the SVG, which it gets while it works. */
+export async function steerSvgImage(request: {
+  name: string;
+  message: string;
+  references?: SentReference[];
+  marks?: SentMark[];
+}): Promise<void> {
+  await call(STEER_TOOL, request);
+}
+
+/**
+ * Render a drawing, or one of its versions, where the person says in the save dialog on the machine the app runs on.
+ * Returns the file written, or null when they cancel.
+ */
+export async function exportSvgImage(request: {
+  name: string;
+  version?: string;
+  format: string;
+  scale: number;
+}): Promise<string | null> {
+  const structured = await structuredFrom(
+    EXPORT_TOOL,
+    request,
+    DIALOG_TIMEOUT_MS,
+  );
+  return typeof structured.path === "string" ? structured.path : null;
 }
 
 /** Stop the run working on the image, whoever started it. */

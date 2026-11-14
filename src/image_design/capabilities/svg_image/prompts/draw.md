@@ -40,4 +40,5 @@ $command
 Change files with your file editing tools, not with scripts. After each build, look at render.png and fix what does not
 match the request. Build and look once more before you finish.
 $existing$references$marks
-Finish by saying what you drew and anything you were unsure of.
+Finish by saying what you drew and anything you were unsure of. The person sees the drawing beside what you
+say, so do not link to image.svg, render.png, or any other file.

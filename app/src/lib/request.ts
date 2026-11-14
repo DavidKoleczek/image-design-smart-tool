@@ -1,5 +1,6 @@
 import type {
   AppImageRequest,
+  AppMethod,
   ImageListing,
   ImageMethods,
   ImageRequest,
@@ -40,20 +41,54 @@ export const SIZES: { label: string; size: [number, number] }[] = [
 const PREVIEWS = 2;
 const NEW_NAME = "new-image";
 const ANIMATION = ".gif";
-const DRAWING = ".svg";
+/** The extension of a drawing, which only the SVG method makes and changes. */
+export const DRAWING = ".svg";
 // The formats with no transparency, and those that take a compression level.
 const OPAQUE = [".jpg"];
 const COMPRESSED = [".jpg", ".webp"];
 
-/** Why the canvas cannot guide a request to `model` one way, with marks or with a mask; null when it can. */
+export function isDrawing(name: string): boolean {
+  return extensionOf(name) === DRAWING;
+}
+
+/**
+ * Whether a request on `image` by `method` makes a new image from it rather than changing it, since the method cannot
+ * change a file of its type: an image model on a drawing, ChatGPT on an image that is not a PNG, or SVG on a raster.
+ */
+export function makesNew(
+  image: ImageSummary,
+  method: AppMethod,
+  model: string | null,
+  methods: ImageMethods,
+): boolean {
+  if (method === "svg") {
+    return !isDrawing(image.name);
+  }
+  return (
+    isDrawing(image.name) ||
+    (model === CHATGPT &&
+      !methods.chatgpt.formats.includes(extensionOf(image.name)))
+  );
+}
+
+/**
+ * Why the canvas cannot guide a request to `model` one way, with marks or with a mask; null when it can. `fresh` is
+ * whether the request makes a new image from the one in view.
+ */
 export function guideBlock(
   kind: CanvasMode,
   image: ImageSummary | null,
   shown: Shown | null,
   model: string | null,
+  fresh: boolean,
 ): string | null {
   if (!image || !shown || shown.width === null) {
     return "Needs a source image";
+  }
+  if (fresh) {
+    return kind === "mask"
+      ? "A new image takes no mask"
+      : "A new image takes no marks";
   }
   if (kind === "mask") {
     if (extensionOf(image.name) === DRAWING) {
@@ -191,17 +226,30 @@ function same(a: [number, number] | null, b: [number, number] | null): boolean {
   return a !== null && b !== null && a[0] === b[0] && a[1] === b[1];
 }
 
-/** A name no image in the directory has, for a new image: `new-image`, then `new-image-2`, and so on. */
-export function freeName(listing: ImageListing | null, format: string): string {
+/**
+ * A name no image in the directory has, without its extension: `wanted`, then `wanted-2`, and so on. By default
+ * `new-image`, for a new image.
+ */
+export function freeName(
+  listing: ImageListing | null,
+  format: string,
+  wanted: string = NEW_NAME,
+): string {
   const taken = new Set(
     (listing?.images ?? []).map((image) => image.name.toLowerCase()),
   );
   for (let count = 1; ; count += 1) {
-    const name = count === 1 ? NEW_NAME : `${NEW_NAME}-${count}`;
-    if (!taken.has(`${name}${format}`)) {
+    const name = count === 1 ? wanted : `${wanted}-${count}`;
+    if (!taken.has(`${name}${format}`.toLowerCase())) {
       return name;
     }
   }
+}
+
+/** An image's name without its extension, in its folder. */
+export function stem(name: string): string {
+  const extension = extensionOf(name);
+  return extension ? name.slice(0, -extension.length) : name;
 }
 
 /** A new image's name as typed, without an extension typed after it, since the format sets that. */
@@ -213,9 +261,28 @@ export function typedName(typed: string, formats: string[]): string {
     : name;
 }
 
-/** What the request is for: an image in view and what of it shows, or a new image and the name it will have. */
+/** An image in view, and what of it shows. */
+export type Source = { image: ImageSummary; shown: Shown };
+
+/**
+ * What the request is for: an image in view, or a new image and the name it will have without its extension. A new
+ * image made `from` the image in view has it as its first reference.
+ */
 export type Target =
-  { image: ImageSummary; shown: Shown } | { image: null; name: string };
+  | (Source & { from?: undefined })
+  | { image: null; name: string; from: Source | null };
+
+/** The file of what shows of an image: the version in view, or the image's file. */
+export function sourcePath(source: Source): string {
+  return source.shown.version && !source.shown.file
+    ? source.shown.version.file
+    : source.image.path;
+}
+
+/** Whether the request sends an image in view, as the image it edits or as the one a new image is made from. */
+export function sendsSource(target: Target): boolean {
+  return target.image !== null || target.from !== null;
+}
 
 /** Why a request cannot be sent. A `quiet` one is plain from the form itself, so only the Generate button says it. */
 export type Problem = {
@@ -251,16 +318,7 @@ export function problemOf(
       quiet: false,
     };
   }
-  if (target.image) {
-    if (resolved.format === DRAWING) {
-      return loud("An image model can't change an SVG.");
-    }
-    if (!method.formats.includes(resolved.format)) {
-      return loud(
-        `${CHATGPT_LABEL} makes only PNG images. Pick an OpenAI API model to change this one.`,
-      );
-    }
-  } else {
+  if (!target.image) {
     if (target.name === "") {
       return { text: "Give the image a name.", quiet: true };
     }
@@ -303,8 +361,11 @@ export function requestOf(
   methods: ImageMethods,
   guide: SentGuide,
 ): ImageRequest {
+  const references = target.from
+    ? [{ path: sourcePath(target.from) }, ...guide.references]
+    : guide.references;
   const guides = {
-    ...(guide.references.length > 0 ? { references: guide.references } : {}),
+    ...(references.length > 0 ? { references } : {}),
     ...(guide.marks.length > 0 ? { marks: guide.marks } : {}),
   };
   const name = target.image

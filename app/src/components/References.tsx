@@ -32,6 +32,7 @@ export function References({
   room,
   full,
   first,
+  noun = "image",
   listing,
   source,
   onError,
@@ -47,6 +48,8 @@ export function References({
   full: string | null;
   /** The number the first reference has among the images the request sends. */
   first: number;
+  /** What the request calls each reference, before its number. */
+  noun?: string;
   listing: ImageListing | null;
   /** The image the request edits, which is not offered as a reference to itself. */
   source: string | null;
@@ -176,7 +179,7 @@ export function References({
                     <Icon name="warning" className="text-danger" />
                   )}
                   <span className="shrink-0 mono-annotation text-ink-muted">
-                    image {index + first}
+                    {noun} {index + first}
                   </span>
                   <Tooltip content={pinned ? "Unpin" : "Pin"}>
                     <Button

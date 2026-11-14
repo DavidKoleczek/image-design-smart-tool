@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   readImageActivity,
   type ImageEvent,
+  type ImageRunStatus,
   type ImageSummary,
   type ImageUsage,
 } from "@/lib/api";
@@ -21,6 +22,13 @@ export type RunFacts = {
   usage: ImageUsage | null;
   /** The in-progress images it has sent so far, by the index each has, oldest first. */
   previews: number[];
+  /** What its `started` event says: the request, and the folder the files it names are in. */
+  request: Record<string, unknown>;
+  /** How it ended, once it has; null while it runs, and for a run whose process ended before it did. */
+  status: ImageRunStatus | null;
+  error: string | null;
+  /** Each of its events, in order. */
+  events: ImageEvent[];
 };
 
 export type Runs = ReadonlyMap<string, RunFacts>;
@@ -41,13 +49,18 @@ function fold(facts: Map<string, RunFacts>, event: ImageEvent) {
       finished: null,
       usage: null,
       previews: [],
+      request: event.data,
+      status: null,
+      error: null,
+      events: [event],
     });
     return;
   }
-  const run = facts.get(event.run_id);
-  if (!run) {
+  const found = facts.get(event.run_id);
+  if (!found) {
     return;
   }
+  const run = { ...found, events: [...found.events, event] };
   if (event.kind === "preview" && typeof event.data.index === "number") {
     facts.set(event.run_id, {
       ...run,
@@ -58,14 +71,18 @@ function fold(facts: Map<string, RunFacts>, event: ImageEvent) {
       ...run,
       finished: event.time,
       usage: (event.data.usage as ImageUsage | null | undefined) ?? null,
+      status: (text(event.data.status) as ImageRunStatus | null) ?? null,
+      error: text(event.data.error),
     });
+  } else {
+    facts.set(event.run_id, run);
   }
 }
 
 /**
- * The runs on the image, by their ids, read from its activity. It is read again, from where the last read ended, each
- * time a run starts, ends, or saves a version, and every second while a run works, for the in-progress images the
- * run sends.
+ * The runs on the image, by their ids in the order they started, read from its activity. It is read again, from where
+ * the last read ended, each time a run starts, ends, or saves a version, and every second while a run works, for the
+ * in-progress images the run sends and what its agent does.
  */
 export function useRuns(image: ImageSummary | null): Runs {
   const [runs, setRuns] = useState<{

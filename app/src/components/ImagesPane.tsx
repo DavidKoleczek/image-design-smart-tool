@@ -1,6 +1,6 @@
 import { useState, type ReactNode, type RefObject } from "react";
 
-import { ImageMenu, type ImageActions } from "@/components/ImageMenu";
+import { ImageContextMenu, type ImageActions } from "@/components/ImageMenu";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Kbd } from "@/components/ui/kbd";
@@ -12,6 +12,7 @@ import type { ImageListing, ImageSummary } from "@/lib/api";
 import { dimensions } from "@/lib/format";
 import { shortDirectory } from "@/lib/images";
 import { filePicture } from "@/lib/pictures";
+import { fileKeys } from "@/lib/shortcuts";
 import { updateSettings, useSettings } from "@/lib/settings";
 import { updateAppState, useAppState } from "@/lib/state";
 import { failed } from "@/lib/status";
@@ -57,17 +58,23 @@ function FileRow({
 }: Picking & { image: ImageSummary; depth: number }) {
   const viewed = current === image.name;
   return (
-    <div
+    <ImageContextMenu
+      name={image.name}
       className={cn(
-        "group relative flex h-6.5 items-center rounded-sm",
+        "flex h-6.5 items-center rounded-sm",
         viewed ? "bg-accent-soft" : "hover:bg-hover",
       )}
+      {...actions}
     >
       <button
         type="button"
         title={image.name}
         aria-current={viewed || undefined}
         onClick={() => onSelect(image.name)}
+        onKeyDown={fileKeys(
+          () => actions.onDelete(image.name),
+          () => actions.onRename(image.name),
+        )}
         style={{ paddingLeft: 26 + depth * INDENT }}
         className={ROW}
       >
@@ -102,15 +109,7 @@ function FileRow({
           </span>
         )}
       </button>
-      <ImageMenu
-        name={image.name}
-        className={cn(
-          "absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100",
-          viewed ? "bg-accent-soft" : "bg-hover",
-        )}
-        {...actions}
-      />
-    </div>
+    </ImageContextMenu>
   );
 }
 
@@ -224,18 +223,24 @@ function Grid({
             {folder.images.map((image) => {
               const viewed = current === image.name;
               return (
-                <div
+                <ImageContextMenu
                   key={image.name}
+                  name={image.name}
                   className={cn(
-                    "group relative min-w-0 rounded-md",
+                    "min-w-0 rounded-md",
                     viewed ? "bg-accent-soft" : "hover:bg-hover",
                   )}
+                  {...actions}
                 >
                   <button
                     type="button"
                     title={image.name}
                     aria-current={viewed || undefined}
                     onClick={() => onSelect(image.name)}
+                    onKeyDown={fileKeys(
+                      () => actions.onDelete(image.name),
+                      () => actions.onRename(image.name),
+                    )}
                     className="flex w-full cursor-default flex-col gap-1 rounded-md p-1 text-left focus-visible:focus-ring focus-visible:outline-none"
                   >
                     <Thumb
@@ -256,12 +261,7 @@ function Grid({
                       <span className="truncate">{baseName(image.name)}</span>
                     </span>
                   </button>
-                  <ImageMenu
-                    name={image.name}
-                    className="absolute top-2 right-2 bg-panel opacity-0 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
-                    {...actions}
-                  />
-                </div>
+                </ImageContextMenu>
               );
             })}
           </div>

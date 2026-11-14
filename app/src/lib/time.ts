@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+const clock = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ["day", 86_400],
   ["hour", 3_600],
@@ -51,4 +55,9 @@ export function useNow(ticking = true): number {
 export function useElapsed(iso: string): string {
   const now = useNow();
   return duration(Math.max(0, Math.round((now - Date.parse(iso)) / 1000)));
+}
+
+/** The time of day, such as "14:02" or "2:02 PM", in the person's own format. */
+export function timeOfDay(iso: string): string {
+  return clock.format(Date.parse(iso));
 }

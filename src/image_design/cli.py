@@ -309,12 +309,6 @@ def draw_svg_image(
         str | None,
         typer.Option("--canvas", metavar="WIDTHxHEIGHT", help="512x512 for a new drawing; an edit keeps its own."),
     ] = None,
-    max_shapes: Annotated[
-        str | None, typer.Option("--max-shapes", metavar="N|none", help="The most elements that draw.")
-    ] = None,
-    max_colors: Annotated[
-        str | None, typer.Option("--max-colors", metavar="N|none", help="The most distinct colors.")
-    ] = None,
     max_bytes: Annotated[
         str | None, typer.Option("--max-bytes", metavar="N|none", help="The largest the SVG file may be.")
     ] = None,
@@ -329,7 +323,9 @@ def draw_svg_image(
     reasoning_effort: Annotated[
         ReasoningEffort, typer.Option("--reasoning-effort", help="The model's reasoning effort.")
     ] = DEFAULT_REASONING_EFFORT,
-    timeout_seconds: Annotated[int, typer.Option("--timeout-seconds", min=1)] = 600,
+    timeout_seconds: Annotated[
+        str, typer.Option("--timeout-seconds", metavar="N|none", help="How long the agent may work.")
+    ] = "600",
     origin: Annotated[str | None, typer.Option("--origin", help="Who asked, such as app.")] = None,
     detach: Annotated[
         bool, typer.Option("--detach", help="Leave the agent going in a process of its own once it starts.")
@@ -350,14 +346,12 @@ def draw_svg_image(
                 references=references,
                 marks=_marks(marks),
                 canvas=_canvas(canvas),
-                max_shapes=_budget(max_shapes, "--max-shapes"),
-                max_colors=_budget(max_colors, "--max-colors"),
                 max_bytes=_budget(max_bytes, "--max-bytes"),
                 resume_session=_resume_session(resume_session),
                 agent_provider=agent_provider,
                 model=model,
                 reasoning_effort=reasoning_effort,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=_limit(timeout_seconds, "--timeout-seconds"),
                 origin=origin,
                 detach=detach,
             ),
@@ -698,6 +692,12 @@ def _budget(typed: str | None, hint: str) -> int | NotGiven | None:
     if not typed.strip().isdigit():
         raise typer.BadParameter(f"{typed!r} is not a number or none.", param_hint=hint)
     return int(typed)
+
+
+def _limit(typed: str, hint: str) -> int | None:
+    """A limit as typed: a number, or `none` for no limit."""
+    limit = _budget(typed, hint)
+    return None if isinstance(limit, NotGiven) else limit
 
 
 def _resume_session(typed: str) -> bool | str:

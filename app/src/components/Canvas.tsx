@@ -15,9 +15,9 @@ import type { Shown } from "@/lib/viewed";
 // Under this height, as inline in a host, the versions start folded to their header, so the image has the room.
 const SHORT = 540;
 
-/** The size a run was asked for, when it was asked for one. */
+/** The size a run was asked for, when it was asked for one: an image's size, or a drawing's canvas. */
 function askedSize(request: Record<string, unknown>): [number, number] | null {
-  const size = request.size;
+  const size = request.size ?? request.canvas;
   return Array.isArray(size) &&
     typeof size[0] === "number" &&
     typeof size[1] === "number"
@@ -35,6 +35,7 @@ export function Canvas({
   mode,
   tools,
   blocked,
+  steering,
   error,
   onView,
   onChanged,
@@ -50,6 +51,8 @@ export function Canvas({
   /** The mode whose tools show, and why none of them can be used, when they cannot. */
   tools: CanvasMode;
   blocked: string | null;
+  /** Whether marks can be drawn while a run works, for the next message to the agent drawing the image. */
+  steering: boolean;
   error: string | null;
   /** Show the version with this id; null for what the image's file holds. */
   onView: (version: string | null) => void;
@@ -78,6 +81,7 @@ export function Canvas({
           preview:
             latest !== undefined ? previewPicture(image, run.id, latest) : null,
           size: askedSize(run.request),
+          steering,
         }
       : null;
   const asked = typeof run?.request.count === "number" ? run.request.count : 1;
@@ -95,7 +99,8 @@ export function Canvas({
             <ToolStrip
               mode={tools}
               blocked={
-                blocked ?? (run ? "A request is working on this image" : null)
+                blocked ??
+                (run && !steering ? "A request is working on this image" : null)
               }
             />
             <Viewport

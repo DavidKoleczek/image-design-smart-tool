@@ -56,10 +56,6 @@ def budgets(given: SvgBudgets) -> str:
             "on the svg element."
         ),
     ]
-    if given.max_shapes is not None:
-        lines.append(f"- At most {given.max_shapes:,} shapes: elements that draw, such as path, rect, circle, and use.")
-    if given.max_colors is not None:
-        lines.append(f"- At most {given.max_colors:,} colors: distinct fill, stroke, and stop colors.")
     if given.max_bytes is not None:
         lines.append(f"- At most {given.max_bytes:,} bytes of SVG.")
     return "\n".join(lines)

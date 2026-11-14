@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 
 from conftest import MemoryKeyring
 import detached_openai
+from fake_drawing import fake_agent, steered_to
 from fake_openai import FakeImagesAPI, picture
 from mcp import Client, MCPError
 from mcp.types import BlobResourceContents, TextContent, TextResourceContents
@@ -548,6 +549,107 @@ async def test_the_view_has_the_key_typed_on_the_machine_and_never_sees_it(
     # Neither what was typed nor anything passed as an argument is in any answer.
     assert "sk-test" not in "".join(text_of(result) for result in results)
     assert credential_store.kept == {}
+
+
+async def test_the_view_draws_steers_and_exports_a_drawing_and_reads_what_its_runs_were_given(
+    open_app: Callable[..., lib.AppServer], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    agent = fake_agent(monkeypatch)
+    agent.behavior = steered_to("#457b9d")
+    monkeypatch.setattr(uploads, "UPLOADS", tmp_path / "uploads")
+    app_server = open_app(tmp_path / "images")
+
+    # In this process with the agent faked; a run in a process of its own is the detached tests'.
+    async def draw_here(detach: bool, **arguments: Any) -> lib.ImageRun:
+        return await lib.draw_svg_image(**arguments, intelligence=agent)
+
+    monkeypatch.setattr(app_server, "_generate", {**app_server._generate, "draw_svg_image": draw_here})
+    asked: list[str] = []
+    exported = tmp_path / "exports" / "boat.png"
+
+    def save_where(folder: Path, title: str, name: str) -> Path:
+        asked.append(name)
+        return exported
+
+    monkeypatch.setattr(app_server, "_choose_save_path", save_where)
+    circle = {"shape": "circle", "points": [[0.4, 0.1], [0.8, 0.6]], "color": "blue"}
+
+    async def activity(client: Client) -> ImageActivity:
+        read = await client.call_tool("read_image_activity", {"name": "sailboat.svg"})
+        return ImageActivity.model_validate(read.structured_content)
+
+    async def until(client: Client, kind: str) -> ImageActivity:
+        while True:
+            read = await activity(client)
+            if any(event.kind == kind for event in read.events):
+                return read
+            await asyncio.sleep(0.02)
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        await upload(client, "a" * 32, "palette.png", picture(40, 30, "#457b9d"))
+        started = await client.call_tool(
+            "draw_svg_image",
+            {
+                "prompt": "A sailboat.",
+                "name": "sailboat.svg",
+                "references": [{"upload": "a" * 32}],
+                "canvas": [64, 48],
+                "max_bytes": None,
+                "timeout_seconds": None,
+                "agent_provider": "claude",
+                "reasoning_effort": "high",
+            },
+        )
+        await asyncio.wait_for(until(client, "preview"), TIMEOUT_SECONDS)
+        await upload(client, "b" * 32, "sail.png", picture(20, 20, "#e9c46a"))
+        misdrawn = await client.call_tool(
+            "steer_svg_image", {"name": "sailboat.svg", "message": "Blue.", "marks": [{"shape": "star"}]}
+        )
+        steered = await client.call_tool(
+            "steer_svg_image",
+            {
+                "name": "sailboat.svg",
+                "message": "Make the sail blue.",
+                "references": [{"upload": "b" * 32}],
+                "marks": [circle],
+            },
+        )
+        history = await asyncio.wait_for(until(client, "finished"), TIMEOUT_SECONDS)
+        begun = history.events[0].data
+        steering = next(event.data for event in history.events if event.kind == "steered")
+        given = [Path(begun["run_folder"], "inputs", "reference-1.png"), Path(steering["references"][0])]
+        thumbs = [
+            (await client.read_resource(f"image-design://references/{quote(str(path), safe='')}")).contents
+            for path in given
+        ]
+        outside = Path(begun["run_folder"], "..", "..", "..", "..", "..", "elsewhere.png")
+        (tmp_path / "elsewhere.png").write_bytes(picture(8, 8, "#000000"))
+        with pytest.raises(MCPError):
+            await client.read_resource(f"image-design://references/{quote(str(outside), safe='')}")
+        late = await client.call_tool("steer_svg_image", {"name": "sailboat.svg", "message": "Too late."})
+        written = await client.call_tool("export_svg_image", {"name": "sailboat.svg", "format": ".png", "scale": 2})
+        listing = ImageListing.model_validate((await client.call_tool("list_images", {})).structured_content)
+
+    [drawing] = listing.images
+    assert (started.structured_content or {})["name"] == "sailboat.svg"
+    assert drawing.last_run is not None
+    assert (drawing.status, drawing.last_run.origin, drawing.last_run.agent_provider) == ("done", "app", "claude")
+    assert (begun["reasoning_effort"], begun["canvas"], begun["max_bytes"]) == ("high", [64, 48], None)
+    assert begun["images"] == ["inputs/reference-1.png"]
+    assert misdrawn.structured_content == {"reason": "invalid-request", "image": None}
+    assert not steered.is_error
+    assert (steering["message"], steering["origin"], steering["marks"][0]["color"]) == (
+        "Make the sail blue.",
+        "app",
+        "blue",
+    )
+    assert all(isinstance(each[0], BlobResourceContents) for each in thumbs)
+    assert late.structured_content == {"reason": "not-running", "image": "sailboat.svg"}
+    assert (written.structured_content, asked) == ({"path": str(exported)}, ["sailboat.png"])
+    assert Image.open(exported).size == (128, 96)
+    # The run and the message each copied what they were given, so neither upload is kept.
+    assert not (tmp_path / "uploads" / ("a" * 32)).exists()
+    assert not (tmp_path / "uploads" / ("b" * 32)).exists()
 
 
 @pytest.mark.detached

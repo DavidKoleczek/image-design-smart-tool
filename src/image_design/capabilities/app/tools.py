@@ -201,6 +201,39 @@ CHATGPT_REQUEST = {
     },
     "required": ["prompt", "name"],
 }
+# A budget left out of an edit keeps the drawing's, and null takes a limit off.
+SVG_LIMIT = {"type": ["integer", "null"], "minimum": 1}
+SVG_REQUEST = {
+    "type": "object",
+    "properties": {
+        "prompt": {"type": "string", "description": "What to draw, or what to change, sent as written"},
+        "name": {
+            "type": "string",
+            "description": "The drawing's path in the directory, ending in .svg. A new name draws it, and the name of "
+            "one that exists changes it",
+        },
+        "references": REFERENCES,
+        "marks": MARKS,
+        "canvas": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "A new drawing's width and height. Omit it for the default, and on an edit to keep the "
+            "drawing's",
+        },
+        "max_bytes": {**SVG_LIMIT, "description": "The most bytes the SVG file can have; null for any"},
+        "resume_session": {
+            "type": "boolean",
+            "description": "Continue the drawing's last agent session, so the agent remembers the earlier requests",
+        },
+        "agent_provider": {"type": "string", "description": "`codex` or `claude`. Omit it for the default"},
+        "model": {"type": "string", "description": "The agent's model. Omit it for the agent provider's default"},
+        "reasoning_effort": {"type": "string", "description": "That model's reasoning effort"},
+        "timeout_seconds": {**SVG_LIMIT, "description": "How long the run may take; null for no limit"},
+    },
+    "required": ["prompt", "name"],
+}
 GENERATE_OPENAI = Tool(
     name="generate_openai_image",
     description="Start creating or editing an image in the app's directory with an OpenAI image model, in a process "
@@ -228,6 +261,45 @@ PREVIEW_CHATGPT = Tool(
     description="What `generate_chatgpt_image` would send for the same arguments: the prompt, the images in order, "
     "and the parameters. Nothing is sent or kept. Called by the view.",
     input_schema=CHATGPT_REQUEST,
+    _meta=APP_ONLY,
+)
+DRAW_SVG = Tool(
+    name="draw_svg_image",
+    description="Start drawing or changing an SVG in the app's directory with an agent that draws it in code, in a "
+    "process of its own, and return the drawing's name and the run's id. Called by the view.",
+    input_schema=SVG_REQUEST,
+    _meta=APP_ONLY,
+)
+STEER_SVG = Tool(
+    name="steer_svg_image",
+    description="Send a message to the agent drawing an SVG in the app's directory while it works, with references "
+    "and marks on its latest render. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": IMAGE_NAME,
+            "message": {"type": "string", "description": "What the agent should change, sent as written"},
+            "references": REFERENCES,
+            "marks": MARKS,
+        },
+        "required": ["name", "message"],
+    },
+    _meta=APP_ONLY,
+)
+EXPORT_SVG = Tool(
+    name="export_svg_image",
+    description="Ask the person where to save a render of an SVG in their platform's save dialog, and render it there. "
+    "Returns the file written, or none when they cancel. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": IMAGE_NAME,
+            "version": {"type": "string", "description": "The version to render, such as v2. Omit it for the file"},
+            "format": {"type": "string", "description": "The extension to render to: .png, .jpg, or .webp"},
+            "scale": {"type": "number", "exclusiveMinimum": 0, "description": "Times the drawing's size"},
+        },
+        "required": ["name", "format"],
+    },
     _meta=APP_ONLY,
 )
 CANCEL_IMAGE = Tool(
@@ -334,6 +406,9 @@ VIEW_TOOLS = [
     GENERATE_CHATGPT,
     PREVIEW_OPENAI,
     PREVIEW_CHATGPT,
+    DRAW_SVG,
+    STEER_SVG,
+    EXPORT_SVG,
     CANCEL_IMAGE,
     UPLOAD_FILE,
     READ_LIBRARY,
@@ -376,7 +451,7 @@ REFERENCE = ResourceTemplate(
     name="Reference",
     uri_template=f"{REFERENCE_PREFIX}{{+path}}",
     description="A small WebP of an image the app offers as a reference, by its path on this machine: an image in "
-    "the app's directory, one that is pinned, in a folder pinned to show its files, used before, or chosen in the "
-    "file dialog. As base64, for the app's view.",
+    "the app's directory, one that is pinned, in a folder pinned to show its files, used before, chosen in the file "
+    "dialog, or kept for an image: a version, or a copy of what a run was given. As base64, for the app's view.",
 )
 IMAGE_RESOURCES = [IMAGE_FILE, IMAGE_VERSION, IMAGE_THUMBNAIL, RUN_PREVIEW, REFERENCE]

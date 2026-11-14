@@ -13,18 +13,30 @@ import { StatusBar } from "@/components/StatusBar";
 import { TopBar, type NarrowPane, type Pane } from "@/components/TopBar";
 import { Segmented } from "@/components/ui/segmented";
 import { Workspace } from "@/components/Workspace";
-import { moveGuides, setMode, useCanvas, type CanvasMode } from "@/lib/canvas";
+import {
+  clearGuides,
+  moveGuides,
+  setMode,
+  useCanvas,
+  type CanvasMode,
+} from "@/lib/canvas";
 import { onDisplay, requestDisplayMode } from "@/lib/host";
-import { moveDraft, NEW_IMAGE } from "@/lib/drafts";
+import { moveDraft, NEW_IMAGE, updateDraft } from "@/lib/drafts";
+import { moveDrawing, sentDrawing } from "@/lib/drawing";
 import { useImages } from "@/lib/images";
 import { paneLayout, useBreakpoint } from "@/lib/layout";
 import { useMethods } from "@/lib/methods";
-import { addEntries, moveReferences } from "@/lib/references";
-import { guideBlock, pickedModel } from "@/lib/request";
+import { addEntries, clearReferences, moveReferences } from "@/lib/references";
+import { guideBlock, isDrawing, makesNew, pickedModel } from "@/lib/request";
 import { useRuns } from "@/lib/runs";
 import { updateSettings, useLayoutResets, useSettings } from "@/lib/settings";
 import { useShortcuts } from "@/lib/shortcuts";
-import { followDirectory, useAppState } from "@/lib/state";
+import {
+  appStateNow,
+  followDirectory,
+  updateAppState,
+  useAppState,
+} from "@/lib/state";
 import { cn } from "@/lib/utils";
 import { useViewed } from "@/lib/viewed";
 
@@ -42,11 +54,20 @@ function App() {
   const runs = useRuns(image);
   const { state } = useAppState();
   const { methods } = useMethods();
-  const model = methods ? pickedModel(state.request, methods) : null;
+  const method = state.method;
+  const model =
+    methods && method === "model" ? pickedModel(state.request, methods) : null;
+  // A request that makes a new image from the one in view takes neither marks nor a mask.
+  const fresh =
+    image !== null &&
+    methods !== null &&
+    makesNew(image, method, model, methods);
   const blocks: Record<CanvasMode, string | null> = {
-    markup: guideBlock("markup", image, shown, model),
-    mask: guideBlock("mask", image, shown, model),
+    markup: guideBlock("markup", image, shown, model, fresh),
+    mask: guideBlock("mask", image, shown, model, fresh),
   };
+  // Marks drawn while an agent draws the image go to it with the next message.
+  const steering = method === "svg" && image !== null && isDrawing(image.name);
   // A mode the image or the model does not take gives way to marks, which every model takes.
   const mode: CanvasMode | null =
     blocks[pickedMode] === null
@@ -60,6 +81,17 @@ function App() {
   const search = useRef<HTMLInputElement>(null);
   const dataDirectory = listing?.data_directory ?? null;
   useEffect(() => followDirectory(dataDirectory), [dataDirectory]);
+  const viewing = image?.name ?? null;
+  // An image opens on the method that made it: a drawing on SVG, anything else on an image model.
+  useEffect(() => {
+    if (viewing === null) {
+      return;
+    }
+    const made = isDrawing(viewing) ? "svg" : "model";
+    if (appStateNow().method !== made) {
+      updateAppState((current) => ({ ...current, method: made }));
+    }
+  }, [viewing]);
   const { settings } = useSettings();
   const resets = useLayoutResets();
   const panes = { images: usePanelRef(), request: usePanelRef() };
@@ -170,6 +202,7 @@ function App() {
       mode={mode}
       tools={mode ?? "markup"}
       blocked={mode === null ? blocks.markup : null}
+      steering={steering}
       error={error}
       onView={view}
       onChanged={refresh}
@@ -295,6 +328,7 @@ function App() {
             moveDraft(renaming, name);
             moveReferences(renaming, name);
             moveGuides(renaming, name);
+            moveDrawing(renaming, name);
           }
           void refresh();
         }}
@@ -302,7 +336,16 @@ function App() {
       <DeleteDialog
         name={deleting}
         onClose={() => setDeleting(null)}
-        onDeleted={() => void refresh()}
+        onDeleted={() => {
+          // So an image made later under the same name starts with nothing of this one's.
+          if (deleting !== null) {
+            updateDraft(deleting, { prompt: "", size: null });
+            clearReferences(deleting);
+            clearGuides(deleting);
+            sentDrawing(deleting);
+          }
+          void refresh();
+        }}
       />
     </div>
   );

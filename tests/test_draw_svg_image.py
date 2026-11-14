@@ -1,25 +1,20 @@
 """Drawing SVG images with the agent faked and image.py run in this process, from the library and the CLI."""
 
-import asyncio
-from collections.abc import AsyncIterator, Callable, Coroutine
 from io import BytesIO
 import json
 from pathlib import Path
-import runpy
 from typing import Any
-import uuid
 
+from fake_drawing import Behavior, FakeAgentRun, FakeDrawingAgent, draws, fake_agent, hangs, sailboat, steered_to
 from PIL import Image
 import pytest
 from typer.testing import CliRunner
 
 from image_design import lib
-from image_design.capabilities.svg_image import build, draw, prompting
+from image_design.capabilities.svg_image import build, prompting
 from image_design.cli import app
-from image_design.intelligence.events import EventLog
-from image_design.intelligence.schemas import AgentEvent, AgentEventKind, AgentRequest, AgentResult, Steering
+from image_design.intelligence.schemas import AgentResult
 from image_design.schemas import ImageDesignError, ImageEvent, ImageResult, Mark, SvgBudgets
-from image_design.shared.images import runs
 from image_design.shared.images.store import LOCKS, SCRIPT, lock_path
 
 runner = CliRunner()
@@ -29,124 +24,6 @@ SWATCH = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><rect width="40" height="30" fill="#457b9d"/></svg>'
 )
 BROKEN = 'raise RuntimeError("The sail is missing.")\n'
-
-
-def sailboat(sail: str = "#e63946") -> str:
-    """An image.py that draws a sailboat of three named parts, as an agent would write it."""
-    return f"""# /// script
-# requires-python = ">=3.13"
-# dependencies = []
-# ///
-from pathlib import Path
-
-SAIL = "{sail}"
-Path(__file__).with_name("image.svg").write_text(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48" viewBox="0 0 64 48">'
-    '<g id="sea"><rect y="32" width="64" height="16" fill="#1d3557"/></g>'
-    '<g id="boat"><rect x="16" y="26" width="32" height="6" fill="#8d5524"/>'
-    '<g id="sail"><polygon points="32,4 32,26 50,26" fill="' + SAIL + '"/></g></g></svg>',
-    encoding="utf-8",
-)
-"""
-
-
-class FakeAgentRun:
-    """An agent that draws in its workspace as its behavior says, and records what it was sent."""
-
-    def __init__(self, request: AgentRequest, behavior: "Behavior") -> None:
-        self.request = request
-        self.cancels = 0
-        self.steered: list[tuple[str, list[Path]]] = []
-        self.follow_ups: list[str] = []
-        self._session = request.resume or f"session-{uuid.uuid4().hex[:6]}"
-        self._messages: asyncio.Queue[str] = asyncio.Queue()
-        self._log = EventLog()
-        self._ended: asyncio.Future[AgentResult] = asyncio.get_running_loop().create_future()
-        self._task = asyncio.create_task(behavior(self))
-        self._task.add_done_callback(self._raised)
-
-    def _raised(self, task: asyncio.Task[None]) -> None:
-        """End the run with what a behavior raised, so a test shows it rather than waiting out the run."""
-        if not task.cancelled() and (error := task.exception()) is not None:
-            self.end(AgentResult(error=f"The fake agent raised {error!r}", session_id=self._session))
-
-    @property
-    def session_id(self) -> str | None:
-        return self._session
-
-    @property
-    def work(self) -> Path:
-        assert self.request.workspace is not None
-        return self.request.workspace.path
-
-    def events(self) -> AsyncIterator[AgentEvent]:
-        return self._log.replay()
-
-    async def steer(self, message: str, images: list[Path] | None = None) -> None:
-        if self._ended.done():
-            raise ImageDesignError("The agent run has ended, so the steering message was not delivered.")
-        self.steered.append((message, list(images or [])))
-        self._messages.put_nowait(message)
-
-    async def cancel(self) -> None:
-        self.cancels += 1
-        self._task.cancel()
-        await asyncio.wait([self._task])
-        self.end(AgentResult(cancelled=True, session_id=self._session))
-
-    async def result(self) -> AgentResult:
-        return await self._ended
-
-    def emit(self, kind: AgentEventKind, text: str = "", **data: Any) -> None:
-        self._log.emit(AgentEvent(kind=kind, text=text, data=data))
-
-    def end(self, result: AgentResult) -> None:
-        if not self._ended.done():
-            self._ended.set_result(result)
-            self._log.emit(AgentEvent(kind="terminal", text=result.error or result.text, data=result.model_dump()))
-
-    def writes(self, script: str) -> None:
-        self.emit("tool_call", "Write image.py", tool_name="Write", arguments={"file_path": "image.py"})
-        (self.work / SCRIPT).write_text(script, encoding="utf-8")
-        self.emit("tool_result", "", tool_name="Write", success=True)
-
-    async def builds(self) -> None:
-        command = build.command(self.work)
-        self.emit("tool_call", f"Bash {command}", tool_name="Bash", arguments={"command": command})
-        try:
-            check = await asyncio.to_thread(build.build, self.work)
-        except ImageDesignError as error:
-            self.emit("tool_result", str(error), tool_name="Bash", success=False)
-            return
-        self.emit("tool_result", check.describe(), tool_name="Bash", success=True)
-
-    async def message(self) -> str:
-        return await self._messages.get()
-
-    async def finishes(self, text: str = "I drew a sailboat.") -> None:
-        """End the turn as an agent does: act on each follow-up the run gives, then answer."""
-        while self.request.follow_up is not None and (follow_up := await self.request.follow_up()) is not None:
-            self.follow_ups.append(follow_up)
-            await self.builds()
-        self.emit("message", text)
-        self.emit("usage", model="fake", input_tokens=100, output_tokens=20, cost={"USD": 0.01})
-        self.end(AgentResult(text=text, session_id=self._session))
-
-
-Behavior = Callable[[FakeAgentRun], Coroutine[Any, Any, None]]
-
-
-def draws(sail: str = "#e63946", finding: str | None = None) -> Behavior:
-    """An agent that writes the sailboat, builds it, and finishes; first checking image.py holds `finding`, if given."""
-
-    async def behave(run: FakeAgentRun) -> None:
-        if finding is not None:
-            assert (run.work / SCRIPT).read_text(encoding="utf-8") == finding
-        run.writes(sailboat(sail))
-        await run.builds()
-        await run.finishes()
-
-    return behave
 
 
 def writes_only(script: str) -> Behavior:
@@ -170,64 +47,10 @@ def stops(error: str) -> Behavior:
     return behave
 
 
-def steered_to(sail: str) -> Behavior:
-    """An agent that draws, waits for a steering message, then redraws the sail."""
-
-    async def behave(run: FakeAgentRun) -> None:
-        run.writes(sailboat())
-        await run.builds()
-        await run.message()
-        run.writes(sailboat(sail))
-        await run.builds()
-        await run.finishes()
-
-    return behave
-
-
-async def hangs(run: FakeAgentRun) -> None:
-    await asyncio.Event().wait()
-
-
-class FakeDrawingAgent:
-    """Stands in for an agent provider, recording each agent it starts."""
-
-    implementation = "fake"
-    steering: Steering = "queued"
-
-    def __init__(self) -> None:
-        self.behavior: Behavior = draws()
-        self.runs: list[FakeAgentRun] = []
-
-    def preflight(self) -> None:
-        pass
-
-    async def start(self, request: AgentRequest) -> FakeAgentRun:
-        run = FakeAgentRun(request, self.behavior)
-        self.runs.append(run)
-        return run
-
-
-def run_in_process(work: Path) -> None:
-    """image.py run in this process, as `uv run --script` runs it, so the tests start no process."""
-    lock = lock_path(work / SCRIPT)
-    if not lock.is_file():
-        lock.write_text("version = 1\n", encoding="utf-8")
-    try:
-        runpy.run_path(str(work / SCRIPT), run_name="__main__")
-    except Exception as error:
-        raise ImageDesignError(
-            f"`uv run --script image.py` failed with exit code 1:\n{type(error).__name__}: {error}", "build-failed"
-        ) from None
-
-
 @pytest.fixture
 def agent(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> FakeDrawingAgent:
     """The agent provider faked, also for the CLI, in a working directory of its own."""
-    fake = FakeDrawingAgent()
-    monkeypatch.setattr(draw, "resolve_agent_provider", lambda provider: provider or "codex")
-    monkeypatch.setattr(draw, "select_intelligence", lambda intelligence, *_: (intelligence or fake, "fake-model"))
-    monkeypatch.setattr(build, "run_script", run_in_process)
-    monkeypatch.setattr(runs, "POLL_SECONDS", 0.01)
+    fake = fake_agent(monkeypatch)
     monkeypatch.chdir(tmp_path_factory.mktemp("work"))
     return fake
 
@@ -272,6 +95,8 @@ async def test_a_drawing_is_created_then_edited_with_marks_and_a_reference_each_
     assert {"agent", "preview"} <= set(kinds)
     assert "Making sailboat.svg with fake-model." in events[0].text
     assert events[0].data["prompt"] == "A sailboat."
+    assert events[0].data["run_folder"] == str(folder() / "runs" / created.run_id)
+    assert [run["request"]["marks"] for run in runs_kept()] == [[], [SAIL.model_dump(mode="json")]]
     assert (created.status, [(version.id, version.method) for version in created.versions]) == ("done", [("v1", "svg")])
     assert created.usage is not None
     assert (created.usage.output_tokens, created.usage.cost) == (20, 0.01)
@@ -298,21 +123,24 @@ async def test_a_drawing_is_created_then_edited_with_marks_and_a_reference_each_
 
 
 async def test_budgets_are_told_the_agent_kept_on_an_edit_and_cleared_with_none(agent: FakeDrawingAgent) -> None:
-    await drawn(agent, canvas=(64, 48), max_shapes=10, max_colors=3)
+    await drawn(agent, canvas=(64, 48), max_bytes=4000)
     agent.behavior = draws("#457b9d")
-    await drawn(agent, prompt="Make the sail blue.", max_colors=None)
+    await drawn(agent, prompt="Make the sail blue.")
+    agent.behavior = draws("#e9c46a")
+    await drawn(agent, prompt="Make the sail yellow.", max_bytes=None, timeout_seconds=None)
 
-    creating, editing = agent.runs
+    creating, editing, cleared = agent.runs
     assert "A canvas of 64 by 48" in creating.request.prompt
-    assert "At most 10 shapes" in creating.request.prompt
-    assert "At most 3 colors" in creating.request.prompt
-    assert "At most 10 shapes" in editing.request.prompt
-    assert "colors:" not in editing.request.prompt
+    assert "At most 4,000 bytes of SVG" in creating.request.prompt
+    assert "At most 4,000 bytes of SVG" in editing.request.prompt
+    assert "bytes of SVG" not in cleared.request.prompt
+    # No time limit for the run is none for its agent either.
+    assert (editing.request.timeout_seconds, cleared.request.timeout_seconds) == (660, None)
     check = lib.check_svg_image("sailboat.svg")
-    assert (check.budgets.canvas, check.budgets.max_shapes, check.budgets.max_colors) == ((64, 48), 10, None)
-    assert (check.shapes, check.colors) == (3, ["#1d3557", "#457b9d", "#8d5524"])
+    assert (check.budgets.canvas, check.budgets.max_bytes) == ((64, 48), None)
+    assert (check.shapes, check.colors) == (3, ["#1d3557", "#8d5524", "#e9c46a"])
     assert [(part.id, part.shapes) for part in check.parts] == [("sea", 1), ("boat", 2), ("boat/sail", 1)]
-    assert check.describe().splitlines()[1] == "Shapes: 3 (at most 10)."
+    assert check.describe().splitlines()[1:3] == ["Shapes: 3.", "Colors: 3: #1d3557, #8d5524, #e9c46a."]
 
 
 async def test_a_resumed_session_goes_on_from_an_unfinished_run_s_work_and_keeps_its_agent_provider(
@@ -426,7 +254,8 @@ async def test_a_drawing_that_does_not_finish_ends_saying_why_stops_its_agent_an
         ({"name": "sailboat.png"}, "does not end in .svg"),
         ({"prompt": " "}, "The prompt is empty"),
         ({"canvas": (0, 10)}, "canvas is 0x10"),
-        ({"max_shapes": 0}, "max_shapes is 0"),
+        ({"max_bytes": 0}, "max_bytes is 0"),
+        ({"timeout_seconds": 0}, "timeout_seconds must be more than 0"),
         ({"marks": [SAIL]}, "no image named sailboat.svg to edit"),
         ({"resume_session": True}, "no agent session to resume"),
         ({"references": [Path("notes.txt")]}, "is not an image the tool can read"),
@@ -493,13 +322,13 @@ async def test_activity_reads_each_run_s_events_and_then_only_what_came_since(ag
 
 def test_the_cli_draws_checks_exports_and_reads_activity(agent: FakeDrawingAgent) -> None:
     made = runner.invoke(
-        app, ["draw-svg-image", "A sailboat.", "--name", "sailboat.svg", "--canvas", "64x48", "--max-colors", "none"]
+        app, ["draw-svg-image", "A sailboat.", "--name", "sailboat.svg", "--canvas", "64x48", "--max-bytes", "none"]
     )
     checked = runner.invoke(app, ["check-svg-image", "--name", "sailboat.svg"])
     exported = runner.invoke(app, ["export-svg-image", "--name", "sailboat.svg", "--output", "out/boat.png"])
     activity = runner.invoke(app, ["read-image-activity", "--name", "sailboat.svg"])
     steered = runner.invoke(app, ["steer-svg-image", "--name", "sailboat.svg", "--message", "Too late."])
-    bad = runner.invoke(app, ["draw-svg-image", "A boat.", "--name", "boat.svg", "--max-shapes", "lots"])
+    bad = runner.invoke(app, ["draw-svg-image", "A boat.", "--name", "boat.svg", "--timeout-seconds", "lots"])
 
     assert made.exit_code == 0, made.output
     assert made.stdout.splitlines() == [str(Path(".image-design", "sailboat.svg"))]

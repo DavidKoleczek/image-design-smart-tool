@@ -1,3 +1,4 @@
+import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu";
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import type { ComponentProps, ReactNode } from "react";
 
@@ -8,6 +9,34 @@ import { cn } from "@/lib/utils";
 export const Menu = MenuPrimitive.Root;
 export const MenuTrigger = MenuPrimitive.Trigger;
 export const MenuGroup = MenuPrimitive.Group;
+
+/** A menu opened by a right click, or a long press, on its trigger; it takes the same items as `Menu`. */
+export const ContextMenu = ContextMenuPrimitive.Root;
+export const ContextMenuTrigger = ContextMenuPrimitive.Trigger;
+
+/** The open context menu, at the pointer. */
+export function ContextMenuContent({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <ContextMenuPrimitive.Portal>
+      <ContextMenuPrimitive.Positioner
+        collisionPadding={8}
+        className="z-50 outline-none"
+      >
+        <ContextMenuPrimitive.Popup
+          className={cn(POPUP, "min-w-44", className)}
+        >
+          {children}
+        </ContextMenuPrimitive.Popup>
+      </ContextMenuPrimitive.Positioner>
+    </ContextMenuPrimitive.Portal>
+  );
+}
 
 /** The open menu, placed against its trigger. */
 export function MenuContent({

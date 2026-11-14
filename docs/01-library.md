@@ -214,14 +214,12 @@ async def draw_svg_image(
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     canvas: tuple[int, int] | NotGiven = NOT_GIVEN,
-    max_shapes: int | NotGiven | None = NOT_GIVEN,
-    max_colors: int | NotGiven | None = NOT_GIVEN,
     max_bytes: int | NotGiven | None = NOT_GIVEN,
     resume_session: bool | str = False,
     agent_provider: AgentProvider | None = None,
     model: str | None = None,
     reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT,
-    timeout_seconds: int = 600,
+    timeout_seconds: int | None = 600,
     origin: str | None = None,
     detach: bool = False,
     intelligence: Intelligence | None = None,
@@ -243,9 +241,10 @@ The parameters that differ from `generate_openai_image`:
 
 - `references`: Shown to the agent with the prompt.
 - `marks`: Drawn on the render that the agent is shown. The agent is also told which parts of the drawing are under each mark.
-- `canvas`, `max_shapes`, `max_colors`, `max_bytes`: The drawing's budgets. They are not sent to a service. The agent is told what they are, and `check_svg_image` measures the drawing against them. A new drawing defaults to a 512 x 512 canvas with no other limits. On an edit, a budget you leave out keeps its earlier value.
+- `canvas`, `max_bytes`: The drawing's budgets. They are not sent to a service. The agent is told what they are, and `check_svg_image` measures the drawing against them. A new drawing defaults to a 512 x 512 canvas with no other limits. On an edit, a budget you leave out keeps its earlier value.
 - `resume_session`: Pass `True` to continue the image's last agent session, so the agent remembers the earlier requests. Pass a session ID to continue that session.
 - `agent_provider`, `model`, `reasoning_effort`: The agent that draws. See [Agent providers](#agent-providers).
+- `timeout_seconds`: How long the agent may work, or None for no limit.
 - `intelligence`: An agent to use in place of the agent provider. Tests use it to pass a fake.
 
 The returned `SvgRun` is an `ImageRun` that also has a `session_id` and a `steer(message, origin, references, marks)` method, which works as `steer_svg_image` does.
@@ -330,7 +329,7 @@ def list_image_methods() -> ImageMethods
 - `move_image` renames an image or moves it to another folder. The image keeps its versions. The new name must keep the extension.
 - `delete_image` deletes an image and everything kept for it. If a run is working on the image, it's stopped first.
 - `cancel_image` stops the run that is working on an image. It can be called from any process.
-- `read_image_activity` returns the history of an image: each request, what the agent did, and how each run ended. Pass the `cursor` from an earlier call as `after` to get only what is new.
+- `read_image_activity` returns the history of an image: each request, what the agent did, and how each run ended. Pass the `cursor` from an earlier call as `after` to get only what is new. Each run's `started` event has its request, which names the files the run was given relative to the event's `run_folder`.
 - `list_image_methods` returns the three ways of making an image, whether each is set up on this machine, and the models and options each supports. Set up means installed, and for the OpenAI API that the key is set.
 
 An image's file is kept apart from the tool's data for it. With the default `data_directory`, the layout is:
@@ -391,6 +390,9 @@ The other tools are for the view. They are listed only to hosts that render MCP 
 - `list_images`, `view_image`, `move_image`, `delete_image`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's directory.
 - `generate_openai_image` and `generate_chatgpt_image` start a run on the app's directory with `detach=True` and `origin="app"`, so the image goes on being made when the app closes. They return the image's name and the run's ID once the run has started. They take the prompt, the name, the version to edit, the model and output options, and what guides the request: `references`, `marks`, and for the OpenAI API a `mask`. Each reference is a `path` the app offers or an `upload`, and the mask is an upload. A started run has copied what it was given, so the uploads it took are cleared, and the result's `references` says where each is offered from now.
 - `preview_openai_image_request` and `preview_chatgpt_image_request` take the same arguments and return the `ImageRequestPreview`.
+- `draw_svg_image` starts a drawing the same way. It takes the prompt, the name, `references`, `marks`, the budgets, `resume_session`, the agent provider, model, and reasoning effort, and `timeout_seconds`.
+- `steer_svg_image` leaves a message for the agent drawing an image, with `references` and `marks`. The message holds copies of what it was given, so the uploads it took are cleared.
+- `export_svg_image` asks the user where to save in the platform's save dialog, then renders the drawing, or one of its versions, there at a `scale` of its canvas.
 - `upload_file` takes a file from the view in base64 pieces, under an ID the view makes up: a reference dropped or pasted into the app, or the mask painted in it. Uploads wait in `image-design-uploads` in the system's temp folder. One that no request takes is cleared when the app closes, or by the next app to start a day later.
 - `read_reference_library` returns the references the app offers besides the images in its directory: the pinned files, and what requests sent from the app were given before.
 - `list_reference_folder` returns the images in a folder pinned to show its files.
@@ -398,7 +400,7 @@ The other tools are for the view. They are listed only to hosts that render MCP 
 - `keep_reference` copies an upload into `app/pins` in the data directory, so a dropped image can be pinned. The copy is cleared once the state is saved without it among the pins.
 - `read_openai_key`, `enter_openai_key`, and `clear_openai_key` are over `openai_api_key_status`, `save_openai_api_key`, and `clear_openai_api_key`. None takes or returns the key. `enter_openai_key` has the user type it into a window on the machine the server runs on, so the key is in no message between the view, its host, and the server.
 - `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, and the pane sizes.
-- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, and the pinned references and folders.
+- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, the agent and budgets for a new drawing, and the pinned references and folders.
 
 The view reads images as resources, each as base64. A read is refused unless the listing has that image or version, or the image's activity has that preview.
 
@@ -406,7 +408,7 @@ The view reads images as resources, each as base64. A read is refused unless the
 - `image-design://versions/{version}/{+name}` is a version kept for an image, such as `v2`.
 - `image-design://thumbnails/{version}/{+name}` is a WebP of a version that fits 256 by 256 pixels. Use `file` as the version for the image's file.
 - `image-design://previews/{run}/{index}/{+name}` is an in-progress image of a run. `run` is the run's ID, and `index` is the one its `preview` event has.
-- `image-design://references/{+path}` is a WebP that fits 256 by 256 pixels of an image the app offers as a reference, by its path on the machine. It is refused unless the file is an image in the app's directory, pinned, in a folder pinned to show its files, used before, or chosen in the file dialog. A request's references are held to the same rule.
+- `image-design://references/{+path}` is a WebP that fits 256 by 256 pixels of an image the app offers as a reference, by its path on the machine. It is refused unless the file is an image in the app's directory, pinned, in a folder pinned to show its files, used before, chosen in the file dialog, or kept in the data directory as a version or as a copy of what a run was given. A request's references are held to the same rule.
 
 The app keeps what it remembers in these files:
 

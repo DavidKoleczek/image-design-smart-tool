@@ -379,11 +379,11 @@ export function ReferenceLibrary({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="References" className="sm:max-w-180">
-        <div className="flex h-[min(460px,70vh)] min-h-0 max-sm:h-auto max-sm:flex-1">
+      <DialogContent title="References" className="sm:max-w-240">
+        <div className="flex h-[min(56rem,calc(100dvh-7.5rem))] min-h-0 max-sm:h-auto max-sm:flex-1">
           <nav
             aria-label="Library"
-            className="flex w-41 shrink-0 flex-col overflow-y-auto border-r border-line p-1"
+            className="flex w-44 shrink-0 flex-col overflow-y-auto border-r border-line p-1"
           >
             <ul className="flex flex-col gap-px">
               <RailItem
@@ -515,7 +515,7 @@ export function ReferenceLibrary({
                   </ul>
                 </>
               ) : (
-                <ul className="grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2">
+                <ul className="grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2.5">
                   {shown.map((entry) => (
                     <Tile key={entry.path} {...entryProps(entry)} />
                   ))}

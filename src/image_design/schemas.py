@@ -103,7 +103,6 @@ INTELLIGENCE_MODELS: tuple[IntelligenceModel, ...] = (
     _model("codex", "gpt-6.1-sol", "GPT-6.1 Sol"),
     _model("codex", "gpt-6.1-terra", "GPT-6.1 Terra"),
     _model("codex", "gpt-6-astra", "GPT-6 Astra"),
-    _model("codex", "gpt-6-luna", "GPT-6 Luna"),
     _model("claude", "claude-opus-5-5", "Claude Opus 5.5"),
     _model("claude", "claude-sonnet-5-5", "Claude Sonnet 5.5"),
 )
@@ -208,8 +207,6 @@ class SvgBudgets(BaseModel):
     """What an SVG drawing should stay within. The agent is told them, and `check_svg_image` measures against them."""
 
     canvas: tuple[int, int] = Field(description="Width and height, the size of the SVG's view")
-    max_shapes: int | None = Field(default=None, description="Elements that draw, such as path and rect; None for any")
-    max_colors: int | None = Field(default=None, description="Distinct fill, stroke, and stop colors; None for any")
     max_bytes: int | None = Field(default=None, description="The size of the SVG file; None for any")
 
 
@@ -356,7 +353,10 @@ class ImageActivity(BaseModel):
     """What happened to an image, run by run: each request, what its agent did, and how it ended."""
 
     name: str
-    events: list[ImageEvent] = Field(description="In order; each run's begin with `started`, which has its request")
+    events: list[ImageEvent] = Field(
+        description="In order; each run's begin with `started`, which has its request and its `run_folder`, the "
+        "folder the files the request names are relative to"
+    )
     status: ImageRunStatus | None = Field(description="The last run's status; None when it has had no run")
     cursor: str | None = Field(
         description="Pass as `after` to get only what happens from here on; None when the image has had no run"
@@ -398,8 +398,8 @@ class SvgCheck(BaseModel):
         colors = f": {', '.join(self.colors)}." if self.colors else "."
         lines = [
             f"Canvas: {width}x{height}. The SVG {declared}, with {view_box}.",
-            f"Shapes: {self.shapes}{_at_most(self.budgets.max_shapes)}.",
-            f"Colors: {len(self.colors)}{_at_most(self.budgets.max_colors)}{colors}",
+            f"Shapes: {self.shapes}.",
+            f"Colors: {len(self.colors)}{colors}",
             f"Bytes: {self.bytes:,}{_at_most(self.budgets.max_bytes)}.",
         ]
         if self.texts:
@@ -639,6 +639,7 @@ class AppSettings(BaseModel):
     images_view: ImagesView = Field(
         default="details", description="How Your images lists them: a file tree with columns, or a grid of previews"
     )
+    advanced: bool = Field(default=False, description="Whether a request's advanced options show")
     wide: AppLayout = Field(default_factory=AppLayout, description="The panes from 1100 pixels wide")
     medium: AppLayout = Field(default_factory=AppLayout, description="The panes from 640 to 1100 pixels wide")
 
@@ -665,6 +666,17 @@ class AppImageRequest(BaseModel):
     reasoning_effort: ReasoningEffort | None = Field(
         default=None, description="That model's reasoning effort; None for the default"
     )
+
+
+class AppSvgRequest(BaseModel):
+    """What the person last picked in the app for drawing an SVG: the agent, and a new drawing's budgets."""
+
+    agent_provider: AgentProvider | None = Field(default=None, description="None for the default")
+    model: str | None = Field(default=None, description="The agent's model; None for the agent provider's default")
+    reasoning_effort: ReasoningEffort | None = Field(default=None, description="None for the default")
+    canvas: tuple[int, int] | None = Field(default=None, description="A new drawing's; None for the default")
+    max_bytes: int | None = Field(default=None, ge=1, description="None for any")
+    timeout_seconds: int | None = Field(default=None, ge=1, description="How long a run may take; None for no limit")
 
 
 AppFolderShows = Literal["files", "dialog"]
@@ -716,6 +728,7 @@ class AppState(BaseModel):
         default="model", description="The way of making an image picked last: an image model, or drawing an SVG"
     )
     request: AppImageRequest = Field(default_factory=AppImageRequest)
+    svg: AppSvgRequest = Field(default_factory=AppSvgRequest)
     closed_folders: list[str] = Field(
         default_factory=list, description="The folders closed in Your images, by their paths with forward slashes"
     )

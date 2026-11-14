@@ -42,7 +42,7 @@ class AgentRequest(BaseModel):
         default=None, description="JSON schema the structured output must satisfy; None asks for text only"
     )
     reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT
-    timeout_seconds: int = Field(gt=0)
+    timeout_seconds: int | None = Field(gt=0, description="None for no limit")
     resume: str | None = Field(
         default=None,
         description="The session_id of an earlier result to continue in, so the agent keeps what it learned; None starts fresh",

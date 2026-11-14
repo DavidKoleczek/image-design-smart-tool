@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { Export } from "@/components/Export";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { LoadingMark } from "@/components/ui/loading-mark";
@@ -14,6 +15,7 @@ import {
 import { describe } from "@/lib/errors";
 import { dimensions, methodLabel, usageLabel } from "@/lib/format";
 import { filePicture, versionPicture, type Picture } from "@/lib/pictures";
+import { isDrawing } from "@/lib/request";
 import type { Runs } from "@/lib/runs";
 import { ago, between } from "@/lib/time";
 import { baseName } from "@/lib/tree";
@@ -199,6 +201,9 @@ export function Versions({
             </span>
           ))}
         </p>
+        {isDrawing(image.name) && shown.width !== null && (
+          <Export image={image} shown={shown} />
+        )}
         {shown.file
           ? shown.version && (
               <span className="flex min-w-0 shrink-0 items-center gap-1.5 pr-1 text-label">

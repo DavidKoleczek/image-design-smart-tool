@@ -65,7 +65,7 @@ INPUTS = "inputs"
 CURRENT_PNG = "current.png"
 CURRENT_SVG = "current.svg"
 MARKED = "marked.png"
-BUDGETS = ("max_shapes", "max_colors", "max_bytes")
+BUDGETS = ("max_bytes",)
 # How much of a tool call a run's progress shows; its event's data has the call in full.
 SHOWN_CALL_CHARACTERS = 200
 
@@ -80,14 +80,12 @@ class SvgImageRequest(BaseModel):
     references: list[Path] = []
     marks: list[Mark] = []
     canvas: tuple[int, int] | NotGiven = NOT_GIVEN
-    max_shapes: int | NotGiven | None = NOT_GIVEN
-    max_colors: int | NotGiven | None = NOT_GIVEN
     max_bytes: int | NotGiven | None = NOT_GIVEN
     resume_session: bool | str = False
     agent_provider: AgentProvider | None = None
     model: str | None = None
     reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT
-    timeout_seconds: int = 600
+    timeout_seconds: int | None = 600
     origin: str | None = None
 
 
@@ -99,14 +97,12 @@ async def draw_svg_image(
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     canvas: tuple[int, int] | NotGiven = NOT_GIVEN,
-    max_shapes: int | NotGiven | None = NOT_GIVEN,
-    max_colors: int | NotGiven | None = NOT_GIVEN,
     max_bytes: int | NotGiven | None = NOT_GIVEN,
     resume_session: bool | str = False,
     agent_provider: AgentProvider | None = None,
     model: str | None = None,
     reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT,
-    timeout_seconds: int = 600,
+    timeout_seconds: int | None = 600,
     origin: str | None = None,
     detach: bool = False,
     intelligence: Intelligence | None = None,
@@ -121,8 +117,6 @@ async def draw_svg_image(
         references=references or [],
         marks=marks or [],
         canvas=canvas,
-        max_shapes=max_shapes,
-        max_colors=max_colors,
         max_bytes=max_bytes,
         resume_session=resume_session,
         agent_provider=agent_provider,
@@ -184,7 +178,9 @@ async def start(request: SvgImageRequest, intelligence: Intelligence | None = No
                 workspace=HostWorkspace(path=work),
                 writable=True,
                 reasoning_effort=request.reasoning_effort,
-                timeout_seconds=request.timeout_seconds + AGENT_GRACE_SECONDS,
+                timeout_seconds=(
+                    None if request.timeout_seconds is None else request.timeout_seconds + AGENT_GRACE_SECONDS
+                ),
                 resume=resumed.session_id if resumed is not None else None,
                 session_directory=image.folder / SESSIONS,
                 follow_up=Checking(work).follow_up,
@@ -200,6 +196,7 @@ async def start(request: SvgImageRequest, intelligence: Intelligence | None = No
                     "reasoning_effort": request.reasoning_effort,
                     **budgets.model_dump(mode="json"),
                     "images": [path.relative_to(folder).as_posix() for path in images],
+                    "marks": [mark.model_dump(mode="json") for mark in request.marks],
                     "resumed": resumed.session_id if resumed is not None else None,
                 },
                 origin=request.origin,
@@ -537,8 +534,8 @@ def _require_arguments(request: SvgImageRequest) -> None:
         )
     if not request.prompt.strip():
         raise invalid("The prompt is empty. Say what to draw, or what to change.", name)
-    if request.timeout_seconds <= 0:
-        raise invalid("timeout_seconds must be more than 0.", name)
+    if request.timeout_seconds is not None and request.timeout_seconds <= 0:
+        raise invalid("timeout_seconds must be more than 0, or None for no limit.", name)
     if not isinstance(request.canvas, NotGiven) and min(request.canvas) < 1:
         width, height = request.canvas
         raise invalid(f"canvas is {width}x{height}. Its width and height must each be at least 1.", name)

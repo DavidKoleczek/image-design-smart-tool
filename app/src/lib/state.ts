@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { readAppState, saveAppState, type AppState } from "@/lib/api";
+import { DEFAULT_SVG } from "@/lib/drawing";
 import { keep } from "@/lib/kept";
 import { DEFAULT_REQUEST } from "@/lib/request";
 
@@ -8,6 +9,7 @@ import { DEFAULT_REQUEST } from "@/lib/request";
 const DEFAULT_STATE: AppState = {
   method: "model",
   request: DEFAULT_REQUEST,
+  svg: DEFAULT_SVG,
   closed_folders: [],
   pins: [],
   folders: [],
@@ -29,6 +31,11 @@ export const updateAppState = store.update;
 
 /** Save a change still waiting, and wait until the server has it. */
 export const flushAppState = store.flush;
+
+/** What is picked now, for an effect that changes it only when it differs. */
+export function appStateNow(): AppState {
+  return store.snapshot().value;
+}
 
 /** Read it again once the app shows another directory, whose picks are its own. */
 export function followDirectory(dataDirectory: string | null) {

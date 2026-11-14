@@ -1,4 +1,5 @@
-"""Asking the person for files, a folder, or a secret in a window of their own machine, apart from the app's view."""
+"""Asking the person for files, a folder, where to save, or a secret, in a window of their own machine apart from the
+app's view."""
 
 import json
 from pathlib import Path
@@ -16,13 +17,24 @@ import sys
 import tkinter
 from tkinter import filedialog
 
-directory, title, kind = sys.argv[1:4]
+directory, title, kind, name = sys.argv[1:5]
 root = tkinter.Tk()
 root.withdraw()
 root.attributes("-topmost", True)
 root.update()
 if kind == "folder":
     chosen = filedialog.askdirectory(parent=root, initialdir=directory, title=title, mustexist=True)
+    print(json.dumps([chosen] if chosen else []))
+elif kind == "save":
+    suffix = name[name.rfind("."):]
+    chosen = filedialog.asksaveasfilename(
+        parent=root,
+        initialdir=directory,
+        initialfile=name,
+        title=title,
+        defaultextension=suffix,
+        filetypes=[(suffix[1:].upper(), "*" + suffix)],
+    )
     print(json.dumps([chosen] if chosen else []))
 else:
     print(json.dumps(list(filedialog.askopenfilenames(parent=root, initialdir=directory, title=title))))
@@ -98,8 +110,16 @@ def choose_folder(directory: Path, title: str) -> Path | None:
     return chosen[0] if chosen else None
 
 
+def choose_save_path(directory: Path, title: str, name: str) -> Path | None:
+    """Ask the person where to save a file in their platform's save dialog, opened at `directory` with `name` filled
+    in; None when they cancel."""
+    answer = _run(CHOOSE_SCRIPT, [str(directory), title, "save", name], "export it with the CLI instead")
+    chosen = json.loads(answer or "[]")
+    return Path(chosen[0]) if chosen else None
+
+
 def _ask(directory: Path, title: str, kind: str) -> list[Path]:
-    answer = _run(CHOOSE_SCRIPT, [str(directory), title, kind], "drop or paste the images onto the app instead")
+    answer = _run(CHOOSE_SCRIPT, [str(directory), title, kind, ""], "drop or paste the images onto the app instead")
     return [Path(path) for path in json.loads(answer or "[]")]
 
 

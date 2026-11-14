@@ -34,7 +34,7 @@ generate-openai-image: ready
 
 generate-chatgpt-image: ready
 - Names end in: .png
-- Codex models: gpt-6.1-sol (default), gpt-6.1-terra, gpt-6-astra, gpt-6-luna
+- Codex models: gpt-6.1-sol (default), gpt-6.1-terra, gpt-6-astra
 - Reasoning effort: low by default
 - At most 5 images sent
 

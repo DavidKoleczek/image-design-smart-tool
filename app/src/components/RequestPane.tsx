@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
+import { DrawPane } from "@/components/DrawPane";
+import { PromptPicker } from "@/components/PromptPicker";
 import { References } from "@/components/References";
 import { RequestPreview } from "@/components/RequestPreview";
 import { Button } from "@/components/ui/button";
@@ -8,11 +10,6 @@ import { Icon } from "@/components/ui/icon";
 import { LoadingMark } from "@/components/ui/loading-mark";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
 import { Notice } from "@/components/ui/notice";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { Section } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
 import { Select } from "@/components/ui/select";
@@ -42,11 +39,13 @@ import { dimensions } from "@/lib/format";
 import { openKeyDialog, useKey } from "@/lib/key";
 import { sentMark } from "@/lib/marks";
 import { useMethods } from "@/lib/methods";
+import { earlierPrompts } from "@/lib/prompts";
 import {
   addFiles,
   clearReferences,
   imageFiles,
   sentReferences,
+  type Reference,
   settleReferences,
   uploadMask,
   useReferences,
@@ -55,12 +54,17 @@ import {
   CHATGPT,
   CHATGPT_LABEL,
   freeName,
+  makesNew,
   modelLabel,
+  pickedModel,
   problemOf,
   referenceRoom,
   requestOf,
   resolve,
+  sendsSource,
   SIZES,
+  sourcePath,
+  stem,
   stillFormats,
   typedName,
   type Resolved,
@@ -68,8 +72,9 @@ import {
   type Target,
 } from "@/lib/request";
 import type { Runs } from "@/lib/runs";
+import { updateSettings, useSettings } from "@/lib/settings";
 import { flushAppState, updateAppState, useAppState } from "@/lib/state";
-import { ago, useElapsed } from "@/lib/time";
+import { useElapsed } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import type { Shown } from "@/lib/viewed";
 
@@ -147,11 +152,12 @@ function TargetBlock({
 }) {
   const { openai, chatgpt } = methods;
   const key = useKey();
-  const shown = target.image ? target.shown : null;
+  const source = target.image ? target : target.from;
+  const shown = source ? source.shown : null;
   return (
     <div className="flex flex-col gap-2 border-b border-line p-3">
       <div className="flex items-center gap-2.5">
-        {target.image && shown ? (
+        {source && shown ? (
           <>
             <Thumb
               picture={shown.picture && { ...shown.picture, small: true }}
@@ -159,13 +165,23 @@ function TargetBlock({
               className="size-11"
             />
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="truncate mono-value">{target.image.name}</span>
-              <span className="flex gap-2 mono-annotation text-ink-muted">
-                {shown.version && <span>{shown.version.id}</span>}
-                {shown.width !== null && shown.height !== null && (
-                  <span>{dimensions(shown.width, shown.height)}</span>
-                )}
-              </span>
+              <span className="truncate mono-value">{source.image.name}</span>
+              {target.image ? (
+                <span className="flex gap-2 mono-annotation text-ink-muted">
+                  {shown.version && <span>{shown.version.id}</span>}
+                  {shown.width !== null && shown.height !== null && (
+                    <span>{dimensions(shown.width, shown.height)}</span>
+                  )}
+                </span>
+              ) : (
+                <span className="flex min-w-0 gap-1.5 text-caption text-ink-muted">
+                  Makes
+                  <span className="truncate mono-value text-ink">
+                    {target.name}
+                    {resolved.format}
+                  </span>
+                </span>
+              )}
             </div>
             <Menu>
               <MenuTrigger
@@ -176,7 +192,7 @@ function TargetBlock({
                 <Icon name="more" />
               </MenuTrigger>
               <MenuContent align="end">
-                <MenuItem onClick={() => onUseInNew(target.image.name)}>
+                <MenuItem onClick={() => onUseInNew(source.image.name)}>
                   <Icon name="image" />
                   Use as a reference instead
                 </MenuItem>
@@ -247,109 +263,6 @@ function TargetBlock({
   );
 }
 
-type EarlierPrompt = { key: string; tag: string; when: string; text: string };
-
-/** The prompts a request can start from: those of the image's versions, newest first, or each image's last. */
-function earlierPrompts(
-  target: Target,
-  runs: Runs,
-  listing: ImageListing | null,
-): EarlierPrompt[] {
-  const prompts: EarlierPrompt[] = [];
-  const seen = new Set<string>();
-  const add = (prompt: EarlierPrompt) => {
-    if (prompt.text.trim() && !seen.has(prompt.text)) {
-      seen.add(prompt.text);
-      prompts.push(prompt);
-    }
-  };
-  if (target.image) {
-    for (const version of [...target.image.versions].reverse()) {
-      const run = version.run_id !== null ? runs.get(version.run_id) : null;
-      if (run) {
-        add({
-          key: version.id,
-          tag: version.id,
-          when: version.created,
-          text: run.prompt,
-        });
-      }
-    }
-  } else {
-    for (const image of listing?.images ?? []) {
-      if (image.last_run) {
-        add({
-          key: image.name,
-          tag: image.name,
-          when: image.last_run.started,
-          text: image.last_run.prompt,
-        });
-      }
-    }
-  }
-  return prompts;
-}
-
-/** Fills the prompt from an earlier one, in place of what is written. */
-function PromptPicker({
-  target,
-  prompts,
-  current,
-  onPick,
-}: {
-  target: Target;
-  prompts: EarlierPrompt[];
-  current: string;
-  onPick: (prompt: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={
-          <Button
-            size="sm"
-            disabled={prompts.length === 0}
-            title={prompts.length === 0 ? "No earlier prompts yet" : undefined}
-          />
-        }
-      >
-        <Icon name="clock" />
-        {target.image ? "Load from version" : "Load from image"}
-      </PopoverTrigger>
-      <PopoverContent
-        label="Earlier prompts"
-        className="flex max-h-[min(420px,70vh)] w-89 flex-col overflow-y-auto"
-      >
-        {prompts.map((prompt) => (
-          <button
-            key={prompt.key}
-            type="button"
-            onClick={() => {
-              onPick(prompt.text);
-              setOpen(false);
-            }}
-            className={cn(
-              "flex shrink-0 cursor-default flex-col gap-1 rounded-sm px-2 py-1.5 text-left outline-none hover:bg-hover focus-visible:bg-hover",
-              prompt.text === current && "bg-accent-soft",
-            )}
-          >
-            <span className="flex min-w-0 items-center gap-2 mono-annotation">
-              <span className="truncate text-ink">{prompt.tag}</span>
-              <span className="shrink-0 text-ink-muted">
-                {ago(prompt.when)}
-              </span>
-            </span>
-            <span className="line-clamp-2 text-label font-normal">
-              {prompt.text}
-            </span>
-          </button>
-        ))}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 /** What the image comes out as. An option the picked model or the image's format does not take is greyed out. */
 function Output({
   options,
@@ -362,7 +275,7 @@ function Output({
   methods: ImageMethods;
   target: Target;
 }) {
-  const [advanced, setAdvanced] = useState(false);
+  const { advanced } = useSettings().settings;
   const { openai, chatgpt } = methods;
   const byChatGPT = resolved.method === "chatgpt" ? BY_CHATGPT : undefined;
   const onlyChatGPT = resolved.method === "chatgpt" ? undefined : ONLY_CHATGPT;
@@ -489,7 +402,12 @@ function Output({
       <button
         type="button"
         aria-expanded={advanced}
-        onClick={() => setAdvanced((open) => !open)}
+        onClick={() =>
+          updateSettings((current) => ({
+            ...current,
+            advanced: !current.advanced,
+          }))
+        }
         className="-ml-1 flex h-6 cursor-default items-center gap-1 self-start rounded-sm pr-1.5 pl-0.5 text-label text-ink-muted hover:bg-hover hover:text-ink focus-visible:focus-ring focus-visible:outline-none"
       >
         <Icon
@@ -634,6 +552,21 @@ function MaskSection({
   );
 }
 
+/** The image a new one is made from, as the first of the references it is sent with. */
+function sourceReference(from: {
+  image: ImageSummary;
+  shown: Shown;
+}): Reference {
+  return {
+    id: "source",
+    name: from.image.name,
+    path: sourcePath(from),
+    upload: null,
+    thumb: null,
+    state: "ready",
+  };
+}
+
 /** The request to an image model: what it is for, the prompt, what comes out, and Generate, or Stop while it works. */
 function RequestForm({
   methods,
@@ -679,19 +612,38 @@ function RequestForm({
     mask: { upload: string; url: string } | null;
   } | null>(null);
 
-  const resolved = resolve(options, methods, image, draft.size);
+  // A model that cannot change the image in view makes a new image from it, which takes what a new image is picked.
+  const crossing =
+    image !== null &&
+    makesNew(image, "model", pickedModel(options, methods), methods);
+  const resolved = resolve(
+    options,
+    methods,
+    crossing ? null : image,
+    draft.size,
+  );
   const typed = draft.name ?? freeName(listing, resolved.format);
   const target: Target =
     image && shown
-      ? { image, shown }
-      : { image: null, name: typedName(typed, stillFormats(methods)) };
+      ? crossing
+        ? {
+            image: null,
+            name: freeName(listing, resolved.format, stem(image.name)),
+            from: { image, shown },
+          }
+        : { image, shown }
+      : {
+          image: null,
+          name: typedName(typed, stillFormats(methods)),
+          from: null,
+        };
   // Only the guide of the mode the canvas is in goes out, since a request takes marks or a mask and not both.
   const marks = image && mode === "markup" ? guides.marks : [];
   const masked = image !== null && mode === "mask" && guides.painted > 0;
   const room = referenceRoom(
     resolved,
     methods,
-    image !== null,
+    sendsSource(target),
     marks.length > 0,
   );
   const full =
@@ -764,8 +716,8 @@ function RequestForm({
         await onChanged();
       } else {
         // What the new image was made from says nothing about how it is changed next.
-        clearReferences(NEW_IMAGE);
-        moveDraft(NEW_IMAGE, started.name);
+        clearReferences(key);
+        moveDraft(key, started.name);
         await onCreated(started.name);
       }
     } catch (cause) {
@@ -835,7 +787,7 @@ function RequestForm({
           onOpenChange={(prompt) => setOpen({ ...open, prompt })}
           aside={
             <PromptPicker
-              target={target}
+              editing={target.image !== null}
               prompts={prompts}
               current={draft.prompt}
               onPick={setPrompt}
@@ -870,7 +822,7 @@ function RequestForm({
           room={room}
           full={full}
           first={
-            (image ? 2 : 1) +
+            (sendsSource(target) ? 2 : 1) +
             (resolved.method === "chatgpt" && marks.length > 0 ? 1 : 0)
           }
           listing={listing}
@@ -983,7 +935,11 @@ function RequestForm({
             : null
         }
         source={target.image ? target : null}
-        references={references}
+        references={
+          target.from
+            ? [sourceReference(target.from), ...references]
+            : references
+        }
         marks={marks}
         mask={previewing?.mask?.url ?? null}
         onClose={() => setPreviewing(null)}
@@ -1024,32 +980,45 @@ export function RequestPane({
   /** Show the version with this id; null for what the image's file holds. */
   onView: (version: string | null) => void;
 }) {
-  const { error } = useAppState();
+  const { state, error } = useAppState();
   const { methods, error: unread } = useMethods();
+  const drawing = state.method === "svg";
   return (
     <aside
-      aria-label="Request"
+      aria-label={drawing ? "Conversation" : "Request"}
       className="flex h-full min-w-0 flex-col bg-panel"
     >
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-line pr-2 pl-3">
         <span className="text-label text-ink-muted">Method</span>
         <Segmented<AppMethod>
           label="Method"
-          value="model"
-          onChange={() => {}}
+          value={state.method}
+          onChange={(method) =>
+            updateAppState((current) => ({ ...current, method }))
+          }
           options={[
             { value: "model", label: "Image model" },
-            {
-              value: "svg",
-              label: "SVG",
-              disabled: "Not available in the app",
-            },
+            { value: "svg", label: "SVG" },
           ]}
         />
       </header>
       {error && <Notice className="m-2">{error}</Notice>}
       {unread && <Notice className="m-2">{unread}</Notice>}
-      {methods ? (
+      {methods && drawing ? (
+        <DrawPane
+          key={image?.name ?? ""}
+          methods={methods}
+          listing={listing}
+          image={image}
+          shown={shown}
+          runs={runs}
+          mode={mode}
+          onUseInNew={onUseInNew}
+          onCreated={onCreated}
+          onChanged={onChanged}
+          onView={onView}
+        />
+      ) : methods ? (
         <RequestForm
           methods={methods}
           listing={listing}
