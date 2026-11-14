@@ -30,6 +30,7 @@ export function ImageSwitcher({
   image: ImageSummary | null;
   onSelect: (name: string) => void;
   onNew: () => void;
+  onRename: (name: string) => void;
 }) {
   const images = listing?.images ?? [];
   return (

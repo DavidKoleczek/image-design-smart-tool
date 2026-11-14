@@ -18,7 +18,7 @@ import { filePicture, versionPicture, type Picture } from "@/lib/pictures";
 import { isDrawing } from "@/lib/request";
 import type { Runs } from "@/lib/runs";
 import { ago, between } from "@/lib/time";
-import { baseName } from "@/lib/tree";
+import { baseName } from "@/lib/paths";
 import { cn } from "@/lib/utils";
 import type { Shown } from "@/lib/viewed";
 

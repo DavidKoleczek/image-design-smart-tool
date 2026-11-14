@@ -452,11 +452,42 @@ function textOf(result: CallToolResult): string {
     .join("\n");
 }
 
+// The tools that change which images and folders there are, and where, and the listing, which names none: no such
+// change holds these back.
+const UNHELD = new Set([
+  LIST_TOOL,
+  MOVE_TOOL,
+  COPY_TOOL,
+  UPLOAD_TOOL,
+  IMPORT_TOOL,
+  DELETE_TOOL,
+  CREATE_FOLDER_TOOL,
+  MOVE_FOLDER_TOOL,
+  DELETE_FOLDER_TOOL,
+]);
+let moving: Promise<void> | null = null;
+
+/**
+ * Hold every other call back until `done`, while images or folders are being moved, made, or deleted. The view shows
+ * such a change before the server has made it, so a call made meanwhile may name an image by where it is about to be.
+ */
+export function holdCalls(done: Promise<void>) {
+  moving = done;
+  void done.finally(() => {
+    if (moving === done) {
+      moving = null;
+    }
+  });
+}
+
 async function call(
   name: string,
   args: Record<string, unknown>,
   timeout?: number,
 ): Promise<CallToolResult> {
+  if (moving !== null && !UNHELD.has(name)) {
+    await moving;
+  }
   const result = await app.callServerTool(
     { name, arguments: args },
     timeout ? { timeout } : undefined,
@@ -782,7 +813,7 @@ export async function readReference(path: string): Promise<string> {
   return `data:${content.mimeType ?? "image/webp"};base64,${content.blob}`;
 }
 
-/** Send a piece of a file for a request to take, and learn how much of the file has arrived. */
+/** Send a piece of a file for a request or an import to take, and learn how much of the file has arrived. */
 export async function uploadPiece(
   upload: string,
   name: string,

@@ -2,7 +2,9 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { viewImage, type ImageSummary } from "@/lib/api";
 import { useGuides, type CanvasMode } from "@/lib/canvas";
+import { movedPath } from "@/lib/paths";
 import type { Picture } from "@/lib/pictures";
+import { onRenamed, rekey } from "@/lib/renames";
 import type { Shown } from "@/lib/viewed";
 
 /** How the animation in view is being looked at: the frame that shows, and whether it plays. */
@@ -33,6 +35,12 @@ function subscribe(listener: () => void): () => void {
     listeners.delete(listener);
   };
 }
+
+onRenamed((from, to) => {
+  if (rekey(playbacks, (name) => movedPath(name, from, to))) {
+    emit();
+  }
+});
 
 function change(name: string, next: Partial<Playback>) {
   const current = playbacks.get(name);

@@ -1,6 +1,8 @@
 import { useEffect, useSyncExternalStore } from "react";
 
 import type { Mark, MarkColor, NewMark } from "@/lib/marks";
+import { movedPath } from "@/lib/paths";
+import { onRenamed, rekey } from "@/lib/renames";
 
 /** What the canvas is for: marks and the mask are two ways to guide a request, and one shows at a time. */
 export type CanvasMode = "markup" | "mask";
@@ -305,16 +307,15 @@ export function clearGuides(name: string) {
   }
 }
 
-/** Give an image's guides to the name it now has. */
-export function moveGuides(from: string, to: string) {
-  for (const kept of [guides, drawnOn, masks, revisions] as Map<
-    string,
-    unknown
-  >[]) {
-    if (kept.has(from)) {
-      kept.set(to, kept.get(from));
-      kept.delete(from);
-    }
+onRenamed((from, to) => {
+  const after = (name: string) => movedPath(name, from, to);
+  const moved = [
+    rekey(guides, after),
+    rekey(drawnOn, after),
+    rekey(masks, after),
+    rekey(revisions, after),
+  ];
+  if (moved.includes(true)) {
+    emit();
   }
-  emit();
-}
+});

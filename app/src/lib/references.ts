@@ -3,13 +3,16 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   keepReference,
   readReference,
-  uploadPiece,
   type ReferenceEntry,
   type SentReference,
 } from "@/lib/api";
 import { maskPng, maskRevision } from "@/lib/canvas";
 import { describe } from "@/lib/errors";
+import { fileOf, movedFile } from "@/lib/images";
+import { movedPath } from "@/lib/paths";
+import { onGone, onRenamed, rekey } from "@/lib/renames";
 import { updateAppState } from "@/lib/state";
+import { newUploadId, thumbOf, uploadFile } from "@/lib/uploads";
 
 /** An image a request sends along without editing it. */
 export type Reference = {
@@ -26,9 +29,6 @@ export type Reference = {
   state: "ready" | "uploading" | "failed";
 };
 
-// How much of a file goes up in one call, before base64 makes it a third longer.
-const PIECE_BYTES = 2 * 1024 * 1024;
-const THUMB_EDGE = 128;
 const THUMBS_KEPT = 400;
 const NONE: Reference[] = [];
 
@@ -63,14 +63,6 @@ function set(key: string, references: Reference[]) {
 function newId(): string {
   made += 1;
   return `reference-${made}`;
-}
-
-/** An id for an upload, which the server takes as 16 to 64 hex digits. */
-export function newUploadId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
 }
 
 export function useReferences(key: string): Reference[] {
@@ -151,15 +143,6 @@ export function clearReferences(key: string) {
   set(key, []);
 }
 
-/** Give a request's references to the name its image now has. */
-export function moveReferences(from: string, to: string) {
-  const references = lists.get(from);
-  if (references) {
-    lists.delete(from);
-    set(to, references);
-  }
-}
-
 /** Change a reference wherever it is listed, since an upload ends long after it was added. */
 function changeReference(id: string, change: Partial<Reference>) {
   for (const [key, references] of lists) {
@@ -209,33 +192,51 @@ export function sentReferences(references: Reference[]): SentReference[] {
   );
 }
 
-function base64(bytes: Uint8Array): string {
-  let binary = "";
-  // In runs, since a call takes only so many arguments.
-  for (let at = 0; at < bytes.length; at += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
-  }
-  return btoa(binary);
-}
-
-/** Send a file up in pieces under `upload`. A piece that fails is sent once more before the upload gives up. */
-export async function uploadFile(
-  upload: string,
-  name: string,
-  bytes: Uint8Array,
-): Promise<void> {
-  for (let offset = 0; offset < bytes.length; offset += PIECE_BYTES) {
-    const piece = base64(bytes.subarray(offset, offset + PIECE_BYTES));
-    try {
-      await uploadPiece(upload, name, offset, piece);
-    } catch {
-      await uploadPiece(upload, name, offset, piece);
-    }
-  }
-}
-
 // The mask last sent up for each image, and which painting of it that was, so the same one is not sent twice.
 const sentMasks = new Map<string, { revision: number; upload: string }>();
+
+// A request's references stay with its image, and a reference that is an image of the directory stays that image.
+onRenamed((from, to) => {
+  const named = (name: string) => movedPath(name, from, to);
+  const filed = (path: string) => movedFile(path, from, to);
+  rekey(sentMasks, named);
+  rekey(thumbs, filed);
+  rekey(known, filed);
+  let moved = rekey(lists, named);
+  for (const [key, references] of lists) {
+    if (references.some(({ path }) => path !== null && filed(path) !== path)) {
+      moved = true;
+      lists.set(
+        key,
+        references.map((reference) =>
+          reference.path !== null && filed(reference.path) !== reference.path
+            ? {
+                ...reference,
+                name: named(reference.name),
+                path: filed(reference.path),
+              }
+            : reference,
+        ),
+      );
+    }
+  }
+  if (moved) {
+    emit();
+  }
+});
+
+// An image that was deleted is no longer a reference of any request, since it could not be sent.
+onGone((name) => {
+  const path = fileOf(name);
+  for (const [key, references] of lists) {
+    if (references.some((reference) => reference.path === path)) {
+      set(
+        key,
+        references.filter((reference) => reference.path !== path),
+      );
+    }
+  }
+});
 
 /**
  * Send up the mask painted on the image named `name`, which is `width` by `height`, and return the upload that holds
@@ -269,27 +270,6 @@ export function dataBytes(url: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
-}
-
-/** A small copy of an image file, as a data URL, since the view can show nothing from a `blob:` URL. */
-async function thumbOf(file: File): Promise<string | null> {
-  try {
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(
-      1,
-      THUMB_EDGE / Math.max(bitmap.width, bitmap.height),
-    );
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    canvas
-      .getContext("2d")
-      ?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    bitmap.close();
-    return canvas.toDataURL("image/png");
-  } catch {
-    return null;
-  }
 }
 
 function named(file: File): string {

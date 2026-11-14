@@ -1,30 +1,19 @@
-import {
-  useRef,
-  useState,
-  type FormEvent,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { useRef, useState, type FormEvent, type RefObject } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/field";
 import { Icon } from "@/components/ui/icon";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuTrigger,
-  MenuItem,
-  MenuSeparator,
-} from "@/components/ui/menu";
+import { MenuItem, MenuSeparator } from "@/components/ui/menu";
 import { Notice } from "@/components/ui/notice";
-import { deleteImage, moveImage } from "@/lib/api";
+import { moveImage } from "@/lib/api";
 import { describe } from "@/lib/errors";
-import { baseName } from "@/lib/tree";
+import { remove } from "@/lib/organize";
+import { baseName } from "@/lib/paths";
+import type { Entry } from "@/lib/tree";
 
 /** What can be done to an image from its menu, each by its name. */
 export type ImageActions = {
-  onRename: (name: string) => void;
   onDelete: (name: string) => void;
   /** Start a new image with this one as its first reference. */
   onUseInNew: (name: string) => void;
@@ -34,15 +23,13 @@ export type ImageActions = {
   source: string | null;
 };
 
-/** What the image menu holds, for menus that list it among other things. */
-export function ImageMenuItems({
+/** The ways an image goes into a request, for a menu about the image. */
+export function ReferenceItems({
   name,
-  onRename,
-  onDelete,
   onUseInNew,
   onAddReference,
   source,
-}: ImageActions & { name: string }) {
+}: Omit<ImageActions, "onDelete"> & { name: string }) {
   return (
     <>
       <MenuItem onClick={() => onUseInNew(name)}>
@@ -53,6 +40,23 @@ export function ImageMenuItems({
         <Icon name="attach" />
         Add as a reference
       </MenuItem>
+    </>
+  );
+}
+
+/**
+ * What the image menu holds where the images show as a list with no folders, so renaming an image and moving it are
+ * one thing, asked for in a dialog.
+ */
+export function ImageMenuItems({
+  name,
+  onRename,
+  onDelete,
+  ...references
+}: ImageActions & { name: string; onRename: (name: string) => void }) {
+  return (
+    <>
+      <ReferenceItems name={name} {...references} />
       <MenuSeparator />
       <MenuItem onClick={() => onRename(name)}>
         <Icon name="rename" />
@@ -67,30 +71,13 @@ export function ImageMenuItems({
   );
 }
 
-/** What can be done to an image, on a right click anywhere in `children`. */
-export function ImageContextMenu({
-  name,
-  className,
-  children,
-  ...actions
-}: ImageActions & { name: string; className?: string; children: ReactNode }) {
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger className={className}>{children}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ImageMenuItems name={name} {...actions} />
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}
-
-/** The last name that was not null, so a dialog keeps what it shows while it closes. */
-function useLast(name: string | null): string | null {
-  const [last, setLast] = useState(name);
-  if (name !== null && name !== last) {
-    setLast(name);
+/** The last value that was not null, so a dialog keeps what it shows while it closes. */
+function useLast<Value>(value: Value | null): Value | null {
+  const [last, setLast] = useState(value);
+  if (value !== null && value !== last) {
+    setLast(value);
   }
-  return name ?? last;
+  return value ?? last;
 }
 
 function RenameForm({
@@ -206,69 +193,84 @@ export function RenameDialog({
   );
 }
 
-/** Asks before an image and everything kept for it is deleted. */
-export function DeleteDialog({
-  name,
-  onClose,
-  onDeleted,
-}: {
-  /** The image to delete; the dialog is closed while null. */
-  name: string | null;
-  onClose: () => void;
-  onDeleted: () => void;
-}) {
-  const shown = useLast(name);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ name: string; text: string } | null>(
-    null,
-  );
-  const cancel = useRef<HTMLButtonElement>(null);
+function counted(count: number, one: string): string {
+  return `${count} ${one}${count === 1 ? "" : "s"}`;
+}
 
-  const remove = async () => {
-    if (name === null || busy) {
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await deleteImage(name);
-      onDeleted();
-      onClose();
-    } catch (cause) {
-      setError({ name, text: describe(cause) });
-    } finally {
-      setBusy(false);
-    }
+const KEPT =
+  "every version, every run, and for a drawing its script and the conversations with its agent";
+
+/** What a delete of the entries is asked as: by name for one, and by how many of each for several. */
+function asked(entries: Entry[]): {
+  title: string;
+  subtitle: string | null;
+  text: string;
+} {
+  const folders = entries.filter((entry) => entry.folder).length;
+  const images = entries.length - folders;
+  if (entries.length === 1) {
+    return folders === 1
+      ? {
+          title: "Delete this folder?",
+          subtitle: entries[0].path,
+          text: `Every image in it is deleted, with everything kept for each: ${KEPT}.`,
+        }
+      : {
+          title: "Delete this image?",
+          subtitle: entries[0].path,
+          text: `Its file and everything kept for it are deleted: ${KEPT}.`,
+        };
+  }
+  const what = [
+    ...(images > 0 ? [counted(images, "image")] : []),
+    ...(folders > 0 ? [counted(folders, "folder")] : []),
+  ].join(" and ");
+  return {
+    title: `Delete ${what}?`,
+    subtitle: null,
+    text: `Every image${folders > 0 ? ", and every image in a folder," : ""} is deleted, with everything kept for each: ${KEPT}.`,
   };
+}
+
+/**
+ * Asks before images and folders are deleted, with everything kept for each image. Once confirmed they go from the
+ * view at once, and any that could not be deleted come back.
+ */
+export function DeleteDialog({
+  entries,
+  onClose,
+}: {
+  /** What to delete, none of it inside a folder that is also here; the dialog is closed while null. */
+  entries: Entry[] | null;
+  onClose: () => void;
+}) {
+  const shown = useLast(entries);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const { title, subtitle, text } = asked(shown ?? []);
 
   return (
-    <Dialog open={name !== null} onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={entries !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        title="Delete this image?"
-        subtitle={shown}
+        title={title}
+        subtitle={subtitle}
         initialFocus={cancel}
         className="sm:max-w-110"
       >
-        <div className="px-5 pt-4 pb-5">
-          <p>
-            Its file and everything kept for it are deleted: every version,
-            every run, and for a drawing its script and the conversations with
-            its agent. This cannot be undone.
-          </p>
-          {error && error.name === shown && (
-            <Notice className="mt-3">{error.text}</Notice>
-          )}
-        </div>
+        <p className="px-5 pt-4 pb-5">{text} This cannot be undone.</p>
         <DialogFooter className="justify-end">
           <Button ref={cancel} variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button
             variant="danger"
-            disabled={busy}
-            onClick={() => void remove()}
+            onClick={() => {
+              for (const entry of entries ?? []) {
+                remove(entry.path, entry.folder);
+              }
+              onClose();
+            }}
           >
-            {busy ? "Deleting" : "Delete"}
+            Delete
           </Button>
         </DialogFooter>
       </DialogContent>

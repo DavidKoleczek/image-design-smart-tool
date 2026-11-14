@@ -9,6 +9,8 @@ import type {
   SentMark,
   SentReference,
 } from "@/lib/api";
+import { movedPath } from "@/lib/paths";
+import { onRenamed, rekey } from "@/lib/renames";
 import {
   DRAWING,
   sourceReference,
@@ -224,11 +226,10 @@ export function sentDrawing(name: string) {
   set(name, NOTHING);
 }
 
-/** Give what was picked for a drawing to the name it now has. */
-export function moveDrawing(from: string, to: string) {
-  const drawing = drawings.get(from);
-  if (drawing) {
-    drawings.delete(from);
-    set(to, drawing);
+onRenamed((from, to) => {
+  if (rekey(drawings, (name) => movedPath(name, from, to))) {
+    for (const listener of listeners) {
+      listener();
+    }
   }
-}
+});

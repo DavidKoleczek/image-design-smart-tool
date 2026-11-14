@@ -65,22 +65,20 @@ export function useViewed(image: ImageSummary | null): {
     image: string;
     version: string;
   } | null>(null);
-  const name = image?.name ?? null;
+  // An image that has versions has an id, which it keeps when it is renamed, so the version in view stays in view.
+  const key = image === null ? null : (image.id ?? image.name);
 
   const view = useCallback(
     (version: string | null) =>
       setViewing(
-        name !== null && version !== null ? { image: name, version } : null,
+        key !== null && version !== null ? { image: key, version } : null,
       ),
-    [name],
+    [key],
   );
 
   if (image === null) {
     return { shown: null, before: null, view };
   }
-  const shown = shownOf(
-    image,
-    viewing?.image === image.name ? viewing.version : null,
-  );
+  const shown = shownOf(image, viewing?.image === key ? viewing.version : null);
   return { shown, before: beforeOf(image, shown), view };
 }

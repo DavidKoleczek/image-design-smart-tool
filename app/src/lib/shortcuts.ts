@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent as KeyEvent } from "react";
+import { useEffect, useRef } from "react";
 
 /** What a key does, by the key as `KeyboardEvent.key` names it, lowercased. */
 export type Shortcuts = Record<string, () => void>;
@@ -56,24 +56,4 @@ export function useShortcuts(shortcuts: Shortcuts) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
-}
-
-/** Keys on a file in a list, as a file manager takes them: Delete asks to delete it, F2 to rename it. */
-export function fileKeys(
-  onDelete: () => void,
-  onRename: () => void,
-): (event: KeyEvent) => void {
-  return (event) => {
-    if (event.ctrlKey || event.altKey || event.shiftKey) {
-      return;
-    }
-    // Keyboards without a Delete key, as on many Macs, delete with Command and Backspace, as Finder does.
-    if (event.metaKey ? event.key === "Backspace" : event.key === "Delete") {
-      event.preventDefault();
-      onDelete();
-    } else if (event.key === "F2" && !event.metaKey) {
-      event.preventDefault();
-      onRename();
-    }
-  };
 }

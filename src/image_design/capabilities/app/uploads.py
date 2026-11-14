@@ -1,5 +1,5 @@
-"""Files that wait for a request to take them: a reference dropped or pasted into the app's view, the mask painted
-in it, or one frame of an animation the app sends as a still."""
+"""Files that wait to be taken: a reference dropped or pasted into the app's view, the mask painted in it, or one
+frame of an animation the app sends as a still, for a request, and an image file dropped into the view to import."""
 
 import base64
 import binascii

@@ -86,11 +86,13 @@ function fold(facts: Map<string, RunFacts>, event: ImageEvent) {
  */
 export function useRuns(image: ImageSummary | null): Runs {
   const [runs, setRuns] = useState<{
-    name: string;
+    key: string;
     facts: Map<string, RunFacts>;
   } | null>(null);
-  const read = useRef<{ name: string; cursor: string | null } | null>(null);
+  const read = useRef<{ key: string; cursor: string | null } | null>(null);
   const name = image?.name ?? null;
+  // What has been read of an image is told by its id, which it keeps when it is renamed.
+  const key = image === null ? null : (image.id ?? image.name);
   // A file the tool has made no change to has no activity to read.
   const kept =
     image !== null && (image.versions.length > 0 || image.last_run !== null);
@@ -100,30 +102,30 @@ export function useRuns(image: ImageSummary | null): Runs {
   const running = image?.status === "running";
 
   useEffect(() => {
-    if (name === null || !kept) {
+    if (name === null || key === null || !kept) {
       return;
     }
     let current = true;
     // One at a time, and one dropped here is asked for again from the same place, so no event is folded twice.
     const readOn = async () => {
-      const after = read.current?.name === name ? read.current.cursor : null;
+      const after = read.current?.key === key ? read.current.cursor : null;
       try {
         const activity = await readImageActivity(name, after);
         if (!current) {
           return;
         }
-        read.current = { name, cursor: activity.cursor };
+        read.current = { key, cursor: activity.cursor };
         if (activity.events.length === 0 && after !== null) {
           return;
         }
         setRuns((before) => {
           const facts = new Map(
-            after !== null && before?.name === name ? before.facts : [],
+            after !== null && before?.key === key ? before.facts : [],
           );
           for (const event of activity.events) {
             fold(facts, event);
           }
-          return { name, facts };
+          return { key, facts };
         });
       } catch {
         // The versions show without what made them until the next read.
@@ -137,7 +139,7 @@ export function useRuns(image: ImageSummary | null): Runs {
       current = false;
       stop?.();
     };
-  }, [name, kept, changed, running]);
+  }, [name, key, kept, changed, running]);
 
-  return runs?.name === name ? runs.facts : NONE;
+  return runs?.key === key ? runs.facts : NONE;
 }

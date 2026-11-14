@@ -1,5 +1,8 @@
 import { useSyncExternalStore } from "react";
 
+import { movedPath } from "@/lib/paths";
+import { onRenamed, rekey } from "@/lib/renames";
+
 /** What is being written for one image, or for the new image, before it is sent. */
 export type Draft = {
   prompt: string;
@@ -58,7 +61,7 @@ export function updateDraft(key: string, change: Partial<Draft>) {
   set(key, { ...(drafts.get(key) ?? EMPTY), ...change });
 }
 
-/** Give a draft to the image it now belongs to: the new image once it is created, or an image once it is renamed. */
+/** Give the new image's draft to the image it became once it was created. */
 export function moveDraft(from: string, to: string) {
   const draft = drafts.get(from);
   if (draft) {
@@ -66,6 +69,14 @@ export function moveDraft(from: string, to: string) {
     set(to, { ...draft, name: null });
   }
 }
+
+onRenamed((from, to) => {
+  if (rekey(drafts, (key) => movedPath(key, from, to))) {
+    for (const listener of listeners) {
+      listener();
+    }
+  }
+});
 
 export function useDraft(key: string): Draft {
   return useSyncExternalStore(subscribe, () => drafts.get(key) ?? EMPTY);

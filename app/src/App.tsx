@@ -13,20 +13,15 @@ import { StatusBar } from "@/components/StatusBar";
 import { TopBar, type NarrowPane, type Pane } from "@/components/TopBar";
 import { Segmented } from "@/components/ui/segmented";
 import { Workspace } from "@/components/Workspace";
-import {
-  clearGuides,
-  moveGuides,
-  setMode,
-  useCanvas,
-  type CanvasMode,
-} from "@/lib/canvas";
+import { clearGuides, setMode, useCanvas, type CanvasMode } from "@/lib/canvas";
 import { onDisplay, requestDisplayMode } from "@/lib/host";
-import { moveDraft, NEW_IMAGE, updateDraft, useDraft } from "@/lib/drafts";
-import { moveDrawing, sentDrawing } from "@/lib/drawing";
+import { NEW_IMAGE, updateDraft, useDraft } from "@/lib/drafts";
+import { sentDrawing } from "@/lib/drawing";
 import { useImages } from "@/lib/images";
 import { paneLayout, useBreakpoint } from "@/lib/layout";
 import { useMethods } from "@/lib/methods";
-import { addEntries, clearReferences, moveReferences } from "@/lib/references";
+import { addEntries, clearReferences } from "@/lib/references";
+import { onGone, renamed } from "@/lib/renames";
 import {
   guideBlock,
   isDrawing,
@@ -43,6 +38,7 @@ import {
   updateAppState,
   useAppState,
 } from "@/lib/state";
+import type { Entry } from "@/lib/tree";
 import { cn } from "@/lib/utils";
 import { useViewed } from "@/lib/viewed";
 
@@ -88,9 +84,20 @@ function App() {
       : blocks.markup === null
         ? "markup"
         : null;
-  // The image a dialog is asking about, by its name.
+  // The image a dialog is asking to rename, by its name, and the images and folders one is asking to delete.
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<Entry[] | null>(null);
+  // So an image made later under the name of one that was deleted starts with nothing of that one.
+  useEffect(
+    () =>
+      onGone((name) => {
+        updateDraft(name, { prompt: "", size: null });
+        clearReferences(name);
+        clearGuides(name);
+        sentDrawing(name);
+      }),
+    [],
+  );
   const search = useRef<HTMLInputElement>(null);
   const dataDirectory = listing?.data_directory ?? null;
   useEffect(() => followDirectory(dataDirectory), [dataDirectory]);
@@ -195,8 +202,6 @@ function App() {
 
   const picking = {
     onSelect: select,
-    onRename: setRenaming,
-    onDelete: setDeleting,
     onUseInNew: (name: string) => {
       refer(name, NEW_IMAGE);
       startNew();
@@ -255,6 +260,8 @@ function App() {
             listing={listing}
             image={image}
             onNew={startNew}
+            onRename={setRenaming}
+            onDelete={(name) => setDeleting([{ path: name, folder: false }])}
             {...picking}
           />
         }
@@ -315,6 +322,8 @@ function App() {
                   }
                   search={search}
                   onNew={startNew}
+                  onRemove={setDeleting}
+                  onChanged={refresh}
                   {...picking}
                 />
               }
@@ -334,33 +343,13 @@ function App() {
         name={renaming}
         onClose={() => setRenaming(null)}
         onRenamed={(name) => {
-          // Only the image in view takes the view with it; another one renamed from the list stays out of it.
-          if (renaming === image?.name) {
-            select(name);
-          }
           if (renaming !== null) {
-            moveDraft(renaming, name);
-            moveReferences(renaming, name);
-            moveGuides(renaming, name);
-            moveDrawing(renaming, name);
+            renamed(renaming, name);
           }
           void refresh();
         }}
       />
-      <DeleteDialog
-        name={deleting}
-        onClose={() => setDeleting(null)}
-        onDeleted={() => {
-          // So an image made later under the same name starts with nothing of this one's.
-          if (deleting !== null) {
-            updateDraft(deleting, { prompt: "", size: null });
-            clearReferences(deleting);
-            clearGuides(deleting);
-            sentDrawing(deleting);
-          }
-          void refresh();
-        }}
-      />
+      <DeleteDialog entries={deleting} onClose={() => setDeleting(null)} />
     </div>
   );
 }

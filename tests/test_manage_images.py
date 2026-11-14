@@ -428,6 +428,38 @@ async def test_an_image_moved_outside_the_tool_is_relinked_to_its_file(images_ap
     assert "relink-images --likely moss.png" in found.describe()
 
 
+async def test_a_folder_renamed_outside_the_tool_is_relinked_image_by_image_and_each_keeps_its_id(
+    images_api: FakeImagesAPI,
+) -> None:
+    await made("A cactus.", "set/one.png")
+    lib.copy_image("set/one.png", "set/two.png")
+    await made("A fern.", "set/fern.png")
+    by_hand("set/photo.jpg")
+    before = {summary.name: summary.id for summary in lib.list_images().images}
+    (ROOT / "set").rename(ROOT / "kit")
+
+    found = lib.relink_images()
+    moved = lib.move_image("kit/fern.png", "fern.png")
+    after = {summary.name: summary.id for summary in lib.list_images().images}
+
+    # Two of them hold the same picture, and each is told from the other by its file name.
+    assert [(move.name, move.new_name) for move in found.relinked] == [
+        ("set/fern.png", "kit/fern.png"),
+        ("set/one.png", "kit/one.png"),
+        ("set/two.png", "kit/two.png"),
+    ]
+    assert (found.likely, found.gone) == ([], [])
+    assert before["set/photo.jpg"] is None
+    assert len({before["set/one.png"], before["set/two.png"], before["set/fern.png"], None}) == 4
+    assert (moved.id, moved.current) == (before["set/fern.png"], "v1")
+    assert after == {
+        "fern.png": before["set/fern.png"],
+        "kit/one.png": before["set/one.png"],
+        "kit/photo.jpg": None,
+        "kit/two.png": before["set/two.png"],
+    }
+
+
 def test_the_methods_say_what_each_takes_and_what_is_left_to_set_up(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     ready = lib.list_image_methods()

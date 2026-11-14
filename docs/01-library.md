@@ -484,7 +484,7 @@ The other tools are for the view. They are listed only to hosts that render MCP 
 - `draw_svg_image` starts a drawing the same way. It takes the prompt, the name, `references`, `marks`, the budgets, `resume_session`, the agent provider, model, and reasoning effort, and `timeout_seconds`.
 - `steer_svg_image` leaves a message for the agent drawing an image, with `references` and `marks`. The message holds copies of what it was given, so the uploads it took are cleared.
 - `export_svg_image` asks the user where to save in the platform's save dialog, then renders the drawing, or one of its versions, there at a `scale` of its canvas.
-- `upload_file` takes a file from the view in base64 pieces, under an ID the view makes up: a reference dropped or pasted into the app, or the mask painted in it. Uploads wait in `image-design-uploads` in the system's temp folder. One that no request takes is cleared when the app closes, or by the next app to start a day later.
+- `upload_file` takes a file from the view in base64 pieces, under an ID the view makes up: a reference dropped or pasted into the app, an image file dropped on Your images, or the mask painted in it. Uploads wait in `image-design-uploads` in the system's temp folder. One that nothing takes is cleared when the app closes, or by the next app to start a day later.
 - `read_reference_library` returns the references the app offers besides the images in its directory: the pinned files, and what requests sent from the app were given before.
 - `list_reference_folder` returns the images in a folder pinned to show its files.
 - `choose_reference_files` and `choose_reference_folder` ask the user in the platform's own file dialog, which needs Tk in the Python that runs the app.

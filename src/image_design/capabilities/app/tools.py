@@ -432,9 +432,9 @@ CANCEL_IMAGE = Tool(
 )
 UPLOAD_FILE = Tool(
     name="upload_file",
-    description="Send a piece of a file for a request to take: a reference dropped or pasted into the app, or the mask "
-    "painted in it. Returns how much of the file has arrived. An upload no request takes is cleared when the app "
-    "closes. Called by the view.",
+    description="Send a piece of a file for a request or `import_image` to take: a reference dropped or pasted into "
+    "the app, an image file dropped on Your images, or the mask painted in it. Returns how much of the file has "
+    "arrived. An upload nothing takes is cleared when the app closes. Called by the view.",
     input_schema={
         "type": "object",
         "properties": {

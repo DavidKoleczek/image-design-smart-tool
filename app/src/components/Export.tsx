@@ -16,7 +16,7 @@ import { describe } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
 import { useMethods } from "@/lib/methods";
 import { stem } from "@/lib/request";
-import { baseName } from "@/lib/tree";
+import { baseName } from "@/lib/paths";
 import type { Shown } from "@/lib/viewed";
 
 const FORMATS: Record<string, string> = {

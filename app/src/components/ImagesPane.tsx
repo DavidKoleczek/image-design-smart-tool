@@ -1,29 +1,46 @@
-import { useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 
-import { ImageContextMenu, type ImageActions } from "@/components/ImageMenu";
+import { Explorer, type Drawing } from "@/components/explorer/Explorer";
+import { useExplorer } from "@/components/explorer/useExplorer";
+import { ReferenceItems, type ImageActions } from "@/components/ImageMenu";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Kbd } from "@/components/ui/kbd";
 import { LoadingMark } from "@/components/ui/loading-mark";
+import { MenuItem, MenuSeparator } from "@/components/ui/menu";
 import { Notice } from "@/components/ui/notice";
 import { Thumb } from "@/components/ui/thumb";
 import { Tooltip } from "@/components/ui/tooltip";
-import type { ImageListing, ImageSummary } from "@/lib/api";
+import {
+  chooseImageFiles,
+  relinkImage,
+  restoreImageVersion,
+  type ImageListing,
+  type ImageSummary,
+} from "@/lib/api";
+import { AppError, describe } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
-import { shortDirectory } from "@/lib/images";
+import { shortDirectory, useArriving } from "@/lib/images";
+import type { Change } from "@/lib/operations";
+import {
+  bringIn,
+  broughtName,
+  copy,
+  dismissFailures,
+  makeFolder,
+  move,
+  reportFailure,
+  useFailures,
+  usePreview,
+} from "@/lib/organize";
+import { baseName, folderOf, topmost } from "@/lib/paths";
 import { filePicture } from "@/lib/pictures";
-import { fileKeys } from "@/lib/shortcuts";
+import { onRenamed } from "@/lib/renames";
 import { updateSettings, useSettings } from "@/lib/settings";
 import { updateAppState, useAppState } from "@/lib/state";
 import { failed } from "@/lib/status";
 import { ago, useElapsed } from "@/lib/time";
-import {
-  baseName,
-  foldersWithImages,
-  folderTree,
-  matching,
-  type Folder,
-} from "@/lib/tree";
+import { matching, type Entry } from "@/lib/tree";
 import { cn } from "@/lib/utils";
 
 // The detail columns, each showing once the pane is wide enough to leave the name room.
@@ -32,15 +49,17 @@ const COLUMNS = {
   saved: "hidden w-8 shrink-0 text-right @[330px]:block",
   changed: "hidden w-26 shrink-0 text-right @[430px]:block",
 };
-const INDENT = 16;
-const ROW =
-  "flex h-full min-w-0 flex-1 cursor-default items-center gap-2 rounded-sm pr-2 text-left whitespace-nowrap focus-visible:focus-ring focus-visible:outline-none";
+const NONE: ReadonlySet<string> = new Set();
 
-type Picking = ImageActions & {
-  /** The name of the image in view; none while a new image is being described. */
-  current: string | null;
-  onSelect: (name: string) => void;
-};
+/** Whether the image had a file that is no longer where the tool keeps it. */
+function fileGone(image: ImageSummary): boolean {
+  return (
+    image.id !== null &&
+    image.sha256 === null &&
+    image.status !== "running" &&
+    image.versions.length > 0
+  );
+}
 
 function Elapsed({ since }: { since: string }) {
   return (
@@ -48,258 +67,392 @@ function Elapsed({ since }: { since: string }) {
   );
 }
 
-/** One image in the tree: a small preview and its name, then its details as the pane widens. */
-function FileRow({
-  image,
-  depth,
-  current,
-  onSelect,
-  ...actions
-}: Picking & { image: ImageSummary; depth: number }) {
-  const viewed = current === image.name;
+/** How an image stands, when it is not as it should be: its last request failed, or its file is gone. */
+function Trouble({ image }: { image: ImageSummary }) {
+  if (fileGone(image)) {
+    return <Icon name="warning" label="File gone" className="text-danger" />;
+  }
+  return image.status !== null && failed(image.status) ? (
+    <Icon name="warning" label="Failed" className="text-danger" />
+  ) : null;
+}
+
+/** What follows an image's name in its line: how it stands, then its details as the pane widens. */
+function Details({ image }: { image: ImageSummary }) {
   return (
-    <ImageContextMenu
-      name={image.name}
-      className={cn(
-        "flex h-6.5 items-center rounded-sm",
-        viewed ? "bg-accent-soft" : "hover:bg-hover",
-      )}
-      {...actions}
-    >
-      <button
-        type="button"
-        title={image.name}
-        aria-current={viewed || undefined}
-        onClick={() => onSelect(image.name)}
-        onKeyDown={fileKeys(
-          () => actions.onDelete(image.name),
-          () => actions.onRename(image.name),
-        )}
-        style={{ paddingLeft: 26 + depth * INDENT }}
-        className={ROW}
-      >
-        <Thumb
-          picture={filePicture(image, true)}
-          className="size-4.5 rounded-[2px]"
-        />
-        <span
-          className={cn("min-w-10 flex-1 truncate", viewed && "font-medium")}
-        >
-          {baseName(image.name)}
+    <>
+      <Trouble image={image} />
+      {image.status === "running" && image.last_run ? (
+        <span className="flex shrink-0 items-center gap-1.5">
+          <LoadingMark />
+          <Elapsed since={image.last_run.started} />
         </span>
-        {image.status !== null && failed(image.status) && (
-          <Icon name="warning" label="Failed" className="text-danger" />
-        )}
-        {image.status === "running" && image.last_run ? (
-          <span className="flex shrink-0 items-center gap-1.5">
-            <LoadingMark />
-            <Elapsed since={image.last_run.started} />
+      ) : (
+        <span className="contents mono-annotation text-ink-muted">
+          <span className={COLUMNS.size}>
+            {image.width !== null &&
+              image.height !== null &&
+              dimensions(image.width, image.height)}
           </span>
-        ) : (
-          <span className="contents mono-annotation text-ink-muted">
-            <span className={COLUMNS.size}>
-              {image.width !== null &&
-                image.height !== null &&
-                dimensions(image.width, image.height)}
-            </span>
-            <span className={COLUMNS.saved}>{image.current}</span>
-            <span className={COLUMNS.changed}>
-              {image.modified && ago(image.modified)}
-            </span>
+          <span className={COLUMNS.saved}>{image.current}</span>
+          <span className={COLUMNS.changed}>
+            {image.modified && ago(image.modified)}
           </span>
-        )}
-      </button>
-    </ImageContextMenu>
+        </span>
+      )}
+    </>
   );
 }
 
-function FolderRow({
-  folder,
-  depth,
-  open,
-  onToggle,
+/** A file on its way in, as the small copy made of it here, until the image it becomes is listed. */
+function Arriving({
+  upload,
+  className,
 }: {
-  folder: Folder;
-  depth: number;
-  open: boolean;
-  onToggle: () => void;
+  upload: string;
+  className?: string;
 }) {
+  const url = usePreview(upload);
   return (
-    <div className="flex h-6.5 items-center rounded-sm hover:bg-hover">
-      <button
-        type="button"
-        title={folder.path}
-        aria-expanded={open}
-        onClick={onToggle}
-        style={{ paddingLeft: 8 + depth * INDENT }}
-        className={cn(ROW, "gap-1")}
-      >
-        <Icon
-          name="chevron"
-          className={cn(
-            "text-ink-muted transition-transform",
-            !open && "-rotate-90",
-          )}
+    <span
+      className={cn(
+        "grid shrink-0 place-items-center overflow-hidden rounded-sm border border-line bg-field",
+        className,
+      )}
+    >
+      {url && (
+        <img
+          src={url}
+          alt=""
+          draggable={false}
+          className="size-full object-cover opacity-60"
         />
-        <Icon name="folder" className="text-ink-muted" />
-        <span className="ml-0.5 min-w-10 flex-1 truncate">{folder.name}</span>
-      </button>
-    </div>
+      )}
+    </span>
   );
 }
 
-/** A file tree in details view, like a file manager's: one line a file, folders first. */
-function Details({
-  root,
-  searching,
-  pending,
-  ...picking
-}: Picking & { root: Folder; searching: boolean; pending: ReactNode }) {
-  const { state } = useAppState();
-  const closed = new Set(state.closed_folders);
-  const toggle = (path: string) =>
-    updateAppState((current) => ({
-      ...current,
-      closed_folders: current.closed_folders.includes(path)
-        ? current.closed_folders.filter((each) => each !== path)
-        : [...current.closed_folders, path],
-    }));
-  const rows = (folder: Folder, depth: number): ReactNode[] => [
-    ...folder.folders.flatMap((inside) => {
-      // A search opens every folder, since what it found may be in a closed one.
-      const open = searching || !closed.has(inside.path);
-      return [
-        <FolderRow
-          key={`folder:${inside.path}`}
-          folder={inside}
-          depth={depth}
-          open={open}
-          onToggle={() => toggle(inside.path)}
-        />,
-        ...(open ? rows(inside, depth + 1) : []),
-      ];
-    }),
-    ...folder.images.map((image) => (
-      <FileRow key={image.name} image={image} depth={depth} {...picking} />
-    )),
-  ];
-  return (
-    <>
-      <div className="sticky top-0 z-10 mb-0.5 flex h-6 items-center gap-2 border-b border-line bg-panel pr-2 pl-6.5 mono-annotation text-ink-muted">
-        <span className="min-w-10 flex-1 truncate">Name</span>
-        <span className={COLUMNS.size}>Size</span>
-        <span className={COLUMNS.saved}>Saved</span>
-        <span className={COLUMNS.changed}>Changed</span>
-      </div>
-      {pending}
-      {rows(root, 0)}
-    </>
-  );
+/** What was not done, for the notice about a change that could not be made. */
+function refused(change: Change): string {
+  switch (change.kind) {
+    case "folder":
+      return `${baseName(change.path)} was not made.`;
+    case "move":
+      return folderOf(change.from) === folderOf(change.to)
+        ? `${baseName(change.from)} was not renamed.`
+        : `${baseName(change.from)} was not moved.`;
+    case "copy":
+      return `${baseName(change.from)} was not copied.`;
+    case "add":
+      return `${broughtName(change.source) ?? baseName(change.path)} was not added.`;
+    case "delete":
+      return `${baseName(change.path)} was not deleted.`;
+  }
 }
 
-/** The images as a grid of previews, under the folder each is in. */
-function Grid({
-  root,
-  pending,
-  current,
-  onSelect,
-  ...actions
-}: Picking & { root: Folder; pending: ReactNode }) {
-  return (
-    <>
-      {pending}
-      {foldersWithImages(root).map((folder) => (
-        <section key={folder.path}>
-          {folder.path && (
-            <h3
-              title={folder.path}
-              className="mt-1 flex h-7 items-center gap-1.5 px-2 mono-annotation text-ink-muted"
-            >
-              <Icon name="folder" />
-              <span className="truncate">{folder.path}</span>
-            </h3>
-          )}
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-1.5 p-0.5">
-            {folder.images.map((image) => {
-              const viewed = current === image.name;
-              return (
-                <ImageContextMenu
-                  key={image.name}
-                  name={image.name}
-                  className={cn(
-                    "min-w-0 rounded-md",
-                    viewed ? "bg-accent-soft" : "hover:bg-hover",
-                  )}
-                  {...actions}
-                >
-                  <button
-                    type="button"
-                    title={image.name}
-                    aria-current={viewed || undefined}
-                    onClick={() => onSelect(image.name)}
-                    onKeyDown={fileKeys(
-                      () => actions.onDelete(image.name),
-                      () => actions.onRename(image.name),
-                    )}
-                    className="flex w-full cursor-default flex-col gap-1 rounded-md p-1 text-left focus-visible:focus-ring focus-visible:outline-none"
-                  >
-                    <Thumb
-                      picture={filePicture(image, true)}
-                      shape={image}
-                      animated={(image.frames ?? 1) > 1}
-                      className="aspect-square w-full"
-                    />
-                    <span className="flex items-center gap-1 text-caption font-medium">
-                      {image.status === "running" && <LoadingMark />}
-                      {image.status !== null && failed(image.status) && (
-                        <Icon
-                          name="warning"
-                          label="Failed"
-                          className="text-danger"
-                        />
-                      )}
-                      <span className="truncate">{baseName(image.name)}</span>
-                    </span>
-                  </button>
-                </ImageContextMenu>
-              );
-            })}
-          </div>
-        </section>
-      ))}
-    </>
-  );
-}
-
-/** The pane on the left: the images in the app's directory, over the directory they are kept in. */
+/**
+ * The pane on the left: the images and folders of the app's directory as a file manager shows them, over the
+ * directory they are kept in.
+ */
 export function ImagesPane({
   listing,
+  current,
   creating,
   search,
   onNew,
-  ...picking
-}: Picking & {
+  onSelect,
+  onRemove,
+  onChanged,
+  ...references
+}: Omit<ImageActions, "onDelete"> & {
   listing: ImageListing | null;
+  /** The name of the image in view; none while a new image is being described. */
+  current: string | null;
   /** Whether a new image is being described, which then has its own line at the top. */
   creating: boolean;
   /** The search field, so a key can put focus in it. */
   search: RefObject<HTMLInputElement | null>;
   onNew: () => void;
+  onSelect: (name: string) => void;
+  /** Delete was asked for, of these images and folders, none of them inside another. */
+  onRemove: (entries: Entry[]) => void;
+  /** The server was asked for something that changes what it lists. */
+  onChanged: () => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
   const { settings } = useSettings();
+  const { state } = useAppState();
+  const failures = useFailures();
+  const arriving = useArriving();
   const grid = settings.images_view === "grid";
-  const images = listing?.images ?? [];
-  const found = matching(images, query);
-  const root = folderTree(found);
-  const pending = creating && (
-    <div className="mb-px flex h-6.5 items-center gap-2 rounded-sm bg-accent-soft pr-2 pl-6.5 whitespace-nowrap">
-      <span className="grid size-4.5 shrink-0 place-items-center rounded-[2px] border border-dashed border-line-control text-ink-muted">
-        <Icon name="add" className="size-3" />
-      </span>
-      <span className="min-w-10 flex-1 truncate font-medium">New image</span>
-    </div>
+  const searching = query.trim() !== "";
+  const images = new Map(
+    (listing?.images ?? []).map((image) => [image.name, image]),
   );
+  const folders = listing?.folders ?? [];
+  const entries: Entry[] = [
+    ...folders.map((path) => ({ path, folder: true })),
+    ...[...images.keys()].map((path) => ({ path, folder: false })),
+  ];
+  const found = matching(entries, query);
+  // An image a request is working on, or one still on its way in, stays where it is until that ends.
+  const fixed = new Set([
+    ...[...images.values()]
+      .filter((image) => image.status === "running")
+      .map((image) => image.name),
+    ...arriving.keys(),
+  ]);
+
+  const explorer = useExplorer({
+    entries: found,
+    every: entries,
+    view: grid ? "grid" : "details",
+    current,
+    // A search opens every folder, since what it found may be in a closed one.
+    closed: searching ? NONE : new Set(state.closed_folders),
+    fixed,
+    onOpen: onSelect,
+    onToggle: (folder, open) =>
+      updateAppState((before) => ({
+        ...before,
+        closed_folders: before.closed_folders
+          .filter((each) => each !== folder)
+          .concat(open ? [] : [folder]),
+      })),
+    onMove: move,
+    onCopy: (from, to, folder) =>
+      copy(from, to, folder, folders, [...images.keys()]),
+    onNewFolder: makeFolder,
+    onDelete: (picked) => {
+      const tops = new Set(topmost(picked.map((entry) => entry.path)));
+      onRemove(picked.filter((entry) => tops.has(entry.path)));
+    },
+    onFiles: (dropped, folder) => {
+      const taken = new Set(entries.map((entry) => entry.path.toLowerCase()));
+      bringIn(dropped, folder, (path) => taken.has(path.toLowerCase()));
+    },
+  });
+  const { follow } = explorer;
+  useEffect(() => onRenamed(follow), [follow]);
+
+  /** Ask for image files in the machine's own file dialog, and bring them into the folder. */
+  const addImages = (folder: string) =>
+    void chooseImageFiles(folder || null)
+      .then(
+        ({ refused: left }) => {
+          for (const each of left) {
+            reportFailure(
+              `${each.name} was not added.`,
+              describe(new AppError(each.message, each.reason)),
+            );
+          }
+        },
+        (cause: unknown) =>
+          reportFailure("No images were added.", describe(cause)),
+      )
+      .then(onChanged);
+
+  /** Ask the server for something about an image by its name, and say so when it could not be done. */
+  const ask = (asked: Promise<unknown>, otherwise: string) =>
+    void asked
+      .catch((cause: unknown) => reportFailure(otherwise, describe(cause)))
+      .then(onChanged);
+
+  const organizing = (path: string) => (
+    <>
+      <MenuItem
+        disabled={!explorer.renames(path)}
+        onClick={() => explorer.clip(true)}
+      >
+        <Icon name="cut" />
+        Cut
+      </MenuItem>
+      <MenuItem
+        disabled={!explorer.renames(path)}
+        onClick={() => explorer.clip(false)}
+      >
+        <Icon name="copy" />
+        Copy
+      </MenuItem>
+    </>
+  );
+  const renaming = (path: string) => (
+    <MenuItem
+      disabled={!explorer.renames(path)}
+      onClick={() => explorer.rename(path)}
+    >
+      <Icon name="rename" />
+      Rename
+    </MenuItem>
+  );
+  const making = (path: string) => (
+    <MenuItem onClick={() => explorer.newFolder(path)}>
+      <Icon name="folder-add" />
+      New folder
+    </MenuItem>
+  );
+  const adding = (path: string) => (
+    <>
+      <MenuItem onClick={() => addImages(path)}>
+        <Icon name="import" />
+        Add images
+      </MenuItem>
+      <MenuItem
+        disabled={!explorer.pastes}
+        onClick={() => explorer.paste(path)}
+      >
+        <Icon name="paste" />
+        Paste
+      </MenuItem>
+    </>
+  );
+  const deleting = (
+    <>
+      <MenuSeparator />
+      <MenuItem onClick={explorer.remove} className="text-danger">
+        <Icon name="delete" />
+        Delete
+      </MenuItem>
+    </>
+  );
+
+  const menu = (entry: Entry | null) => {
+    if (entry === null) {
+      return (
+        <>
+          <MenuItem onClick={onNew}>
+            <Icon name="add" />
+            New image
+          </MenuItem>
+          {making("")}
+          {adding("")}
+        </>
+      );
+    }
+    const { path } = entry;
+    const picked = [...explorer.selection.paths];
+    if (picked.length > 1) {
+      // Only what can go into a request: an image with a file, other than the one the request edits.
+      const referable = picked.filter((each) => {
+        const image = images.get(each);
+        return (
+          image !== undefined &&
+          image.sha256 !== null &&
+          each !== references.source
+        );
+      });
+      return (
+        <>
+          <MenuItem
+            disabled={referable.length === 0}
+            onClick={() => referable.forEach(references.onAddReference)}
+          >
+            <Icon name="attach" />
+            Add as references
+          </MenuItem>
+          <MenuSeparator />
+          {organizing(path)}
+          {deleting}
+        </>
+      );
+    }
+    if (entry.folder) {
+      return (
+        <>
+          {making(path)}
+          {adding(path)}
+          <MenuSeparator />
+          {organizing(path)}
+          {renaming(path)}
+          {deleting}
+        </>
+      );
+    }
+    const image = images.get(path);
+    const last = image?.versions.at(-1);
+    if (image && last && fileGone(image)) {
+      return (
+        <>
+          <MenuItem
+            onClick={() =>
+              ask(
+                restoreImageVersion(path, last.id),
+                `${baseName(path)} was not put back.`,
+              )
+            }
+          >
+            <Icon name="undo" />
+            Put its last version back
+          </MenuItem>
+          {deleting}
+        </>
+      );
+    }
+    return (
+      <>
+        <ReferenceItems name={path} {...references} />
+        <MenuSeparator />
+        {organizing(path)}
+        {renaming(path)}
+        {making(path)}
+        {deleting}
+      </>
+    );
+  };
+
+  const draw: Drawing = {
+    icon: (path) => {
+      const upload = arriving.get(path);
+      if (upload !== undefined) {
+        return <Arriving upload={upload} className="size-4.5 rounded-[2px]" />;
+      }
+      const image = images.get(path);
+      return (
+        image && (
+          <Thumb
+            picture={filePicture(image, true)}
+            className="size-4.5 rounded-[2px]"
+          />
+        )
+      );
+    },
+    detail: (path) => {
+      if (arriving.has(path)) {
+        return <LoadingMark />;
+      }
+      const image = images.get(path);
+      return image && <Details image={image} />;
+    },
+    tile: (path) => {
+      const upload = arriving.get(path);
+      if (upload !== undefined) {
+        return <Arriving upload={upload} className="aspect-square w-full" />;
+      }
+      const image = images.get(path);
+      return (
+        image && (
+          <Thumb
+            picture={filePicture(image, true)}
+            shape={image}
+            animated={(image.frames ?? 1) > 1}
+            className="aspect-square w-full"
+          />
+        )
+      );
+    },
+    mark: (path) => {
+      const image = images.get(path);
+      return (
+        <>
+          {(arriving.has(path) || image?.status === "running") && (
+            <LoadingMark />
+          )}
+          {image && <Trouble image={image} />}
+        </>
+      );
+    },
+    menu,
+  };
   const toggle = grid ? "Show as details" : "Show as a grid";
 
   return (
@@ -307,16 +460,26 @@ export function ImagesPane({
       aria-label="Your images"
       className="@container flex h-full min-w-0 flex-col bg-panel"
     >
-      <header className="flex h-10 shrink-0 items-center gap-1.5 border-b border-line pr-2 pl-3">
+      <header className="flex h-10 shrink-0 items-center gap-0.5 border-b border-line pr-2 pl-3">
         <h2 className="flex-1 truncate text-label">Your images</h2>
+        <Tooltip content="New folder">
+          <Button
+            size="sm"
+            icon
+            aria-label="New folder"
+            onClick={() => explorer.newFolder()}
+          >
+            <Icon name="folder-add" />
+          </Button>
+        </Tooltip>
         <Tooltip content={toggle}>
           <Button
             size="sm"
             icon
             aria-label={toggle}
             onClick={() =>
-              updateSettings((current) => ({
-                ...current,
+              updateSettings((before) => ({
+                ...before,
                 images_view: grid ? "details" : "grid",
               }))
             }
@@ -353,23 +516,76 @@ export function ImagesPane({
           <Kbd>/</Kbd>
         </label>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
-        {grid ? (
-          <Grid root={root} pending={pending} {...picking} />
-        ) : (
-          <Details
-            root={root}
-            searching={query.trim() !== ""}
-            pending={pending}
-            {...picking}
-          />
-        )}
-        {found.length === 0 && query.trim() !== "" && (
+      <Explorer
+        explorer={explorer}
+        label="Your images"
+        current={current}
+        draw={draw}
+        header={
+          <div
+            role="none"
+            className="sticky top-0 z-10 mb-0.5 flex h-6 items-center gap-2 border-b border-line bg-panel pr-2 pl-6.5 mono-annotation text-ink-muted"
+          >
+            <span className="min-w-10 flex-1 truncate">Name</span>
+            <span className={COLUMNS.size}>Size</span>
+            <span className={COLUMNS.saved}>Saved</span>
+            <span className={COLUMNS.changed}>Changed</span>
+          </div>
+        }
+        before={
+          creating && (
+            <div
+              role="none"
+              className="mb-px flex h-6.5 items-center gap-2 rounded-sm bg-accent-soft pr-2 pl-6.5 whitespace-nowrap"
+            >
+              <span className="grid size-4.5 shrink-0 place-items-center rounded-[2px] border border-dashed border-line-control text-ink-muted">
+                <Icon name="add" className="size-3" />
+              </span>
+              <span className="min-w-10 flex-1 truncate font-medium">
+                New image
+              </span>
+            </div>
+          )
+        }
+      >
+        {found.length === 0 && searching && (
           <p className="px-3 py-2 text-ink-muted">
             No images match {query.trim()}.
           </p>
         )}
-      </div>
+      </Explorer>
+      {failures.length > 0 && (
+        <Notice
+          onDismiss={dismissFailures}
+          className="m-2 max-h-32 overflow-y-auto"
+        >
+          {failures.map((failure, index) => (
+            <p key={index}>
+              <b className="font-medium text-danger">
+                {"change" in failure ? refused(failure.change) : failure.what}
+              </b>{" "}
+              {failure.why}
+            </p>
+          ))}
+        </Notice>
+      )}
+      {listing?.likely.map(({ name, new_name: likely }) => (
+        <Notice key={name} tone="neutral" icon="warning" className="m-2">
+          <p>
+            <b className="font-medium">{name} is gone.</b> {likely} may be it.
+          </p>
+          <Button
+            size="sm"
+            variant="secondary"
+            className="mt-1.5"
+            onClick={() =>
+              ask(relinkImage(name), `${baseName(name)} was not relinked.`)
+            }
+          >
+            Relink
+          </Button>
+        </Notice>
+      ))}
       {listing && listing.unreadable.length > 0 && (
         <Notice
           title="Some images could not be read."

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import {
   listImages,
@@ -7,83 +7,325 @@ import {
   type ImageSummary,
 } from "@/lib/api";
 import { describe } from "@/lib/errors";
+import { pathAfter, type Change } from "@/lib/operations";
+import { changes } from "@/lib/organize";
+import { movedPath, within } from "@/lib/paths";
 import { poll } from "@/lib/poll";
+import { gone, onRenamed, rekey, renamed } from "@/lib/renames";
 
 /** What is in view: an image by its name, or the new image being described. */
-type Selection = { image: string } | "new";
+type Viewing = { image: string } | "new";
+
+type Images = {
+  listing: ImageListing | null;
+  /** The image in view; none while a new image is being described, or the directory has none. */
+  image: ImageSummary | null;
+  error: string | null;
+};
+
+const listeners = new Set<() => void>();
+// The listing as the server gave it, and what `changes` knows it by.
+let read: { listing: ImageListing; asked: number } | null = null;
+let viewing: Viewing | null = null;
+let error: string | null = null;
+// The image the app shows as the server last had it; undefined before the first listing.
+let followed: string | null | undefined = undefined;
+// Counts the picks made here as each starts and as it is recorded. A listing asked for across one may still have the
+// image shown before it, so it does not move the view.
+let picks = 0;
+let state: Images = { listing: null, image: null, error: null };
+const NOTHING_ARRIVING: ReadonlyMap<string, string> = new Map();
+// The images that show while their files are still going up, each with the upload it goes up as.
+let arriving = NOTHING_ARRIVING;
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function separatorOf(directory: string): string {
+  return directory.includes("\\") ? "\\" : "/";
+}
+
+/** The path of the image or folder named `name` on the machine the app runs on, as the listing gives an image's. */
+function pathIn(directory: string, name: string): string {
+  const separator = separatorOf(directory);
+  return (
+    directory.replace(/[\\/]+$/, "") +
+    separator +
+    name.replaceAll("/", separator)
+  );
+}
+
+type Shown = {
+  listing: ImageListing;
+  /** The images in it that are still going up, each by its name with the upload it goes up as. */
+  arriving: ReadonlyMap<string, string>;
+};
 
 /**
- * The images in the app's directory, polled, and which one is in view.
+ * The listing with changes the server has not made yet, so they show at once. A listing may already have a change it
+ * is given, so applying one twice leaves it as once.
+ */
+function applied(listing: ImageListing, waiting: Change[]): Shown {
+  if (waiting.length === 0) {
+    return { listing, arriving: NOTHING_ARRIVING };
+  }
+  let images = listing.images;
+  let folders = listing.folders;
+  const coming = new Map<string, string>();
+  const at = (image: ImageSummary, name: string): ImageSummary => ({
+    ...image,
+    name,
+    path: pathIn(listing.directory, name),
+  });
+  for (const change of waiting) {
+    switch (change.kind) {
+      case "move": {
+        const after = (path: string) => movedPath(path, change.from, change.to);
+        images = images.map((image) =>
+          after(image.name) === image.name
+            ? image
+            : at(image, after(image.name)),
+        );
+        folders = folders.map(after);
+        rekey(coming, after);
+        break;
+      }
+      case "folder":
+        folders = [...folders, change.path];
+        break;
+      case "copy": {
+        const source = images.find((image) => image.name === change.from);
+        if (source && !images.some((image) => image.name === change.to)) {
+          // It shows as what it is a copy of, which it is until something is asked of it.
+          images = [
+            ...images,
+            {
+              ...at(source, change.to),
+              id: null,
+              status: null,
+              last_run: null,
+            },
+          ];
+        }
+        break;
+      }
+      case "add":
+        if (!images.some((image) => image.name === change.path)) {
+          images = [
+            ...images,
+            {
+              name: change.path,
+              id: null,
+              path: pathIn(listing.directory, change.path),
+              width: null,
+              height: null,
+              frames: null,
+              modified: null,
+              sha256: null,
+              current: null,
+              versions: [],
+              status: null,
+              last_run: null,
+            },
+          ];
+          coming.set(change.path, change.source);
+        }
+        break;
+      case "delete":
+        images = images.filter((image) =>
+          change.folder
+            ? !within(image.name, change.path)
+            : image.name !== change.path,
+        );
+        if (change.folder) {
+          folders = folders.filter((folder) => !within(folder, change.path));
+        }
+        break;
+    }
+  }
+  return {
+    listing: { ...listing, images, folders: [...new Set(folders)] },
+    arriving: coming,
+  };
+}
+
+function show(shown: Shown | null) {
+  const listing = shown?.listing ?? null;
+  if (shown !== null) {
+    arriving = shown.arriving;
+  }
+  const images = listing?.images ?? [];
+  const wanted = viewing !== null && viewing !== "new" ? viewing.image : null;
+  const picked = images.find((image) => image.name === wanted);
+  state = {
+    listing,
+    image: viewing === "new" ? null : (picked ?? images[0] ?? null),
+    error,
+  };
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
+/** Show what shows again, after something other than the listing changed. */
+function reshow() {
+  show(read && applied(read.listing, changes.over(read.asked)));
+}
+
+// A change shows as it is added, and stops being applied once the server has made it.
+changes.subscribe(reshow);
+// Once every change is made, what the server has is what shows, so it is read without waiting for the next poll.
+changes.onDrained(() => void refresh());
+
+// What is in view stays in view under the name it has now.
+onRenamed((from, to) => {
+  if (viewing !== null && viewing !== "new") {
+    viewing = { image: movedPath(viewing.image, from, to) };
+  }
+  if (followed) {
+    followed = movedPath(followed, from, to);
+  }
+  reshow();
+});
+
+/**
+ * Say of each image that is no longer there, going by what the server listed before and lists now, so that what the
+ * view shows ahead of the server is not taken for it.
+ */
+function followGone(
+  before: ImageListing,
+  after: ImageListing,
+  waiting: Change[],
+) {
+  const ids = new Set(after.images.map((image) => image.id));
+  const names = new Set(after.images.map((image) => image.name));
+  for (const image of before.images) {
+    if (image.id === null ? !names.has(image.name) : !ids.has(image.id)) {
+      gone(pathAfter(image.name, waiting));
+    }
+  }
+}
+
+/**
+ * Say of each image that has another name than it showed under, by the id it keeps through a move. A relink, and a
+ * move made outside the view, reach it only as a listing, so this is where everything kept by the name follows.
+ */
+function followMoved(before: ImageListing, after: ImageListing) {
+  const names = new Map(before.images.map((image) => [image.id, image.name]));
+  for (const image of after.images) {
+    const was = image.id === null ? undefined : names.get(image.id);
+    if (was !== undefined && was !== image.name) {
+      renamed(was, image.name);
+    }
+  }
+}
+
+/** List the images now rather than at the next poll, as after a change made here. */
+async function refresh(): Promise<void> {
+  const across = picks;
+  const asked = changes.asking();
+  try {
+    const fresh = await listImages();
+    // One asked for before the listing that shows, and answered after it.
+    if (read !== null && asked < read.asked) {
+      return;
+    }
+    const waiting = changes.over(asked);
+    const next = applied(fresh, waiting);
+    if (state.listing !== null) {
+      followMoved(state.listing, next.listing);
+    }
+    // Not across a change of directory, where every image is another one.
+    if (read !== null && read.listing.data_directory === fresh.data_directory) {
+      followGone(read.listing, fresh, waiting);
+    }
+    const shown = fresh.shown === null ? null : pathAfter(fresh.shown, waiting);
+    if (across === picks && shown !== followed) {
+      followed = shown;
+      if (shown !== null) {
+        viewing = { image: shown };
+      }
+    }
+    read = { listing: fresh, asked };
+    changes.seen(asked);
+    error = null;
+    show(next);
+  } catch (cause) {
+    error = `Could not list the images. ${describe(cause)}`;
+    reshow();
+  }
+}
+
+function startNew() {
+  viewing = "new";
+  reshow();
+}
+
+/** Bring the image into view, and record it as the one the app shows. */
+function select(name: string) {
+  viewing = { image: name };
+  picks += 1;
+  reshow();
+  showImage(name)
+    .then(
+      () => {
+        followed = name;
+      },
+      () => {
+        // It stays in view here; only the record of what the app shows is behind.
+      },
+    )
+    .finally(() => {
+      picks += 1;
+    });
+}
+
+/**
+ * The images in the app's directory, polled, and which one is in view. Call it in one place, since each call polls.
  *
  * The view opens on the image the app showed last, or the first one when it showed none. After that it changes when
  * the person picks an image or starts a new one, and when the server is asked to bring another image up, as `open_app`
  * from the host session does. An image made or changed anywhere else never takes the view.
  */
-export function useImages(): {
-  listing: ImageListing | null;
-  /** The image in view; none while a new image is being described, or the directory has none. */
-  image: ImageSummary | null;
-  error: string | null;
+export function useImages(): Images & {
   startNew: () => void;
-  /** Bring the image into view, and record it as the one the app shows. */
   select: (name: string) => void;
-  /** List the images now rather than at the next poll, as after a change made here. */
   refresh: () => Promise<void>;
 } {
-  const [listing, setListing] = useState<ImageListing | null>(null);
-  const [selection, setSelection] = useState<Selection | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // The image the app shows as the server last had it; undefined before the first listing.
-  const followed = useRef<string | null | undefined>(undefined);
-  // Counts the picks made here as each starts and as it is recorded. A listing asked for across one may still have
-  // the image shown before it, so it does not move the view.
-  const picks = useRef(0);
+  useEffect(() => poll(refresh), []);
+  const images = useSyncExternalStore(subscribe, () => state);
+  return { ...images, startNew, select, refresh };
+}
 
-  const refresh = useCallback(async () => {
-    const asked = picks.current;
-    try {
-      const fresh = await listImages();
-      if (asked === picks.current && fresh.shown !== followed.current) {
-        followed.current = fresh.shown;
-        if (fresh.shown !== null) {
-          setSelection({ image: fresh.shown });
-        }
-      }
-      setListing(fresh);
-      setError(null);
-    } catch (cause) {
-      setError(`Could not list the images. ${describe(cause)}`);
-    }
-  }, []);
+/** The images that show while their files are still going up, each by its name with the upload it goes up as. */
+export function useArriving(): ReadonlyMap<string, string> {
+  return useSyncExternalStore(subscribe, () => arriving);
+}
 
-  useEffect(() => poll(refresh), [refresh]);
+/**
+ * Where a file on the machine the app runs on is, once the image or the folder named `from` in the directory is named
+ * `to`. A file that is neither that nor inside it stays where it is.
+ */
+export function movedFile(path: string, from: string, to: string): string {
+  if (read === null) {
+    return path;
+  }
+  const { directory } = read.listing;
+  return movedPath(
+    path,
+    pathIn(directory, from),
+    pathIn(directory, to),
+    separatorOf(directory),
+  );
+}
 
-  const startNew = useCallback(() => setSelection("new"), []);
-
-  const select = useCallback((name: string) => {
-    setSelection({ image: name });
-    picks.current += 1;
-    showImage(name)
-      .then(
-        () => {
-          followed.current = name;
-        },
-        () => {
-          // It stays in view here; only the record of what the app shows is behind.
-        },
-      )
-      .finally(() => {
-        picks.current += 1;
-      });
-  }, []);
-
-  const images = listing?.images ?? [];
-  const picked =
-    selection !== null && selection !== "new"
-      ? images.find((image) => image.name === selection.image)
-      : undefined;
-  const image = selection === "new" ? null : (picked ?? images[0] ?? null);
-  return { listing, image, error, startNew, select, refresh };
+/** The file of the image named `name` on the machine the app runs on; null before the directory is known. */
+export function fileOf(name: string): string | null {
+  return read === null ? null : pathIn(read.listing.directory, name);
 }
 
 /** A directory as the app shows it, by its last two folders, such as `desk-study\.image-design`. */
