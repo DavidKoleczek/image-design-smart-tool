@@ -1,0 +1,9 @@
+# Written by image-design. A project commits each image's record, and a drawn SVG's script and its lock, and leaves out
+# its versions and runs.
+*
+!/.gitignore
+!/images/
+!/images/*/
+!/images/*/image.json
+!/images/*/image.py
+!/images/*/image.py.lock

@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Iterator
 import json
+from pathlib import Path
 import queue
 import subprocess
 import sys
@@ -24,14 +25,31 @@ TIMEOUT_SECONDS = 10
 # What Claude Code 2.1 asks for in `initialize`.
 PROTOCOL_VERSION = "2025-11-25"
 MCP_APPS_HOST = {"extensions": {EXTENSION_ID: {"mimeTypes": [APP_MIME_TYPE]}}}
+VIEW_TOOLS = (
+    "list_images",
+    "view_image",
+    "move_image",
+    "delete_image",
+    "restore_image_version",
+    "read_image_activity",
+    "read_app_settings",
+    "save_app_settings",
+    "read_app_state",
+    "save_app_state",
+)
+IMAGE_RESOURCES = (
+    "image-design://images/{+name}",
+    "image-design://versions/{version}/{+name}",
+    "image-design://thumbnails/{version}/{+name}",
+)
 
 
 class Wire:
     """One `image-design mcp` process, spoken to in newline-delimited JSON-RPC on the initialize handshake."""
 
-    def __init__(self) -> None:
+    def __init__(self, arguments: list[str] | None = None) -> None:
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "image_design.cli", "mcp"],
+            [sys.executable, "-m", "image_design.cli", "mcp", *(arguments or [])],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
@@ -100,28 +118,53 @@ def test_a_client_without_mcp_apps_gets_open_app_and_a_url_and_the_server_exits_
     initialized = wire.initialize()
     tools = {tool["name"]: tool for tool in wire.request("tools/list", {})["tools"]}
     resources = wire.request("resources/list", {})["resources"]
+    templates = wire.request("resources/templates/list", {})["resourceTemplates"]
     opened = text_of(wire.call_tool("open_app", {}))
     unknown = wire.call_tool("draw", {})
 
     assert set(tools) == {"open_app"}
     assert tools["open_app"]["_meta"] == {"ui": {"resourceUri": VIEW_URI}}
     assert "open_app" in initialized["instructions"]
-    assert resources == []
+    assert (resources, templates) == ([], [])
     assert "Give the user this URL to open the app: http://127.0.0.1:" in opened
     assert unknown["isError"]
     assert "'draw' is not a tool of this server" in text_of(unknown)
     assert wire.close() == 0
 
 
-def test_an_mcp_apps_host_gets_the_view_and_is_told_it_shows_inline(wire: Wire) -> None:
+def test_an_mcp_apps_host_gets_the_view_and_the_tools_it_calls_and_is_told_it_shows_inline(wire: Wire) -> None:
     wire.initialize(MCP_APPS_HOST)
+    tools = {tool["name"]: tool for tool in wire.request("tools/list", {})["tools"]}
     resources = wire.request("resources/list", {})["resources"]
+    templates = wire.request("resources/templates/list", {})["resourceTemplates"]
     contents = wire.request("resources/read", {"uri": VIEW_URI})["contents"]
     opened = text_of(wire.call_tool("open_app", {}))
 
+    assert set(tools) == {"open_app", *VIEW_TOOLS}
+    assert all(tools[name]["_meta"]["ui"]["visibility"] == ["app"] for name in VIEW_TOOLS)
     assert [resource["uri"] for resource in resources] == [VIEW_URI]
+    assert tuple(template["uriTemplate"] for template in templates) == IMAGE_RESOURCES
     assert contents == [{"uri": VIEW_URI, "mimeType": APP_MIME_TYPE, "text": lib.app_view()}]
     assert "shown to the user inline" in opened
+
+
+def test_the_app_shows_the_directory_it_was_started_on_until_open_app_names_another(tmp_path: Path) -> None:
+    wire = Wire(arguments=["--directory", str(tmp_path / "first"), "--data-directory", str(tmp_path / "data")])
+    try:
+        wire.initialize(MCP_APPS_HOST)
+        started = wire.call_tool("list_images", {})["structuredContent"]
+        opened = text_of(wire.call_tool("open_app", {"directory": str(tmp_path / "second")}))
+        switched = wire.call_tool("list_images", {})["structuredContent"]
+    finally:
+        exit_code = wire.close()
+
+    assert exit_code == 0
+    assert (started["directory"], started["data_directory"]) == (str(tmp_path / "first"), str(tmp_path / "data"))
+    assert f"It shows the images in {tmp_path / 'second'}." in opened
+    assert (switched["directory"], switched["data_directory"]) == (
+        str(tmp_path / "second"),
+        str(tmp_path / "second" / ".agents"),
+    )
 
 
 # "auto" lands on 2026-07-28, where the question rides back on the result and the client retries; "legacy" is the
@@ -145,5 +188,5 @@ async def test_open_app_asks_the_client_to_open_it_in_the_browser_once(mode: str
     assert isinstance(opened, TextContent)
     assert isinstance(again, TextContent)
     assert len(asked) == 1
-    assert opened.text == f"The user opened the app at {asked[0].url}."
-    assert again.text == f"Give the user this URL to open the app: {asked[0].url}"
+    assert f"The user opened the app at {asked[0].url}." in opened.text
+    assert f"Give the user this URL to open the app: {asked[0].url}" in again.text

@@ -24,6 +24,7 @@ MAX_EDGE = 3840
 MAX_RATIO = 3
 MIN_PIXELS = 655_360
 MAX_PIXELS = 8_294_400
+THUMBNAIL_QUALITY = 80
 
 
 class Picture(NamedTuple):
@@ -125,6 +126,28 @@ def png(path: Path) -> bytes:
         return resvg_py.svg_to_bytes(svg_path=str(path), resources_dir=str(path.parent))
     except ValueError as error:
         raise ImageDesignError(f"{path} is an SVG that could not be rendered: {error}. Fix the SVG.") from None
+
+
+def thumbnail(path: Path, edge: int) -> bytes:
+    """The image at `path` as a WebP that fits a square `edge` pixels on a side; the first frame of an animation.
+
+    An SVG is rendered at that size rather than shrunk, so a small drawing stays sharp.
+    """
+    try:
+        if path.suffix.lower() in SVG_SUFFIXES:
+            picture = read(path)
+            zoom = edge / max(picture.width, picture.height)
+            source = BytesIO(svg_png(path.read_bytes(), path.parent, zoom))
+        else:
+            source = BytesIO(path.read_bytes())
+        with Image.open(source) as image:
+            small = image.convert("RGBA")
+        small.thumbnail((edge, edge))
+        buffer = BytesIO()
+        small.save(buffer, format="WEBP", quality=THUMBNAIL_QUALITY)
+    except (UnidentifiedImageError, OSError) as error:
+        raise ImageDesignError(f"{path} could not be read as an image: {error}.") from None
+    return buffer.getvalue()
 
 
 def transparent(content: bytes) -> bool:

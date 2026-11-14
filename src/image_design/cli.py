@@ -39,6 +39,7 @@ from image_design.schemas import (
 
 DIRECTORY_HELP = "Where images are kept; .image-design here when omitted."
 DATA_DIRECTORY_HELP = "Where the tool keeps versions and runs; .agents in the directory when omitted."
+APP_DIRECTORY_HELP = "Where the images to show are kept; .image-design here when omitted."
 JSON_HELP = "Print JSON instead of text."
 
 
@@ -541,12 +542,14 @@ def read_image_activity(
 @app.command("app")
 def app_(
     port: Annotated[int | None, typer.Option(help="The port to bind; a free one is chosen when omitted.")] = None,
+    directory: Annotated[Path | None, typer.Option("--directory", help=APP_DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
 ) -> None:
     """Serve the app in a browser page on this machine and print its URL.
 
     Keeps serving until Ctrl+C. Exits 1 with the cause and remedy when the port is held.
     """
-    app_server = lib.app_server()
+    app_server = lib.app_server(directory=directory, data_directory=data_directory)
     typer.echo(app_server.open(port).url)
     with contextlib.suppress(KeyboardInterrupt):
         while True:
@@ -555,13 +558,16 @@ def app_(
 
 
 @app.command()
-def mcp() -> None:
+def mcp(
+    directory: Annotated[Path | None, typer.Option("--directory", help=APP_DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+) -> None:
     """Serve the app's MCP server on stdio, with the app as an MCP App.
 
     For MCP clients that launch the server themselves. Reads and writes MCP messages on stdin and stdout until the
     client disconnects; prints nothing else to stdout.
     """
-    mcp_adapter.run_stdio()
+    mcp_adapter.run_stdio(directory, data_directory)
 
 
 @app.command()

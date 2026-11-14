@@ -84,5 +84,6 @@ Every command that works on images also takes `--directory` and `--data-director
 
 `app` calls `lib.app_server().open()`, prints its URL, and keeps serving until Ctrl+C, which exits 0.
 `mcp` calls `image_design.adapters.mcp.run_stdio()`, for MCP clients that launch the server themselves. stdin and stdout carry only MCP messages until the client disconnects.
+For both, `--directory` and `--data-directory` set the images the app shows.
 
 A command exits with 1 and prints the error to stderr when the library raises `ImageDesignError`. An invalid command line exits with 2.

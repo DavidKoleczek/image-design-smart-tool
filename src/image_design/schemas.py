@@ -289,6 +289,7 @@ class ImageSummary(BaseModel):
     height: int | None
     frames: int | None = Field(description="More than 1 for an animation")
     modified: datetime | None = Field(description="When the image's file was last written; None when it has no file")
+    sha256: str | None = Field(description="Of the image's file, which changes when its content does")
     current: str | None = Field(
         description="The version in the image's file; None when the file has been changed by hand since"
     )
@@ -559,6 +560,52 @@ def _method_lines(command: str, method: ImageMethodSetup, facts: list[str]) -> s
 
 def _with_default(values: list[str], default: str) -> str:
     return ", ".join(f"{value} (default)" if value == default else value for value in values) or "none installed"
+
+
+# endregion
+
+
+# region: App
+
+ThemePreference = Literal["system", "light", "dark"]
+AppMethod = Literal["model", "svg"]
+ImagesView = Literal["details", "grid"]
+
+
+class PaneLayout(BaseModel):
+    """One side pane of the app at one of its widths: how wide it is, and whether it shows."""
+
+    size: int | None = Field(default=None, ge=0, description="Its width in pixels; None for the default")
+    open: bool = True
+
+
+class AppLayout(BaseModel):
+    """The app's side panes at one of its widths."""
+
+    images: PaneLayout = Field(default_factory=PaneLayout)
+    request: PaneLayout = Field(default_factory=PaneLayout)
+
+
+class AppSettings(BaseModel):
+    """app-settings.json in the user's config directory: how the person set up the app, the same in every directory."""
+
+    theme: ThemePreference = Field(default="system", description="`system` follows the host's theme")
+    images_view: ImagesView = Field(
+        default="details", description="How Your images lists them: a file tree with columns, or a grid of previews"
+    )
+    wide: AppLayout = Field(default_factory=AppLayout, description="The panes from 1100 pixels wide")
+    medium: AppLayout = Field(default_factory=AppLayout, description="The panes from 640 to 1100 pixels wide")
+
+
+class AppState(BaseModel):
+    """app/app.json in a data directory: what the person last picked in the app for the images there."""
+
+    method: AppMethod = Field(
+        default="model", description="The way of making an image picked last: an image model, or drawing an SVG"
+    )
+    closed_folders: list[str] = Field(
+        default_factory=list, description="The folders closed in Your images, by their paths with forward slashes"
+    )
 
 
 # endregion

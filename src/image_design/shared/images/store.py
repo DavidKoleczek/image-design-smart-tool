@@ -371,6 +371,7 @@ def _summary(
         height=picture.height if picture is not None else None,
         frames=picture.frames if picture is not None else None,
         modified=facts.modified if facts is not None else None,
+        sha256=facts.sha256 if facts is not None else None,
         current=current,
         versions=versions,
         status=last_run.status if last_run is not None else None,

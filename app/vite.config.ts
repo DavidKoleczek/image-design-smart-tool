@@ -33,7 +33,6 @@ export default defineConfig(({ mode }) =>
         },
       }
     : {
-        publicDir: false,
         build: {
           outDir: `${STATIC}/host`,
           emptyOutDir: true,

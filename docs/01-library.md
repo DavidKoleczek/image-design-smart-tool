@@ -312,31 +312,52 @@ def app_view() -> str
 The view's HTML, compiled from `app/` and offered as the `ui://image-design/app` resource in the MCP server. Raises `ImageDesignError` naming the build command when the view is not compiled.
 
 ```python
-def app_server() -> AppServer
+def app_server(directory: Path | None = None, data_directory: Path | None = None) -> AppServer
 ```
 
 ```python
 class AppServer:
     server: Server
+    directory: Path
+    data_directory: Path
 
     def open(self, port: int | None = None) -> App: ...
     def close(self) -> None: ...
 ```
 
+- `directory`, `data_directory`: The images the app shows, and where the tool keeps their data. The defaults are the same as for the functions that work on images.
 - `port`: The port for the browser page, on `127.0.0.1`. If you do not give a port, the tool selects a free port. If another program uses the port, `open` raises `ImageDesignError`.
 
-`server` is an MCP SDK low-level server to run over any transport; several at once share the state. Its one tool, `open_app`, opens the browser page and returns its URL. The view is listed as a resource only to hosts that render MCP Apps.
+`server` is an MCP SDK low-level server to run over any transport; several at once share the state.
 `open` serves the browser host page on `127.0.0.1` from daemon threads and returns once it listens, or returns the one already open. The page reaches the same server at its own `/mcp` and renders the view behind a sandbox proxy on a second port, a separate origin as the MCP Apps spec requires. `close` stops serving. `App.url` is where to open the page.
+
+The server has one tool for an agent, `open_app`. It opens the browser page and returns its URL. It also takes `directory` and `data_directory`, and switches the app to them when the directory can be listed.
+The other tools are for the view. They are listed only to hosts that render MCP Apps, and marked for the app alone. The view and the resource templates are listed to the same hosts.
+
+- `list_images`, `view_image`, `move_image`, `delete_image`, `restore_image_version`, and `read_image_activity` call the library function of the same name on the app's directory.
+- `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, and the pane sizes.
+- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory.
+
+The view reads images as resources, each as base64. A read is refused unless the listing has that image or version.
+
+- `image-design://images/{+name}` is an image's file.
+- `image-design://versions/{version}/{+name}` is a version kept for an image, such as `v2`.
+- `image-design://thumbnails/{version}/{+name}` is a WebP of a version that fits 256 by 256 pixels. Use `file` as the version for the image's file.
+
+The app keeps what it remembers in two files:
+
+- `app-settings.json` is the same for every directory. It is in `image-design` in the user's config folder: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, and `$XDG_CONFIG_HOME` or `~/.config` on Linux.
+- `app/app.json` is in the data directory, so each directory has its own. The data directory's `.gitignore` ignores it.
 
 ## MCP server
 
 The app's MCP server over stdio, a thin surface over the library like the CLI, in `image_design.adapters.mcp`.
 
 ```python
-def run_stdio() -> None
+def run_stdio(directory: Path | None = None, data_directory: Path | None = None) -> None
 ```
 
-It runs `app_server().server` over stdio until the client disconnects, then stops the browser page if `open_app` opened it.
+It runs `app_server(directory, data_directory).server` over stdio until the client disconnects, then stops the browser page if `open_app` opened it.
 
 ## Manifest
 

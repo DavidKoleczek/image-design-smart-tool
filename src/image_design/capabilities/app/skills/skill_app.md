@@ -2,18 +2,25 @@
 
 The app's view is an MCP App. The page hosts it the way Claude or VS Code would inline, for agents that cannot. `mcp`'s `open_app` tool serves the same app from inside a session.
 
+In the app the user browses the images of one directory, looks at the versions kept for an image and restores one, and renames, moves, or deletes images. An image made or changed outside the app shows in it within a second or so, and `image-design view-image` brings an image up in it.
+
 ```bash
 # on a free port; prints the URL, then blocks until Ctrl+C
 image-design app
 
 # on a fixed port, so a bookmark keeps working
 image-design app --port 8789
+
+# on the images of another directory
+image-design app --directory art/concepts
 ```
 
 ```python
+from pathlib import Path
+
 from image_design.lib import app_server, app_view
 
-app = app_server()
+app = app_server(directory=Path("art/concepts"))
 app.open().url  # the browser host page, which reaches app.server at its own /mcp
 app.close()
 app_view()  # the view's HTML, the MCP App resource
@@ -21,9 +28,13 @@ app_view()  # the view's HTML, the MCP App resource
 
 `open` returns once the page is listening, so the URL answers at once, and serves from daemon threads until `close` or the process exits.
 
+The app keeps its theme and pane sizes in `image-design/app-settings.json` in the user's config folder, the same for every directory. What was last picked for a directory's images is kept in `app/app.json` in its data directory.
+
 ## Arguments
 
 - `--port N`: The port to bind on `127.0.0.1`. A free one is chosen when omitted.
+- `--directory`: Where the images to show are kept. Defaults to `.image-design` in the working directory.
+- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
 
 ## Result
 

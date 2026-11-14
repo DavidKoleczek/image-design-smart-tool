@@ -4,6 +4,7 @@ from typing import Literal, overload
 
 from image_design.capabilities.app import mcp_server as app_server_module
 from image_design.capabilities.app import server as app_module
+from image_design.capabilities.app import settings as app_settings
 from image_design.capabilities.app.mcp_server import AppServer
 from image_design.capabilities.chatgpt_image import generate as chatgpt_image
 from image_design.capabilities.chatgpt_image import method as chatgpt_method
@@ -396,13 +397,33 @@ def version() -> str:
     return skill_module.version()
 
 
-def app_server() -> AppServer:
-    """The app's MCP server: the tool that opens the app, and the view as an MCP App.
+def app_server(directory: Path | None = None, data_directory: Path | None = None) -> AppServer:
+    """The app's MCP server: the tool that opens the app, the tools its view calls, and the view as an MCP App.
 
     Serve `AppServer.server` over any MCP transport. `AppServer.open` serves the browser host page, which renders the
     view for agents that cannot embed it and reaches the same server at its own `/mcp`. `AppServer.close` stops it.
+
+    The app shows the images in `AppServer.directory`, which `open_app` can switch. How the person set up the app,
+    such as its theme and pane sizes, is theirs in every directory, kept in `app-settings.json` in their config
+    directory. What they last picked for a directory's images is kept in `app/app.json` in its data directory.
+
+    Args:
+        directory: Where the images the app shows are kept; `.image-design` in the working directory when omitted.
+        data_directory: Where the tool keeps their versions and runs; `.agents` in the directory when omitted.
     """
-    return app_server_module.AppServer(skill_module.DISTRIBUTION, version())
+    return app_server_module.AppServer(
+        skill_module.DISTRIBUTION,
+        version(),
+        directory,
+        data_directory,
+        list_images,
+        view_image,
+        move_image,
+        delete_image,
+        restore_image_version,
+        read_image_activity,
+        app_settings.settings_path(),
+    )
 
 
 def app_view() -> str:
