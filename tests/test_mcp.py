@@ -47,6 +47,8 @@ VIEW_TOOLS = (
     "preview_chatgpt_image_request",
     "draw_svg_image",
     "steer_svg_image",
+    "design_image",
+    "steer_image",
     "export_svg_image",
     "cancel_image",
     "upload_file",

@@ -228,7 +228,7 @@ async def test_a_run_gets_the_workspace_and_its_options_with_telemetry_off(
     [options] = fake.options
     assert options.cwd == tmp_path.resolve()
     assert options.model == MODEL
-    assert options.tools == ["Read", "Glob", "Grep", "Bash"]
+    assert options.tools == ["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"]
     assert options.permission_mode == "bypassPermissions"
     assert options.effort == "max"
     assert options.thinking == {"type": "adaptive", "display": "summarized"}
@@ -696,7 +696,7 @@ async def test_a_writable_workspace_adds_the_file_writing_tools(
     await (await ClaudeIntelligence().start(request(tmp_path, writable=True))).result()
 
     [options] = fake.options
-    assert options.tools == ["Read", "Glob", "Grep", "Bash", "Edit", "Write"]
+    assert options.tools == ["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch", "Edit", "Write"]
 
 
 @pytest.mark.parametrize(

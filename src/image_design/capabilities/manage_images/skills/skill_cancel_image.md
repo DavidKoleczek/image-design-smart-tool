@@ -1,5 +1,4 @@
 `cancel-image` stops the run working on an image, whichever process runs it, such as one started with `--detach`.
-A request already sent to a service may still be billed, or counted against a plan.
 
 ```bash
 image-design cancel-image --name concepts/cactus.png

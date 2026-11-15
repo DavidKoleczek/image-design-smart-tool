@@ -2,6 +2,76 @@
 
 Every capability of Image Design is in `image_design.lib`. All other surfaces, including the CLI, are thin wrappers over the library.
 
+## Design an image with an agent
+
+`design_image` creates or edits an image by running an agent that directs an image model.
+The agent has a shell in the working directory, this installation's `image-design` on its PATH, the tool's own skill, and skills for the craft of writing image calls.
+It looks at the image, its history, and the references, writes each call to the image model it is given, and makes it with `generate-openai-image` or `generate-chatgpt-image`, choosing every other setting of the call itself.
+It may make several images, write scripts for exact work such as a crop or a composite, and read the project to learn what the image is for.
+
+```python
+async def design_image(
+    prompt: str,
+    name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+    mask: Path | None = None,
+    version: str | None = None,
+    frame: int | None = None,
+    resume_session: bool | str = False,
+    image_model: str | None = None,
+    size: tuple[int, int] | None = None,
+    quality: OpenAIImageQuality | None = None,
+    agent_provider: AgentProvider | None = None,
+    model: str | None = None,
+    reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT,
+    timeout_seconds: int | None = None,
+    origin: str | None = None,
+    detach: bool = False,
+    intelligence: Intelligence | None = None,
+) -> DesignRun
+```
+
+```python
+run = await design_image(
+    prompt="Less detail: no flower buds or spines. Keep the shading.",
+    name="concepts/cactus.png",
+)
+result = await run.result()
+```
+
+`prompt` is what the person wants, for the agent, not what an image model receives. A new `name` creates the image, and the name of one that exists edits it. It cannot be an `.svg`, which `draw_svg_image` draws.
+
+- `references`, `marks`, `mask`: What goes with the request. The agent is shown the references and the image with the marks drawn on it, and is given each as a file it can pass on to a call.
+- `version`, `frame`: The version, and for an animation the frame, the request is about.
+- `resume_session`: Pass `True` to continue the image's agent's last session, or a session ID to continue that one. A new session is told the image's history: each call made on it, written as the command that would make it again, with what it made. A session that goes on is told only what happened since its last turn, such as a call the person made themselves.
+- `image_model`: What the agent makes its images with: an OpenAI image model's ID, through `generate_openai_image`, or `chatgpt`, through `generate_chatgpt_image`. The agent's calls to any other are refused before anything is sent, and a call to `generate_openai_image` that names no model goes to this one. When it is None, the default OpenAI image model when that method is set up, else `chatgpt`. Its method must be set up, and `chatgpt` makes only a `.png`.
+- `size`, `quality`: What the person wants the image's calls to pass. The agent is told them with the flags that pass them, and chooses its own when they are None. Only with an OpenAI image model, since ChatGPT chooses its own.
+- `agent_provider`, `model`, `reasoning_effort`: The agent. See [Agent providers](#agent-providers).
+- `timeout_seconds`: How long the agent may work. None, the default, sets no limit.
+
+Each call is a run of its own that names the agent's run as its `parent`. A call on another image is linked from the agent's image, so `read_image_activity` on the agent's image has it.
+
+The returned `DesignRun` is an `ImageRun` with a `session_id` and a `steer(message, origin, references, marks)` method. Its events are `started`, whose `data` has `method` `design`, an `agent` event for each thing the agent does, a `steered` event for each message sent to it, and the last event. Its result has no versions, since the calls make the images.
+
+The agent's run is kept in the image's `designs.json`, beside its `runs.json`, and one agent at a time works on an image. Each of its calls claims the image only while it runs, as any call does.
+
+```python
+def steer_image(
+    name: str,
+    message: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    origin: str | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+) -> None
+```
+
+`steer_image` sends a message to the agent while it works, from any process. `cancel_image` stops the agent and the calls it has going.
+
 ## Generate an image with the OpenAI API
 
 `generate_openai_image` creates or edits an image with an OpenAI image model through the Images API. It requires an OpenAI API key, from the `OPENAI_API_KEY` environment variable or [saved on the machine](#openai-api-key).
@@ -23,13 +93,13 @@ async def generate_openai_image(
     complexity: OpenAIImageComplexity | None = None,
     background: OpenAIImageBackground | None = None,
     compression: int | None = None,
-    count: int = 1,
     frames: int | None = None,
     frame_ms: int | None = None,
     previews: int = 0,
     timeout_seconds: int = 600,
     origin: str | None = None,
     detach: bool = False,
+    parent: str | None = None,
 ) -> ImageRun
 ```
 
@@ -67,11 +137,11 @@ The other parameters:
 - `frame`: When the image being edited is an animation, the frame to send, counting from 0. By default, the first. `view_image` returns an image's frames.
 - `model`: `gpt-image-2.6-sunburst`, the default, or the faster `gpt-image-2.6-flare`.
 - `size`, `quality`, `complexity`, `background`, `compression`: Passed to the API. A parameter you leave out uses the API's default, except `size` on an edit, which defaults to the size of the image being edited, rounded to the nearest size the model accepts. `list_image_methods` returns the values each model accepts.
-- `count`: The number of images to make. Each is saved as its own version, and the first becomes the image's file.
 - `frames`, `frame_ms`: For a `.gif`, the number of frames and the duration of each in milliseconds. An edit of a `.gif` keeps the image's own.
-- `previews`: The number of in-progress images the API sends before the final one, up to 3. Fewer can arrive if the image finishes first. Each adds 100 output tokens to the cost. Previews work only with a `count` of 1, and a `.gif` has none.
+- `previews`: The number of in-progress images the API sends before the final one, up to 3. Fewer can arrive if the image finishes first. Each adds 100 output tokens to the cost. A `.gif` has none.
 - `origin`: A label for who sent the request, such as `app`.
 - `detach`: Run the request in a separate process that keeps going if the caller exits.
+- `parent`: The run of the [image's agent](#design-an-image-with-an-agent) that makes the call. When it is None, the run that the `IMAGE_DESIGN_PARENT` environment variable names, which the agent's processes have. A call with neither stands on its own.
 
 A mark is a shape with an optional note:
 
@@ -301,7 +371,7 @@ The agent runs on one of two agent providers. Each is installed through the extr
 - `codex`: Built on the [OpenAI Codex SDK](https://github.com/openai/codex/tree/main/sdk/python). It uses the user's Codex sign-in and `~/.codex/config.toml`.
 - `claude`: Built on the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). It uses the user's Claude Code settings and credentials: `ANTHROPIC_API_KEY`, or a cloud provider's.
 
-`list_intelligence_models` returns the models to choose from and the reasoning efforts each one accepts:
+`list_intelligence_models` returns the models to choose from and the reasoning efforts each one accepts. Both agents run at `high` effort by default:
 
 ```python
 def list_intelligence_models(structured: bool = False) -> str | IntelligenceModels
@@ -346,6 +416,13 @@ def import_image(
     data_directory: Path | None = None,
     numbered: bool = False,
 ) -> ImageSummary
+def add_image_version(
+    name: str,
+    path: Path,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    parent: str | None = None,
+) -> ImageSummary
 def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None
 def create_folder(name: str, directory: Path | None = None, data_directory: Path | None = None, numbered: bool = False) -> str
 def move_folder(
@@ -377,6 +454,7 @@ def list_image_methods() -> ImageMethods
 - `move_image` renames an image or moves it to another folder. The image keeps its versions. The new name must keep the extension.
 - `copy_image` makes another image with a copy of the image's file and of everything kept for it: its versions, its runs, and for an SVG image its script and sessions. It is refused while a run is working on the image.
 - `import_image` copies an image file from anywhere on the machine into the directory as a new image, with the file as its first version. A PNG, JPEG, WebP, GIF, or SVG is kept as it is. Any other still image, such as a BMP or TIFF, is kept as a PNG. Without `name` the image has the file's name. A `name` that ends in a slash is the folder to put it in.
+- `add_image_version` keeps a file, such as a crop or a composite a script made, as the image's next version and puts it in the image's file. The file must be in the image's format, except that any still image is kept as a PNG for a `.png`. `parent` is as for `generate_openai_image`.
 - `delete_image` deletes an image and everything kept for it. If a run is working on the image, it's stopped first.
 - `create_folder` makes a folder and returns its name. A folder stays until `delete_folder` removes it, even when a move or a delete leaves it empty.
 - `move_folder` renames a folder or moves it into another, with everything in it, and returns its name. Its images keep their versions. It is refused while a run is working on an image in the folder.
@@ -385,7 +463,7 @@ def list_image_methods() -> ImageMethods
 - With `numbered`, a name that is taken becomes the first free one of `name (2)`, `name (3)`, and so on, as in `cactus (2).png`. Without it, a name that is taken is refused.
 - `cancel_image` stops the run that is working on an image. It can be called from any process.
 - `read_image_activity` returns the history of an image: each request, what the agent did, and how each run ended. Pass the `cursor` from an earlier call as `after` to get only what is new. Each run's `started` event has its request, which names the files the run was given relative to the event's `run_folder`.
-- `list_image_methods` returns the three ways of making an image, whether each is set up on this machine, and the models and options each supports. Set up means installed, and for the OpenAI API that the key is set.
+- `list_image_methods` returns the three ways of making an image and, as `design`, the agent that directs the first two: whether each is set up on this machine, and the models and options each supports. Set up means installed, and for the OpenAI API that the key is set. The agent is set up when an agent provider is installed and one of the first two methods is set up.
 
 ```python
 class ImageView(ImageSummary):
@@ -483,6 +561,8 @@ The other tools are for the view. They are listed only to hosts that render MCP 
 - `preview_openai_image_request` and `preview_chatgpt_image_request` take the same arguments and return the `ImageRequestPreview`.
 - `draw_svg_image` starts a drawing the same way. It takes the prompt, the name, `references`, `marks`, the budgets, `resume_session`, the agent provider, model, and reasoning effort, and `timeout_seconds`.
 - `steer_svg_image` leaves a message for the agent drawing an image, with `references` and `marks`. The message holds copies of what it was given, so the uploads it took are cleared.
+- `design_image` starts the image's agent the same way. It takes the prompt, the name, `references`, `marks`, a `mask`, the `version` and `frame` the request is about, `resume_session`, the image model and a new image's size and quality, the agent provider, model, and reasoning effort, and `timeout_seconds`. `steer_image` leaves a message for it, as `steer_svg_image` does.
+- `list_images` gives each image its agent's last run as `design`, which is None when it has had none.
 - `export_svg_image` asks the user where to save in the platform's save dialog, then renders the drawing, or one of its versions, there at a `scale` of its canvas.
 - `upload_file` takes a file from the view in base64 pieces, under an ID the view makes up: a reference dropped or pasted into the app, an image file dropped on Your images, or the mask painted in it. Uploads wait in `image-design-uploads` in the system's temp folder. One that nothing takes is cleared when the app closes, or by the next app to start a day later.
 - `read_reference_library` returns the references the app offers besides the images in its directory: the pinned files, and what requests sent from the app were given before. A version kept for an image is named after the image and the version.
@@ -491,7 +571,7 @@ The other tools are for the view. They are listed only to hosts that render MCP 
 - `keep_reference` copies an upload into `app/pins` in the data directory, so a dropped image can be pinned. The copy is cleared once the state is saved without it among the pins.
 - `read_openai_key`, `enter_openai_key`, and `clear_openai_key` are over `openai_api_key_status`, `save_openai_api_key`, and `clear_openai_api_key`. None takes or returns the key. `enter_openai_key` has the user type it into a window on the machine the server runs on, so the key is in no message between the view, its host, and the server.
 - `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, whether a request's advanced options show, and the pane sizes.
-- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, whether a new image is a still image or an animation, the agent and budgets for a new drawing, the pinned references and folders, and the images open in tabs, each with whether it is a preview that the next image opened takes.
+- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, whether a new image is a still image or an animation, the agent and budgets for a new drawing, the image's agent and its image model, the pinned references and folders, and the images open in tabs, each with whether it is a preview that the next image opened takes.
 
 The view reads images as resources, each as base64. A read is refused unless the listing has that image or version, the version has that frame, or the image's activity has that preview.
 

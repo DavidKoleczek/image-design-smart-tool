@@ -12,6 +12,8 @@ from image_design.schemas import ImageDesignError
 from image_design.shared.images import pictures
 from image_design.shared.images.store import CRASHED, StoredImage, find_image, new_image, release_lock, take_lock
 
+REFERENCE_PREFIX = "reference-"
+
 
 class Reference(NamedTuple):
     """An image sent with a request, already in a format the image services take."""
@@ -41,7 +43,9 @@ def references(paths: list[Path]) -> list[Reference]:
 
 def write_references(sent: list[Reference], inputs: Path) -> list[Path]:
     """Write each reference into `inputs`, numbered in the order they are sent."""
-    return [write(inputs / f"reference-{number}{each.suffix}", each.content) for number, each in enumerate(sent, 1)]
+    return [
+        write(inputs / f"{REFERENCE_PREFIX}{number}{each.suffix}", each.content) for number, each in enumerate(sent, 1)
+    ]
 
 
 @contextlib.contextmanager
@@ -73,6 +77,14 @@ def source(image: StoredImage, version: str | None) -> Path | None:
     if version is not None:
         return image.folder / image.version(version).file
     return image.path if image.path.is_file() else None
+
+
+def edited_version(image: StoredImage, version: str | None) -> str | None:
+    """The version a request edits, by its id: the one asked for, or the one in the image's file, which the image has
+    claimed so it is kept; None when the request creates the image."""
+    if source(image, version) is None:
+        return None
+    return version or image.versions.current
 
 
 def previewed_source(root: Path, data: Path, name: str, version: str | None) -> Path | None:

@@ -236,7 +236,7 @@ async def test_what_was_picked_in_the_app_is_kept_with_each_directory_s_data(
         before = await client.call_tool("read_app_state", {})
         read_only = not (tmp_path / "logos").exists()
         saved = await client.call_tool("save_app_state", {"state": {"method": "svg"}})
-        picked = AppImageRequest(model="chatgpt", size=(1536, 1024), format=".webp", count=2, reasoning_effort="high")
+        picked = AppImageRequest(model="chatgpt", size=(1536, 1024), format=".webp", reasoning_effort="high")
         request = await client.call_tool("save_app_state", {"state": {"request": picked.model_dump(mode="json")}})
         await client.call_tool("save_app_state", {"state": {"method": "svg"}})
         bad = await client.call_tool("save_app_state", {"state": {"method": "paint"}})

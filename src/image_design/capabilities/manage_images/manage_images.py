@@ -1,6 +1,7 @@
 """Work on any image, whichever method made it: list, view, move, copy, and delete images, put an earlier version
 back, stop a run, and read an image's history."""
 
+from collections.abc import Callable
 import os
 from pathlib import Path
 import secrets
@@ -30,8 +31,10 @@ from image_design.shared.images.store import (
     found,
     found_summary,
     kept_images,
+    load_designs,
     load_runs,
     read_events,
+    refuse_designing,
     release_lock,
     require_image,
     save_record,
@@ -118,6 +121,8 @@ def move_image(
     holder = f"move-{secrets.token_hex(3)}"
     locks = [take_lock(data, old, holder)]
     try:
+        if isinstance(moving, StoredImage):
+            refuse_designing(moving.folder, old, "move it")
         if new.casefold() != old.casefold():
             locks.append(take_lock(data, new, holder))
         if source.is_file():
@@ -161,6 +166,9 @@ def copy_image(
     # Claimed as a run claims it, so what is kept for the image does not change while it is copied.
     locks = [take_lock(data, old, holder)]
     try:
+        if isinstance(original, StoredImage):
+            # A copy of a working agent's run would read as working, with nothing to end it.
+            refuse_designing(original.folder, old, "copy it")
         locks.append(take_lock(data, new, holder))
         try:
             if isinstance(original, StoredImage):
@@ -189,9 +197,13 @@ def delete_image(name: str, directory: Path | None = None, data_directory: Path 
         _remove_file(root / deleting, deleting)
         return
     refuse_run_here(deleting)
+    # The agent first, so it starts no call once the one going has stopped.
+    designing = deleting.designing()
+    if designing is not None:
+        _stop(deleting, designing, load_designs)
     run = deleting.running()
     if run is not None:
-        _stop(deleting, run)
+        _stop(deleting, run, load_runs)
     holder = f"delete-{secrets.token_hex(3)}"
     lock = take_lock(data, deleting.name, holder)
     try:
@@ -218,8 +230,9 @@ def delete_image(name: str, directory: Path | None = None, data_directory: Path 
 
 def refuse_run_here(image: StoredImage) -> None:
     """Raise when a run in this process is working on the image, which deleting it cannot stop."""
-    run = image.running()
-    if run is not None and run.pid == os.getpid():
+    here = [run for run in (image.running(), image.designing()) if run is not None and run.pid == os.getpid()]
+    run = here[0] if here else None
+    if run is not None:
         # Its handle is here, and waiting for it to end could hold up the very loop that ends it.
         raise ImageDesignError(
             f"Image {image.name} is being worked on by a run in this process. Stop it with `await run.cancel()` on its "
@@ -247,47 +260,81 @@ def restore_image_version(
 
 
 def cancel_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
-    """Ask the process running the image's run, which may be another one, to stop it."""
+    """Ask the processes running the image's run and its agent, which may be others, to stop them. An agent that
+    stops asks every call it made that is still going, on any image, to stop."""
     root, data = directories(directory, data_directory)
     image = require_image(root, data, name)
-    run = image.running()
-    if run is None:
+    going = [run for run in (image.designing(), image.running()) if run is not None]
+    if not going:
         raise ImageDesignError(f"Image {image.name} has no run going, so there is nothing to cancel.", "not-running")
-    (image.run_folder(run.id) / CANCEL).touch()
+    for run in going:
+        (image.run_folder(run.id) / CANCEL).touch()
 
 
 def read_image_activity(
     name: str, directory: Path | None = None, data_directory: Path | None = None, after: str | None = None
 ) -> ImageActivity:
-    """Every event of every run on the image, in order, or only those after `after`, a cursor an earlier call gave.
+    """Every event of every run of the image's conversation, in the order they happened, or only those after `after`,
+    a cursor an earlier call gave. The conversation is the image's calls, its agent's runs, and the calls that agent
+    made on other images.
 
-    A cursor is a run's id and how far into its events the reader got, so it stays good as more runs are added.
+    Each of the three is a list runs are only added to, and the cursor has the id of the last run read in each and how
+    far into its events the reader got, so it stays good as more runs are added.
     """
     root, data = directories(directory, data_directory)
     image = require_image(root, data, name)
-    ids = [run.id for run in image.runs]
-    first, offset = 0, 0
-    if after is not None:
-        run_id, _, read_to = after.rpartition(":")
-        if run_id not in ids or not read_to.isdigit():
-            raise ImageDesignError(
-                f"{after!r} is not a cursor read_image_activity gave for {image.name}. Pass the cursor of an earlier "
-                "call, or leave out after to read from the start.",
-                "invalid-request",
-                image.name,
-            )
-        first, offset = ids.index(run_id), int(read_to)
+    streams = [
+        [(run.id, image.run_folder(run.id)) for run in image.runs],
+        [(run.id, image.run_folder(run.id)) for run in image.designs],
+        [(run_id, data / IMAGES / image_id / "runs" / run_id) for image_id, run_id in image.linked()],
+    ]
     events: list[ImageEvent] = []
-    cursor = after
-    for index in range(first, len(ids)):
-        read, end = read_events(image.run_folder(ids[index]) / EVENTS, offset if index == first else 0)
-        for event in read:
-            if event.kind == "started":
-                # Where the run's folder is now, which is not where it started for a copy or a project that moved.
-                event.data["run_folder"] = str(image.run_folder(ids[index]))
-        events.extend(read)
-        cursor = f"{ids[index]}:{end}"
+    cursors: list[str] = []
+    for stream, (first, offset) in zip(streams, _positions(after, streams, image.name), strict=True):
+        cursor = ""
+        for index in range(first, len(stream)):
+            run_id, folder = stream[index]
+            read, end = read_events(folder / EVENTS, offset if index == first else 0)
+            for event in read:
+                if event.kind == "started":
+                    # Where the run's folder is now, which is not where it started for a copy or a project that moved.
+                    event.data["run_folder"] = str(folder)
+            events.extend(read)
+            cursor = f"{run_id}:{end}"
+        cursors.append(cursor)
+    # Sorted stably, so each run's events stay in the order it wrote them.
+    events.sort(key=lambda event: event.time)
+    cursor = "|".join(cursors).rstrip("|") or None
     return ImageActivity(name=image.name, events=events, status=image.summary().status, cursor=cursor)
+
+
+def _positions(after: str | None, streams: list[list[tuple[str, Path]]], name: str) -> list[tuple[int, int]]:
+    """Where to read each of an image's lists of runs from: the run a cursor names in it and the offset into that
+    run's events, or the start of the list when the cursor names none of it."""
+    parts = (after or "").split("|")
+    parts += [""] * (len(streams) - len(parts))
+    if len(parts) > len(streams):
+        raise _not_a_cursor(after, name)
+    positions: list[tuple[int, int]] = []
+    for part, stream in zip(parts, streams, strict=True):
+        if not part:
+            positions.append((0, 0))
+            continue
+        run_id, _, read_to = part.rpartition(":")
+        ids = [each for each, _ in stream]
+        if run_id not in ids or not read_to.isdigit():
+            raise _not_a_cursor(after, name)
+        positions.append((ids.index(run_id), int(read_to)))
+    return positions
+
+
+def _not_a_cursor(after: str | None, name: str) -> ImageDesignError:
+    return ImageDesignError(
+        f"{after!r} is not a cursor read_image_activity gave for {name}. Pass the cursor of an earlier call, or leave "
+        "out after to read from the start.",
+        "invalid-request",
+        name,
+    )
 
 
 def _frames(path: Path, version: str | None) -> ImageFrames:
@@ -347,8 +394,9 @@ def _remove_file(path: Path, name: str) -> None:
         ) from None
 
 
-def _stop(image: StoredImage, run: ImageRunRecord) -> None:
-    """Stop the run as `cancel_image` does, and wait for it to end and for its process to exit."""
+def _stop(image: StoredImage, run: ImageRunRecord, records: Callable[[Path], list[ImageRunRecord]]) -> None:
+    """Stop the run as `cancel_image` does, and wait for it to end and for its process to exit. `records` reads the
+    runs of its kind from the image's folder."""
     cancel = image.run_folder(run.id) / CANCEL
     cancel.parent.mkdir(parents=True, exist_ok=True)
     cancel.touch()
@@ -357,7 +405,7 @@ def _stop(image: StoredImage, run: ImageRunRecord) -> None:
     # Its process may keep a file of the run open until it exits, and Windows refuses to move a folder until then.
     while process_alive(run.pid):
         now = time.monotonic()
-        current = next((each for each in load_runs(image.folder) if each.id == run.id), run)
+        current = next((each for each in records(image.folder) if each.id == run.id), run)
         if current.status != "running":
             ended = ended or now
             # A process that goes on past the run it ran, as a caller of the library may, is not waited on further.

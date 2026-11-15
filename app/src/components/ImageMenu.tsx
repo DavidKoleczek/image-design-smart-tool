@@ -203,7 +203,7 @@ function counted(count: number, one: string): string {
 }
 
 const KEPT =
-  "every version, every run, and for a drawing its script and the conversations with its agent";
+  "every version, every run, any conversation with its agent, and for a drawing its script";
 
 /** What a delete of the entries is asked as: by name for one, and by how many of each for several. */
 function asked(entries: Entry[]): {

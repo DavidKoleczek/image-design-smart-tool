@@ -4,12 +4,12 @@ from collections.abc import AsyncIterator
 from importlib.util import find_spec
 import os
 from pathlib import Path
-import sys
 from typing import Protocol
 
 from image_design.core.skill import DISTRIBUTION, repository_url
 from image_design.intelligence.schemas import IMAGE_MEDIA_TYPES, AgentEvent, AgentRequest, AgentResult, Steering
 from image_design.schemas import AGENT_PROVIDERS, AgentProvider, ImageDesignError
+from image_design.shared import state
 
 # The import each agent provider's SDK answers to; its extra is named after the agent provider.
 SDK_MODULES: dict[AgentProvider, str] = {
@@ -138,15 +138,20 @@ def require_showable(images: list[Path]) -> None:
             raise ImageDesignError(f"{image} is not a file. Pass the path of an image that exists.")
 
 
+def agent_environment(request: AgentRequest) -> dict[str, str]:
+    """The variables the agent's processes get over this process's: the request's, and PATH with its directories
+    first."""
+    environment = dict(request.environment)
+    if request.path_directories:
+        directories = [str(directory) for directory in request.path_directories]
+        inherited = os.environ.get("PATH")
+        environment["PATH"] = os.pathsep.join([*directories, inherited] if inherited else directories)
+    return environment
+
+
 def state_directory(agent_provider: AgentProvider) -> Path:
     """The platform's per-user state location for the agent provider, where what a later run resumes lives."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    else:
-        base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
-    return base / DISTRIBUTION / agent_provider
+    return state.state_directory() / agent_provider
 
 
 def _install_source(extra: str) -> str:

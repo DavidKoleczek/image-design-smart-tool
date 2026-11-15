@@ -14,7 +14,7 @@ DEFAULT_INTELLIGENCE_MODELS: dict[AgentProvider, str] = {
     "codex": "gpt-6.1-sol",
     "claude": "claude-opus-5-5",
 }
-DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium"
+DEFAULT_REASONING_EFFORT: ReasoningEffort = "high"
 REASONING_EFFORTS: tuple[ReasoningEffort, ...] = get_args(ReasoningEffort)
 # The reasoning efforts each agent provider takes, for a model the tool does not list.
 PROVIDER_REASONING_EFFORTS: dict[AgentProvider, tuple[ReasoningEffort, ...]] = {
@@ -135,7 +135,7 @@ ImageFormat = Literal["png", "jpeg", "webp", "gif"]
 IMAGE_FORMATS: dict[str, ImageFormat] = {".png": "png", ".jpg": "jpeg", ".webp": "webp", ".gif": "gif"}
 # The extension of an SVG image's name, the other kind of image the tool keeps.
 SVG_SUFFIX = ".svg"
-ImageMethod = Literal["openai", "chatgpt", "svg", "imported"]
+ImageMethod = Literal["openai", "chatgpt", "svg", "imported", "design"]
 ImageRunStatus = Literal["running", "done", "failed", "cancelled", "timed-out"]
 ImageEventKind = Literal["started", "preview", "agent", "steered", "version", "finished", "failed"]
 MarkShape = Literal["circle", "box", "arrow", "sketch"]
@@ -250,10 +250,19 @@ class ImageRunRecord(BaseModel):
     )
     usage: ImageUsage | None = None
     error: str | None = None
+    parent: str | None = Field(
+        default=None, description="For an image call an agent made with `design_image`, the run of that agent"
+    )
+    parent_image: str | None = Field(
+        default=None, description="The id of the image that agent's run is kept with, which may be another image"
+    )
 
 
 class ImageRuns(BaseModel):
-    """runs.json: every request on an image. Not committed, since it changes with every event and names processes."""
+    """runs.json: every request on an image. Not committed, since it changes with every event and names processes.
+
+    designs.json, beside it, holds the runs of the image's agent in the same shape.
+    """
 
     runs: list[ImageRunRecord] = Field(default_factory=list)
 
@@ -284,6 +293,16 @@ class ImageResult(BaseModel):
     error: str | None = None
 
 
+class ImageDesignStatus(BaseModel):
+    """How the last run of an image's agent is going."""
+
+    run_id: str
+    status: ImageRunStatus
+    started: datetime
+    session_id: str | None = Field(default=None, description="Its agent's session, which a later run can resume")
+    agent_provider: AgentProvider | None = None
+
+
 class ImageSummary(BaseModel):
     """An image, its versions, and how its last run went."""
 
@@ -304,6 +323,9 @@ class ImageSummary(BaseModel):
     versions: list[ImageVersion] = Field(description="Empty for a file the tool has made no change to yet")
     status: ImageRunStatus | None = Field(description="Its last run's status; None when it has had no run")
     last_run: ImageRunRecord | None = Field(description="Its last run, with the request it was given")
+    design: ImageDesignStatus | None = Field(
+        default=None, description="Its agent's last run, from `design_image`; None when it has had none"
+    )
 
 
 class ImageListing(BaseModel):
@@ -540,6 +562,9 @@ DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2.6-sunburst"
 
 # The agent only hands the request to the image tool, which needs little reasoning.
 DEFAULT_CHATGPT_REASONING_EFFORT: ReasoningEffort = "low"
+# What stands for ChatGPT where an image model is picked, beside the OpenAI image models' IDs, since ChatGPT chooses
+# its own image model.
+CHATGPT_IMAGE_MODEL = "chatgpt"
 
 # endregion
 
@@ -586,7 +611,6 @@ class OpenAIImageMethod(ImageMethodSetup):
     complexities: list[OpenAIImageComplexity]
     backgrounds: list[OpenAIImageBackground]
     max_images: int = Field(description="The images a request can send, counting the image being edited")
-    max_count: int
     max_previews: int
     frames: tuple[int, int] = Field(description="The fewest and the most frames an animation can have")
     frame_ms: tuple[int, int] = Field(description="The shortest and the longest a frame can last")
@@ -610,26 +634,39 @@ class SvgImageMethod(ImageMethodSetup):
     export_formats: list[str] = Field(description="The extensions `export_svg_image` renders to")
 
 
+class DesignImageMethod(ImageMethodSetup):
+    """What `design_image` takes: the agent that writes the image calls, and the image model it makes them with."""
+
+    models: list[IntelligenceModel] = Field(description="Those of the agent providers that are installed")
+    default: IntelligenceChoice
+    default_image_model: str = Field(
+        description="What the agent makes its images with when none is picked: the default OpenAI image model, or "
+        "`chatgpt` when only ChatGPT is set up"
+    )
+
+
 class ImageMethods(BaseModel):
-    """The three ways of making an image."""
+    """The three ways of making an image, and the agent that directs the first two."""
 
     openai: OpenAIImageMethod
     chatgpt: ChatGPTImageMethod
     svg: SvgImageMethod
+    design: DesignImageMethod
 
     def describe(self) -> str:
         """The methods as text, for a person or an agent to read."""
-        openai, chatgpt, svg = self.openai, self.chatgpt, self.svg
+        openai, chatgpt, svg, design = self.openai, self.chatgpt, self.svg, self.design
         sizes = openai.sizes
         size_limits = (
             f"each side a multiple of {sizes.step}, at most {sizes.max_edge}; {sizes.min_pixels:,} to "
             f"{sizes.max_pixels:,} pixels; the long side at most {sizes.max_ratio:g} times the short side"
         )
-        limits = f"{openai.max_images} images sent, {openai.max_count} made, and {openai.max_previews} previews"
+        limits = f"{openai.max_images} images sent and {openai.max_previews} previews"
         (fewest, most), (shortest, longest) = openai.frames, openai.frame_ms
-        agent = (
-            f"--agent-provider {svg.default.agent_provider} --model {svg.default.model} "
-            f"--reasoning-effort {svg.default.reasoning_effort}"
+        agent, designer = (
+            f"--agent-provider {choice.agent_provider} --model {choice.model} "
+            f"--reasoning-effort {choice.reasoning_effort}"
+            for choice in (svg.default, design.default)
         )
         width, height = svg.default_canvas
         blocks = [
@@ -662,6 +699,17 @@ class ImageMethods(BaseModel):
                     f"Agent: {agent} by default; `image-design list-intelligence-models` lists the others",
                     f"Canvas: {width}x{height} by default",
                     "Exports to: " + ", ".join(svg.export_formats),
+                ],
+            ),
+            _method_lines(
+                "design-image",
+                design,
+                [
+                    f"Agent: {designer} by default; `image-design list-intelligence-models` lists the others",
+                    (
+                        f"Image model: --image-model {design.default_image_model} by default, or another of "
+                        f"generate-openai-image's models, or {CHATGPT_IMAGE_MODEL} for generate-chatgpt-image"
+                    ),
                 ],
             ),
         ]
@@ -729,7 +777,6 @@ class AppImageRequest(BaseModel):
     quality: OpenAIImageQuality = "auto"
     format: str = Field(default=".png", description="The extension a new still image's name ends in")
     background: OpenAIImageBackground = "auto"
-    count: int = Field(default=1, ge=1)
     kind: AppImageKind = Field(default="image", description="What a new image is: a still image, or an animation")
     frame_size: tuple[int, int] | None = Field(
         default=None, description="A new animation's size; None for the service's choice"
@@ -755,6 +802,25 @@ class AppSvgRequest(BaseModel):
     canvas: tuple[int, int] | None = Field(default=None, description="A new drawing's; None for the default")
     max_bytes: int | None = Field(default=None, ge=1, description="None for any")
     timeout_seconds: int | None = Field(default=None, ge=1, description="How long a run may take; None for no limit")
+
+
+class AppDesignRequest(BaseModel):
+    """What the person last picked in the app for the image's agent."""
+
+    agent_provider: AgentProvider | None = Field(default=None, description="None for the default")
+    model: str | None = Field(default=None, description="The agent's model; None for the agent provider's default")
+    reasoning_effort: ReasoningEffort | None = Field(default=None, description="None for the default")
+    image_model: str | None = Field(
+        default=None,
+        description="What the agent makes its images with: an OpenAI image model's ID, or `chatgpt`; None for the "
+        "default of the first method set up",
+    )
+    size: tuple[int, int] | None = Field(
+        default=None, description="A new image's size, which the agent passes to its calls; None for its own choice"
+    )
+    quality: OpenAIImageQuality | None = Field(
+        default=None, description="A new image's quality, which the agent passes to its calls; None for its own choice"
+    )
 
 
 AppFolderShows = Literal["files", "dialog"]
@@ -833,6 +899,7 @@ class AppState(BaseModel):
     )
     request: AppImageRequest = Field(default_factory=AppImageRequest)
     svg: AppSvgRequest = Field(default_factory=AppSvgRequest)
+    design: AppDesignRequest = Field(default_factory=AppDesignRequest)
     closed_folders: list[str] = Field(
         default_factory=list, description="The folders closed in Your images, by their paths with forward slashes"
     )

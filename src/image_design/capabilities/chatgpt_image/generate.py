@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from image_design.intelligence.interface import AgentRun, Intelligence, select_intelligence
 from image_design.intelligence.schemas import AgentRequest
 from image_design.schemas import (
+    CHATGPT_IMAGE_MODEL,
     DEFAULT_CHATGPT_REASONING_EFFORT,
     DEFAULT_INTELLIGENCE_MODELS,
     ImageDesignError,
@@ -22,12 +23,13 @@ from image_design.schemas import (
     Mark,
     ReasoningEffort,
 )
+from image_design.shared.images import calls, pictures
 from image_design.shared.images import detach as detaching
 from image_design.shared.images import marks as marking
-from image_design.shared.images import pictures
 from image_design.shared.images.requests import (
     Reference,
     claimed,
+    edited_version,
     invalid,
     previewed_source,
     source,
@@ -72,6 +74,7 @@ class ChatGPTImageRequest(BaseModel):
     reasoning_effort: ReasoningEffort = DEFAULT_CHATGPT_REASONING_EFFORT
     timeout_seconds: int = 600
     origin: str | None = None
+    parent: str | None = None
 
 
 async def generate_chatgpt_image(
@@ -89,6 +92,7 @@ async def generate_chatgpt_image(
     origin: str | None = None,
     detach: bool = False,
     intelligence: Intelligence | None = None,
+    parent: str | None = None,
 ) -> ImageRun:
     """Start creating the image named `name`, or editing it when it exists, and return its run once it is sent."""
     request = validated(
@@ -105,6 +109,7 @@ async def generate_chatgpt_image(
         reasoning_effort=reasoning_effort,
         timeout_seconds=timeout_seconds,
         origin=origin,
+        parent=parent,
     )
     if not detach:
         return await start(request, intelligence)
@@ -186,12 +191,15 @@ async def start(request: ChatGPTImageRequest, intelligence: Intelligence | None 
     _require_arguments(request)
     root, data = directories(request.directory, request.data_directory)
     name = image_name(request.name, root, data)
+    parent = calls.parent_of(root, data, request.parent, name)
+    calls.require_given(parent, CHATGPT_IMAGE_MODEL, name)
     sent = sent_references(request.references)
     intelligence, model = select_intelligence(intelligence, "codex", request.model, DEFAULT_INTELLIGENCE_MODELS)
     run_id = new_run_id()
     with claimed(root, data, name, run_id) as (image, lock):
         folder = image.run_folder(run_id)
         images, prompt = _prepare(request, sent, image, folder / "inputs")
+        version = edited_version(image, request.version)
         agent = await intelligence.start(
             AgentRequest(
                 prompt=REQUEST.substitute(
@@ -215,11 +223,13 @@ async def start(request: ChatGPTImageRequest, intelligence: Intelligence | None 
                     "reasoning_effort": request.reasoning_effort,
                     "transparent": request.transparent,
                     "images": [path.relative_to(folder).as_posix() for path in images],
+                    **({"version": version} if version else {}),
                 },
                 origin=request.origin,
                 pid=os.getpid(),
                 started=datetime.now(UTC),
             )
+            calls.record(run, parent, image)
             image.runs.append(run)
             image.save_runs()
             work = partial(_follow, agent, run)

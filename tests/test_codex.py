@@ -170,12 +170,20 @@ class FakeWorld:
         self.start_failure: Exception | None = None
         self.thread_failure: Exception | None = None
         self.account: GetAccountResponse | Exception = GetAccountResponse(requires_openai_auth=False)
+        self.requests: list[tuple[str, Any]] = []
 
     def codex(self, config: CodexConfig | None = None) -> Any:
         world = self
         world.configs.append(config)
 
+        async def request(method: str, params: Any, response_model: Any) -> Any:
+            world.requests.append((method, params))
+            return response_model()
+
         class Codex:
+            # The SDK's own client, for requests it has no method for.
+            _client = SimpleNamespace(request=request)
+
             async def __aenter__(self) -> "Codex":
                 if world.start_failure is not None:
                     raise world.start_failure
@@ -253,7 +261,6 @@ async def test_a_thread_gets_the_workspace_trusted_telemetry_off_and_no_agents_m
             "approval_mode": ApprovalMode.deny_all,
             "config": {
                 "model_reasoning_summary": "detailed",
-                "project_doc_max_bytes": 0,
                 "projects": {cwd: {"trust_level": "trusted"}},
                 "features": {"image_generation": False},
             },
@@ -279,26 +286,23 @@ async def test_without_a_workspace_the_agent_works_in_the_state_directory_with_t
     assert fake.turns[0][1]["effort"] == ReasoningEffort(DEFAULT_REASONING_EFFORT)
 
 
-async def test_skills_are_copied_into_the_project_skills_without_removing_others(
+async def test_skills_are_given_to_the_runtime_and_nothing_is_written_into_the_workspace(
     world: Callable[..., FakeWorld], tmp_path: Path
 ) -> None:
-    world(answers("done"))
+    fake = world(answers("done"))
     skills = tmp_path / "skills"
     (skills / "reaching").mkdir(parents=True)
-    (skills / "reaching" / "SKILL.md").write_text("new", encoding="utf-8")
-    (skills / "notes").mkdir()
+    (skills / "reaching" / "SKILL.md").write_text("A skill.", encoding="utf-8")
     work = tmp_path / "work"
-    kept = work / ".agents" / "skills"
-    (kept / "other").mkdir(parents=True)
-    (kept / "other" / "SKILL.md").write_text("other", encoding="utf-8")
-    (kept / "reaching").mkdir()
-    (kept / "reaching" / "SKILL.md").write_text("old", encoding="utf-8")
+    work.mkdir()
 
-    await (await CodexIntelligence().start(request(work, skill_directories=[skills, tmp_path / "missing"]))).result()
+    await (await CodexIntelligence().start(request(work, skill_directories=[skills]))).result()
 
-    assert (kept / "reaching" / "SKILL.md").read_text(encoding="utf-8") == "new"
-    assert (kept / "other" / "SKILL.md").read_text(encoding="utf-8") == "other"
-    assert not (kept / "notes").exists()
+    assert fake.requests == [("skills/extraRoots/set", {"extraRoots": [str(skills.resolve())]})]
+    assert list(work.iterdir()) == []
+    [config] = fake.configs
+    assert config is not None
+    assert "skills.bundled.enabled=false" in config.config_overrides
 
 
 async def test_images_are_local_image_inputs_on_the_first_turn(world: Callable[..., FakeWorld], tmp_path: Path) -> None:

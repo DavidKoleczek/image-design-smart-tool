@@ -1,4 +1,4 @@
-import { APP_NAME } from "@/lib/brand";
+import { APP_NAME, WORDMARK } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 
 /** The app's name in the brand's type, with the accent square where a period would be. */
@@ -10,7 +10,7 @@ export function Wordmark({ className }: { className?: string }) {
         className,
       )}
     >
-      {APP_NAME}
+      {WORDMARK}
       <span
         aria-hidden
         className="ml-[0.12em] inline-block size-[0.3em] shrink-0 bg-accent"

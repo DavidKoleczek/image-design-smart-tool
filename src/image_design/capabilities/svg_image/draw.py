@@ -8,14 +8,13 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import sys
-from typing import Any
 
 from pydantic import BaseModel
 
-from image_design.capabilities.svg_image import build, measure, prompting, steering
+from image_design.capabilities.svg_image import build, measure, prompting
 from image_design.capabilities.svg_image.runs import SvgDetachedRun, SvgInProcessRun, SvgRun
 from image_design.intelligence.interface import AgentRun, Intelligence, resolve_agent_provider, select_intelligence
-from image_design.intelligence.schemas import AgentEvent, AgentRequest, HostWorkspace, Steering
+from image_design.intelligence.schemas import AgentRequest, HostWorkspace, Steering
 from image_design.schemas import (
     DEFAULT_INTELLIGENCE_MODELS,
     DEFAULT_REASONING_EFFORT,
@@ -25,15 +24,14 @@ from image_design.schemas import (
     AgentProvider,
     ImageDesignError,
     ImageRunRecord,
-    ImageUsage,
     Mark,
     NotGiven,
     ReasoningEffort,
     SvgBudgets,
 )
+from image_design.shared.images import agent_events, pictures, sessions, steering
 from image_design.shared.images import detach as detaching
 from image_design.shared.images import marks as marking
-from image_design.shared.images import pictures
 from image_design.shared.images import runs as image_runs
 from image_design.shared.images.requests import (
     Reference,
@@ -66,8 +64,6 @@ CURRENT_PNG = "current.png"
 CURRENT_SVG = "current.svg"
 MARKED = "marked.png"
 BUDGETS = ("max_bytes",)
-# How much of a tool call a run's progress shows; its event's data has the call in full.
-SHOWN_CALL_CHARACTERS = 200
 
 
 class SvgImageRequest(BaseModel):
@@ -155,8 +151,8 @@ async def start(request: SvgImageRequest, intelligence: Intelligence | None = No
     marking.require_marks(request.marks)
     run_id = new_run_id()
     with claimed(root, data, name, run_id) as (image, lock):
-        resumed = _resumed(image, request.resume_session)
-        provider = _provider(request.agent_provider, resumed, image.name)
+        resumed = sessions.resumed(image.runs, request.resume_session, image.name)
+        provider = sessions.provider(request.agent_provider, resumed, image.name)
         if intelligence is None:
             provider = resolve_agent_provider(provider)
         intelligence, model = select_intelligence(intelligence, provider, request.model, DEFAULT_INTELLIGENCE_MODELS)
@@ -344,45 +340,6 @@ def _recorded_budgets(run: ImageRunRecord) -> SvgBudgets | None:
         return None
 
 
-def _resumed(image: StoredImage, resume_session: bool | str) -> ImageRunRecord | None:
-    """The run whose session the request continues, or None for a new session."""
-    if resume_session is False:
-        return None
-    sessions = [run for run in image.runs if run.session_id is not None]
-    if resume_session is True:
-        if not sessions:
-            raise ImageDesignError(
-                f"Image {image.name} has no agent session to resume. Leave out resume_session to start a new one.",
-                "no-such-session",
-                image.name,
-            )
-        return sessions[-1]
-    for run in reversed(sessions):
-        if run.session_id == resume_session:
-            return run
-    known = ", ".join(dict.fromkeys(str(run.session_id) for run in reversed(sessions))) or "none"
-    raise ImageDesignError(
-        f"Image {image.name} has no session {resume_session!r}. Its sessions, latest first: {known}.",
-        "no-such-session",
-        image.name,
-    )
-
-
-def _provider(given: AgentProvider | None, resumed: ImageRunRecord | None, name: str) -> AgentProvider | None:
-    """The agent provider to run on: the one given, or the resumed session's, which a session must keep."""
-    if resumed is None or resumed.agent_provider is None:
-        return given
-    if given is not None and given != resumed.agent_provider:
-        raise ImageDesignError(
-            f"Session {resumed.session_id} ran on the {resumed.agent_provider} agent provider, and a session goes on "
-            f"only on the one it started on. Pass agent_provider={resumed.agent_provider!r}, or leave out "
-            f"resume_session to start a new session on {given}.",
-            "provider-mismatch",
-            name,
-        )
-    return resumed.agent_provider
-
-
 async def _follow(
     agent: AgentRun,
     steering_mode: Steering,
@@ -401,9 +358,9 @@ async def _follow(
                 run.session_id = agent.session_id
             if event.kind == "terminal":
                 continue
-            output.event("agent", _shown(event), event.model_dump(mode="json"))
+            output.event("agent", agent_events.shown(event), event.model_dump(mode="json"))
             if event.kind == "usage":
-                output.used(_added(run.usage, event.data))
+                output.used(agent_events.added(run.usage, event.data))
             elif event.kind == "tool_result" and (render := renders.new()) is not None:
                 output.preview(render, renders.count - 1)
     finally:
@@ -499,28 +456,6 @@ class Renders:
         except OSError:
             return None
         return stat.st_mtime_ns, stat.st_size
-
-
-def _shown(event: AgentEvent) -> str:
-    """What a run's progress shows of an agent event: what it said, and the tools it called."""
-    match event.kind:
-        case "message":
-            return event.text
-        case "tool_call":
-            line = " ".join(event.text.split())
-            return line if len(line) <= SHOWN_CALL_CHARACTERS else line[: SHOWN_CALL_CHARACTERS - 3] + "..."
-    return ""
-
-
-def _added(usage: ImageUsage | None, data: dict[str, Any]) -> ImageUsage:
-    """The run's usage with one more model call's added, its cost known only when the agent provider gives it."""
-    total = usage or ImageUsage()
-    cost = (data.get("cost") or {}).get("USD")
-    return ImageUsage(
-        input_text_tokens=total.input_text_tokens + (data.get("input_tokens") or 0),
-        output_tokens=total.output_tokens + (data.get("output_tokens") or 0),
-        cost=(total.cost or 0) + cost if cost is not None else total.cost,
-    )
 
 
 def _require_arguments(request: SvgImageRequest) -> None:

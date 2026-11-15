@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import {
   readImageActivity,
@@ -34,6 +34,23 @@ export type RunFacts = {
 export type Runs = ReadonlyMap<string, RunFacts>;
 
 const NONE: Runs = new Map();
+const listeners = new Set<() => void>();
+let asked = 0;
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** Read every image's activity again, as after a change the listing does not show. */
+export function readRunsAgain() {
+  asked += 1;
+  for (const listener of listeners) {
+    listener();
+  }
+}
 
 function text(value: unknown): string | null {
   return typeof value === "string" ? value : null;
@@ -90,16 +107,19 @@ export function useRuns(image: ImageSummary | null): Runs {
     facts: Map<string, RunFacts>;
   } | null>(null);
   const read = useRef<{ key: string; cursor: string | null } | null>(null);
+  const again = useSyncExternalStore(subscribe, () => asked);
   const name = image?.name ?? null;
   // What has been read of an image is told by its id, which it keeps when it is renamed.
   const key = image === null ? null : (image.id ?? image.name);
   // A file the tool has made no change to has no activity to read.
   const kept =
-    image !== null && (image.versions.length > 0 || image.last_run !== null);
+    image !== null &&
+    (image.versions.length > 0 || image.last_run !== null || !!image.design);
   const changed = image
-    ? `${image.last_run?.id}:${image.status}:${image.versions.length}`
+    ? `${image.last_run?.id}:${image.status}:${image.versions.length}:${image.design?.run_id}:${image.design?.status}:${again}`
     : "";
-  const running = image?.status === "running";
+  const running =
+    image?.status === "running" || image?.design?.status === "running";
 
   useEffect(() => {
     if (name === null || key === null || !kept) {

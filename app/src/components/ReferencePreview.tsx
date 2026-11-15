@@ -34,14 +34,15 @@ function useLarge(path: string): { url: string | null; error: string | null } {
     : { url: null, error: null };
 }
 
-function Large({ entry }: { entry: ReferenceEntry }) {
-  const { url, error } = useLarge(entry.path);
+/** An image the app offers or keeps, by its path, shown as large as the box it fills. */
+export function LargeImage({ path, name }: { path: string; name: string }) {
+  const { url, error } = useLarge(path);
   return (
     <div className="absolute inset-x-14 inset-y-4 flex items-center justify-center">
       {url ? (
         <img
           src={url}
-          alt={entry.name}
+          alt={name}
           draggable={false}
           className="max-h-full max-w-full checker"
         />
@@ -131,7 +132,7 @@ export function ReferencePreview({
         className="sm:h-full sm:max-w-400"
       >
         <div className="relative min-h-64 flex-1 bg-field">
-          <Large key={entry.path} entry={entry} />
+          <LargeImage key={entry.path} path={entry.path} name={entry.name} />
           {entries.length > 1 && (
             <>
               <Tooltip content="Previous" keys="Left" side="right">

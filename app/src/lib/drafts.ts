@@ -6,6 +6,8 @@ import { onRenamed, rekey } from "@/lib/renames";
 /** What is being written for one image, or for the new image, before it is sent. */
 export type Draft = {
   prompt: string;
+  /** What is being written to the agent, apart from the prompt of an image call being written by hand. */
+  message: string;
   /** For the new image, its name as typed, without the extension; null until the person types one. */
   name: string | null;
   /** For the new image, the folder it goes in, "" for the top. */
@@ -30,6 +32,7 @@ const NEW_IMAGE = ":new-";
 
 const EMPTY: Draft = {
   prompt: "",
+  message: "",
   name: null,
   folder: "",
   size: null,

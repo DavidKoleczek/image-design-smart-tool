@@ -9,6 +9,7 @@ import {
   makesNew,
   pickedModel,
 } from "@/lib/request";
+import { useSheet } from "@/lib/sheets";
 import { useAppState } from "@/lib/state";
 import { keyOf, type Tab } from "@/lib/tabs";
 import type { Shown } from "@/lib/viewed";
@@ -18,7 +19,7 @@ export type Guidance = {
   blocks: Record<CanvasMode, string | null>;
   /** What on the canvas guides the request; null when the image takes neither. */
   mode: CanvasMode | null;
-  /** Whether marks can be drawn while a run works, for the next message to the agent drawing the image. */
+  /** Whether marks can be drawn while a run works, for the next message to the agent working on the image. */
   steering: boolean;
 };
 
@@ -31,10 +32,19 @@ export function useGuidance(
   const { state } = useAppState();
   const { methods } = useMethods();
   const draft = useDraft(tab ? keyOf(tab) : "");
+  // The image call written by hand goes to the model picked in its editor, and the agent's to the one picked for it.
+  const sheet = useSheet(tab ? keyOf(tab) : "");
   const method = tab?.method ?? state.method;
   const picked = tab?.mode ?? "markup";
   const model =
-    methods && method === "model" ? pickedModel(state.request, methods) : null;
+    methods && method === "model"
+      ? pickedModel(
+          sheet ? state.request.model : state.design.image_model,
+          methods,
+        )
+      : null;
+  const designing =
+    method === "model" && !sheet && image?.design?.status === "running";
   // A request that makes a new image from the one in view takes neither marks nor a mask.
   const fresh =
     image !== null &&
@@ -48,7 +58,10 @@ export function useGuidance(
     );
   const blocks: Record<CanvasMode, string | null> = {
     markup: guideBlock("markup", image, shown, model, fresh),
-    mask: guideBlock("mask", image, shown, model, fresh),
+    // A message to the agent at work goes with marks only.
+    mask: designing
+      ? "The agent at work takes marks, not a mask"
+      : guideBlock("mask", image, shown, model, fresh),
   };
   return {
     blocks,
@@ -59,7 +72,9 @@ export function useGuidance(
         : blocks.markup === null
           ? "markup"
           : null,
-    // Marks drawn while an agent draws the image go to it with the next message.
-    steering: method === "svg" && image !== null && isDrawing(image.name),
+    // Marks drawn while an agent works on the image go to it with the next message.
+    steering:
+      designing ||
+      (method === "svg" && image !== null && isDrawing(image.name)),
   };
 }

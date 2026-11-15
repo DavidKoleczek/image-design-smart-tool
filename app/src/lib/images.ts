@@ -307,7 +307,7 @@ export function fileOf(name: string): string | null {
   return read === null ? null : pathIn(read.listing.directory, name);
 }
 
-/** A directory as the app shows it, by its last two folders, such as `desk-study\.image-design`. */
+/** A directory as the app shows it, by its last two folders, such as `my-project\.image-design`. */
 export function shortDirectory(path: string): string {
   const separator = path.includes("\\") ? "\\" : "/";
   return path.split(separator).filter(Boolean).slice(-2).join(separator);

@@ -163,6 +163,19 @@ def png(path: Path) -> bytes:
         raise ImageDesignError(f"{path} is an SVG that could not be rendered: {error}. Fix the SVG.") from None
 
 
+def fitted_png(path: Path, max_edge: int, frame: int = 0) -> bytes:
+    """One frame of the image at `path` as a PNG, as `png` makes it, scaled down when need be so neither side is longer
+    than `max_edge`."""
+    content = png(path) if path.suffix.lower() in SVG_SUFFIXES or frame == 0 else frame_png(path, frame)
+    with Image.open(BytesIO(content)) as image:
+        if max(image.size) <= max_edge:
+            return content
+        image.thumbnail((max_edge, max_edge))
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def transparent(content: bytes) -> bool:
     """Whether any pixel of the image is transparent, even partly."""
     with Image.open(BytesIO(content)) as image:

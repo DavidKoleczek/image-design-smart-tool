@@ -14,7 +14,13 @@ const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 // The command that builds a drawing, which reads better as what it makes than as the command.
 const BUILD = /svg_image\.build/;
 const REFERENCE = /(?:^|\/)reference-(\d+)\.\w+$/;
+// The tool's own commands that send an image call, which show as the call and not as a line of shell.
+const GENERATE = /image-design\s+generate-(?:openai|chatgpt)-image/;
+const NAMED = /--name\s+("[^"]+"|\S+)/;
 const APP = "app";
+const DESIGN = "design";
+// What a call through ChatGPT names as its image model, which ChatGPT picks.
+const CHATGPT_MODEL = "chatgpt";
 
 /** A tool's verb for done and for under way, and its icon, by the name the agent gives the tool. */
 const TOOLS: Record<string, { done: string; doing: string; icon: IconName }> = {
@@ -26,11 +32,17 @@ const TOOLS: Record<string, { done: string; doing: string; icon: IconName }> = {
   Glob: { done: "Searched", doing: "Searching", icon: "search" },
   Grep: { done: "Searched", doing: "Searching", icon: "search" },
   commandExecution: { done: "Ran", doing: "Running", icon: "terminal" },
+  Skill: { done: "Read the skill", doing: "Reading the skill", icon: "file" },
   fileChange: { done: "Edited", doing: "Editing", icon: "file-edit" },
   webSearch: { done: "Searched", doing: "Searching", icon: "search" },
 };
 const LOOK = { done: "Looked at", doing: "Looking at", icon: "image" as const };
 const BUILT = { done: "Built", doing: "Building", icon: "terminal" as const };
+const GENERATED = {
+  done: "Generated",
+  doing: "Generating",
+  icon: "image" as const,
+};
 // The arguments that name what a call works on, in the order they are looked for.
 const TARGET_ARGUMENTS = [
   "file_path",
@@ -40,6 +52,7 @@ const TARGET_ARGUMENTS = [
   "query",
   "url",
   "description",
+  "skill",
   "prompt",
 ];
 
@@ -65,12 +78,48 @@ export type Call = {
   input: Record<string, unknown>;
   output: string | null;
   summary: string | null;
+  /** The image a step looked at, by its path on the machine the app runs on; null for any other step. */
+  looked: string | null;
 };
 
 /** What a message was given besides its text: a mark on the drawing, or a reference. */
 export type Chip =
   | { kind: "mark"; number: number; color: MarkColor; shape: string }
   | { kind: "reference"; path: string; label: string };
+
+/** What an image in an image call is sent as. */
+export type CallRole =
+  "source" | "marked-copy" | "reference" | "marks" | "mask";
+
+/** One request to an image model, as a card shows it: exactly what was sent, or would be, and how it went. */
+export type ImageCall = {
+  /** The id of the run that is the call. */
+  id: string;
+  /** The image it is for, which need not be the one whose conversation it shows in. */
+  name: string;
+  /** Whether the agent wrote it; a person otherwise, from the app or the command line. */
+  agent: boolean;
+  /** Who sent it, when the agent did not. */
+  sender: string;
+  method: "openai" | "chatgpt";
+  model: string;
+  /** Whether it changes an image that exists. */
+  edits: boolean;
+  prompt: string;
+  /** In the order they are sent, by where each is kept. */
+  images: { path: string; role: CallRole }[];
+  /** What it set, by the name the method records each under. */
+  parameters: [string, string][];
+  state: "sending" | "sent" | "failed";
+  /** Whether it failed because it was stopped. */
+  stopped: boolean;
+  started: string;
+  finished: string | null;
+  usage: ImageUsage | null;
+  error: string | null;
+  /** The versions it made. */
+  versions: string[];
+};
 
 /** What one part of a run shows as, in order. */
 export type Block =
@@ -105,7 +154,9 @@ export type Block =
       error: string | null;
       usage: ImageUsage | null;
     }
-  | { kind: "result"; key: string; version: string };
+  | { kind: "result"; key: string; version: string }
+  | { kind: "call"; key: string; call: ImageCall }
+  | { kind: "note"; key: string; text: string };
 
 /** One request on a drawing and everything that came of it. */
 export type Run = {
@@ -117,6 +168,10 @@ export type Run = {
   blocks: Block[];
   calls: Call[];
   live: boolean;
+  /** In an image's conversation: a turn of the agent, or an image call nobody's agent made. */
+  kind?: "agent" | "call";
+  /** Whether the agent started a conversation over, having had one on the image before. */
+  fresh?: boolean;
 };
 
 function text(value: unknown): string | null {
@@ -229,6 +284,9 @@ function wordsOf(
   if (TOOLS[name]?.icon === "terminal" && BUILD.test(command)) {
     return BUILT;
   }
+  if (TOOLS[name]?.icon === "terminal" && GENERATE.test(command)) {
+    return GENERATED;
+  }
   if ((name === "Read" && IMAGE.test(target)) || name === "imageView") {
     return LOOK;
   }
@@ -251,7 +309,15 @@ function toolCall(runId: string, event: ImageEvent): Call {
     verb: words.done,
     doing: words.doing,
     icon: words.icon,
-    target: words === BUILT ? "image.svg" : target,
+    target:
+      words === BUILT
+        ? "image.svg"
+        : words === GENERATED
+          ? (NAMED.exec(text(input.command) ?? "")?.[1] ?? "").replaceAll(
+              '"',
+              "",
+            )
+          : target,
     state: "running",
     started: event.time,
     finished: null,
@@ -259,6 +325,10 @@ function toolCall(runId: string, event: ImageEvent): Call {
     input,
     output: null,
     summary: null,
+    looked:
+      words === LOOK
+        ? (text(input.file_path) ?? text(input.path) ?? null)
+        : null,
   };
 }
 
@@ -286,6 +356,7 @@ function reasoning(runId: string, event: ImageEvent, summary: string): Call {
     input: {},
     output: null,
     summary,
+    looked: null,
   };
 }
 
@@ -306,6 +377,8 @@ function runOf(
   live: boolean,
   /** How the run ended, when its events do not say. */
   ending: ImageRunStatus | null,
+  /** What came of the run besides its own events, such as the image calls its agent made, each placed by its time. */
+  children: { time: string; blocks: Block[] }[] = [],
 ): Run {
   const run: Run = {
     id: facts.id,
@@ -318,6 +391,18 @@ function runOf(
   };
   const byKey = new Map<string, Call>();
   const results: Block[] = [];
+  const every: Call[] = [];
+  const waiting = [...children].sort(
+    (a, b) => Date.parse(a.time) - Date.parse(b.time),
+  );
+  const placeUntil = (time: string | null) => {
+    while (
+      waiting.length > 0 &&
+      (time === null || Date.parse(waiting[0].time) <= Date.parse(time))
+    ) {
+      run.blocks.push(...(waiting.shift()?.blocks ?? []));
+    }
+  };
   // The reasoning nothing has followed yet, which whatever comes next ends.
   let thinking: Call | null = null;
   const stepsIn = (time: string): Extract<Block, { kind: "steps" }> => {
@@ -338,6 +423,10 @@ function runOf(
     return block;
   };
   for (const event of facts.events.slice(1)) {
+    // A run's ending comes after everything it started.
+    placeUntil(
+      event.kind === "finished" || event.kind === "failed" ? null : event.time,
+    );
     if (thinking) {
       thinking.finished = event.time;
       thinking = null;
@@ -349,7 +438,11 @@ function runOf(
       if (kind === "tool_call") {
         const call = toolCall(run.id, event);
         byKey.set(call.key, call);
-        stepsIn(event.time).calls.push(call);
+        every.push(call);
+        // An image call shows as its card, which a child of the run is.
+        if (call.verb !== GENERATED.done || children.length === 0) {
+          stepsIn(event.time).calls.push(call);
+        }
       } else if (kind === "tool_result") {
         const call = byKey.get(`${run.id}:${text(data.tool_call_id) ?? ""}`);
         if (call) {
@@ -363,6 +456,7 @@ function runOf(
         }
       } else if (kind === "reasoning" && said.trim()) {
         thinking = reasoning(run.id, event, said);
+        every.push(thinking);
         stepsIn(event.time).calls.push(thinking);
       } else if (kind === "message" && said.trim()) {
         run.blocks.push({
@@ -406,22 +500,23 @@ function runOf(
       usage: null,
     });
   }
+  placeUntil(null);
   run.blocks.push(...results);
   const lastBlock = run.blocks
     .filter((block) => block.kind !== "result")
     .at(-1);
+  for (const call of every) {
+    if (call.state === "running" && call.finished === null && !live) {
+      call.state = "unfinished";
+    } else if (call.state === "running" && call.finished !== null) {
+      call.state = "done";
+    }
+  }
+  run.calls.push(...every);
   for (const block of run.blocks) {
     if (block.kind !== "steps") {
       continue;
     }
-    for (const call of block.calls) {
-      if (call.state === "running" && call.finished === null && !live) {
-        call.state = "unfinished";
-      } else if (call.state === "running" && call.finished !== null) {
-        call.state = "done";
-      }
-    }
-    run.calls.push(...block.calls);
     const states = block.calls.map((call) => call.state);
     block.state = states.includes("failed")
       ? "failed"
@@ -448,6 +543,202 @@ export function runsOf(drawing: ImageSummary, runs: Runs): Run[] {
       isLast ? drawing.status : null,
     );
   });
+}
+
+const ROLES: [RegExp, CallRole][] = [
+  [/(?:^|\/)image\.\w+$/, "source"],
+  [/(?:^|\/)marked\.\w+$/, "marked-copy"],
+  [/(?:^|\/)marks\.\w+$/, "marks"],
+  [/(?:^|\/)mask\.\w+$/, "mask"],
+];
+// What a call set that a card shows, in the order it shows them.
+const PARAMETERS = [
+  "quality",
+  "complexity",
+  "size",
+  "background",
+  "frames",
+  "frame_ms",
+  "compression",
+  "transparent",
+  "reasoning_effort",
+];
+
+function shownValue(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    return value.join("x");
+  }
+  return typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+    ? String(value)
+    : null;
+}
+
+function isDesign(facts: RunFacts): boolean {
+  return facts.request.method === DESIGN;
+}
+
+/** The versions a run made, by their ids, in the order it made them. */
+function versionsOf(facts: RunFacts): string[] {
+  return facts.events.flatMap((event) => {
+    const id = event.kind === "version" ? text(event.data.id) : null;
+    return id === null ? [] : [id];
+  });
+}
+
+/** A run as the image call it is. */
+function callOf(
+  facts: RunFacts,
+  image: ImageSummary,
+  /** Whether its process is still at it. */
+  live: boolean,
+): ImageCall {
+  const request = facts.request;
+  const folder = text(request.run_folder);
+  const located = (path: string) =>
+    folder === null ? path : `${folder}/${path}`;
+  const images: ImageCall["images"] = strings(request.images).map((path) => ({
+    path: located(path),
+    role: ROLES.find(([pattern]) => pattern.test(path))?.[1] ?? "reference",
+  }));
+  for (const [field, role] of [
+    ["markup", "marks"],
+    ["mask", "mask"],
+  ] as const) {
+    const path = text(request[field]);
+    if (path !== null) {
+      images.push({ path: located(path), role });
+    }
+  }
+  const chatgpt = typeof request.codex_model === "string";
+  const status = facts.status as string | null;
+  const state =
+    status === "done" ? "sent" : status === null && live ? "sending" : "failed";
+  return {
+    id: facts.id,
+    name: text(request.name) ?? image.name,
+    agent: text(request.parent) !== null,
+    sender: sender(request.origin),
+    method: chatgpt ? "chatgpt" : "openai",
+    model: chatgpt ? CHATGPT_MODEL : (text(request.model) ?? ""),
+    edits: images.some((each) => each.role === "source"),
+    prompt: facts.prompt,
+    images,
+    parameters: PARAMETERS.flatMap((name) => {
+      const value = shownValue(request[name]);
+      return value === null || value === "auto" || value === "false"
+        ? []
+        : [[name, value] as [string, string]];
+    }),
+    state,
+    stopped: state === "failed" && status === "cancelled",
+    started: facts.started,
+    finished: facts.finished,
+    usage: facts.usage,
+    error:
+      state !== "failed"
+        ? null
+        : (facts.error ??
+          (status === "cancelled"
+            ? "It was stopped."
+            : status === "timed-out"
+              ? "It ran out of time."
+              : "It stopped before it finished.")),
+    versions: versionsOf(facts),
+  };
+}
+
+/** A call's card, then each version it made of the image whose conversation this is. */
+function callBlocks(call: ImageCall, image: ImageSummary): Block[] {
+  return [
+    { kind: "call", key: `${call.id}:call`, call },
+    ...(call.name === image.name
+      ? call.versions.map((version) => ({
+          kind: "result" as const,
+          key: `${call.id}:${version}`,
+          version,
+        }))
+      : []),
+  ];
+}
+
+/**
+ * An image's conversation, oldest first, from its activity: each turn of the agent with the image calls it made
+ * where it made them, and each image call nobody's agent made as a turn of its own.
+ */
+export function conversationOf(image: ImageSummary, runs: Runs): Run[] {
+  const all = [...runs.values()];
+  const liveDesign =
+    image.design?.status === "running" ? image.design.run_id : null;
+  const lastRun = image.status === "running" ? image.last_run?.id : null;
+  const design = all.filter(isDesign);
+  const calls = all.filter((facts) => !isDesign(facts));
+  const conversation: Run[] = [];
+  for (const facts of design) {
+    const live = facts.id === liveDesign;
+    const children = calls
+      .filter((call) => text(call.request.parent) === facts.id)
+      .map((call) => ({
+        time: call.started,
+        blocks: callBlocks(
+          callOf(
+            call,
+            image,
+            call.id === lastRun || (live && call.finished === null),
+          ),
+          image,
+        ),
+      }));
+    const run = runOf(
+      facts,
+      0,
+      live,
+      facts.id === image.design?.run_id ? image.design.status : null,
+      children,
+    );
+    run.kind = "agent";
+    run.fresh =
+      !facts.request.resumed &&
+      design.some(
+        (other) => Date.parse(other.started) < Date.parse(facts.started),
+      );
+    const since = strings(facts.request.since).length;
+    if (since > 0) {
+      run.blocks.splice(1, 0, {
+        kind: "note",
+        key: `${facts.id}:since`,
+        text:
+          since === 1
+            ? "Told of 1 call made since its last turn."
+            : `Told of ${since} calls made since its last turn.`,
+      });
+    }
+    conversation.push(run);
+  }
+  const ours = new Set(design.map((facts) => facts.id));
+  for (const facts of calls) {
+    const parent = text(facts.request.parent);
+    if (parent !== null && ours.has(parent)) {
+      continue;
+    }
+    const call = callOf(facts, image, facts.id === lastRun);
+    conversation.push({
+      id: facts.id,
+      number: 0,
+      started: facts.started,
+      request: facts.request,
+      blocks: callBlocks(call, image),
+      calls: [],
+      live: call.state === "sending",
+      kind: "call",
+    });
+  }
+  conversation.sort((a, b) => Date.parse(a.started) - Date.parse(b.started));
+  conversation.forEach((run, index) => {
+    run.number = index + 1;
+  });
+  return conversation;
 }
 
 /** The call a working run is on now, and which of its calls that is, counting from 1. */

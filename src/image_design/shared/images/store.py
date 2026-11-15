@@ -7,6 +7,8 @@ The data directory holds a folder per image, named by the image's id so it stays
     images/<id>/versions.json   every version, and which one is in the image's file
     images/<id>/versions/       the versions' files, and a drawn SVG's scripts
     images/<id>/runs.json       every request on the image
+    images/<id>/designs.json    every run of the image's agent
+    images/<id>/links.jsonl     the image calls its agent made on other images
     images/<id>/runs/<run id>/  a run's events, the files it sent, and its previews
     images/<id>/work/           where an agent draws an SVG
     images/<id>/sessions/       the agents' sessions, which a later run can resume
@@ -14,7 +16,8 @@ The data directory holds a folder per image, named by the image's id so it stays
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+import contextlib
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -35,6 +38,7 @@ from image_design.schemas import (
     IMAGE_FORMATS,
     SVG_SUFFIX,
     ImageDesignError,
+    ImageDesignStatus,
     ImageEvent,
     ImageMethod,
     ImageRecord,
@@ -56,6 +60,8 @@ SCRIPT = "image.py"
 LOCK_SUFFIX = ".lock"
 VERSIONS = "versions.json"
 RUNS = "runs.json"
+DESIGNS = "designs.json"
+LINKS = "links.jsonl"
 EVENTS = "events.jsonl"
 PROCESS_LOG = "process.log"
 SESSIONS = "sessions"
@@ -161,6 +167,7 @@ class StoredImage:
     record: ImageRecord
     versions: ImageVersions
     runs: list[ImageRunRecord]
+    designs: list[ImageRunRecord] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -170,14 +177,22 @@ class StoredImage:
     def path(self) -> Path:
         return self.root / self.record.name
 
+    @property
+    def runs_folder(self) -> Path:
+        """Where each run keeps the files it was given and made, in a folder named by its id."""
+        return self.folder / "runs"
+
     def run_folder(self, run_id: str) -> Path:
-        return self.folder / "runs" / run_id
+        return self.runs_folder / run_id
 
     def save_versions(self) -> None:
         write_atomically(self.folder / VERSIONS, self.versions.model_dump_json(indent=2))
 
     def save_runs(self) -> None:
         write_atomically(self.folder / RUNS, ImageRuns(runs=self.runs).model_dump_json(indent=2))
+
+    def save_designs(self) -> None:
+        write_atomically(self.folder / DESIGNS, ImageRuns(runs=self.designs).model_dump_json(indent=2))
 
     def save_record(self) -> None:
         save_record(self.folder, self.record)
@@ -260,9 +275,48 @@ class StoredImage:
         return version.model_copy(update={"file": self.folder / version.file, "script": script})
 
     def running(self) -> ImageRunRecord | None:
-        """The run working on the image, when its process is alive."""
+        """The run working on the image, when its process is alive. The image's agent is not one; see `designing`."""
         run = self.runs[-1] if self.runs else None
         return run if run is not None and run.status == "running" and alive(run.pid) else None
+
+    def designing(self) -> ImageRunRecord | None:
+        """The run of the image's agent, when one is working and its process is alive."""
+        run = self.designs[-1] if self.designs else None
+        return run if run is not None and run.status == "running" and alive(run.pid) else None
+
+    def design_status(self) -> ImageDesignStatus | None:
+        """How the last run of the image's agent went, with one whose process ended without ending it as failed."""
+        run = self.designs[-1] if self.designs else None
+        if run is None:
+            return None
+        return ImageDesignStatus(
+            run_id=run.id,
+            status="failed" if run.status == "running" and not alive(run.pid) else run.status,
+            started=run.started,
+            session_id=run.session_id,
+            agent_provider=run.agent_provider,
+        )
+
+    def link(self, image_id: str, run_id: str) -> None:
+        """Note that the image's agent made the run `run_id` on the image `image_id`, so this image's activity has it."""
+        line = json.dumps({"image": image_id, "run": run_id}) + "\n"
+        # One write of one short line to a file opened to append, so the lines of calls made at once never mix.
+        with (self.folder / LINKS).open("a", encoding="utf-8") as links:
+            links.write(line)
+
+    def linked(self) -> list[tuple[str, str]]:
+        """Each run the image's agent made on another image, as that image's id and the run's, in the order made."""
+        try:
+            lines = read_atomically(self.folder / LINKS).splitlines()
+        except FileNotFoundError:
+            return []
+        found: list[tuple[str, str]] = []
+        for line in lines:
+            # A line being written is not whole yet.
+            with contextlib.suppress(ValueError, KeyError, TypeError):
+                entry = json.loads(line)
+                found.append((str(entry["image"]), str(entry["run"])))
+        return found
 
     def summary(self) -> ImageSummary:
         last = self.runs[-1] if self.runs else None
@@ -279,6 +333,7 @@ class StoredImage:
             current=current if matches else None,
             versions=[self.located(version) for version in self.versions.versions],
             last_run=last,
+            design=self.design_status(),
         )
 
 
@@ -289,6 +344,23 @@ def find_image(root: Path, data: Path, name: str) -> StoredImage | None:
         record = _read(folder / RECORD, ImageRecord)
         if record.name.casefold() == wanted:
             return _load(root, data, folder, record)
+    return None
+
+
+def image_by_id(root: Path, data: Path, image_id: str) -> StoredImage | None:
+    """The image whose data is kept under `image_id`, whatever its name is now."""
+    folder = data / IMAGES / image_id
+    if not (folder / RECORD).is_file():
+        return None
+    return _load(root, data, folder, _read(folder / RECORD, ImageRecord))
+
+
+def find_design(root: Path, data: Path, run_id: str) -> tuple[StoredImage, ImageRunRecord] | None:
+    """The run of an image's agent with this id, and the image it is kept with."""
+    for folder in _image_folders(data):
+        for run in load_designs(folder):
+            if run.id == run_id:
+                return _load(root, data, folder, _read(folder / RECORD, ImageRecord)), run
     return None
 
 
@@ -429,6 +501,7 @@ def _summary(
     current: str | None,
     versions: list[ImageVersion],
     last_run: ImageRunRecord | None,
+    design: ImageDesignStatus | None = None,
 ) -> ImageSummary:
     picture = facts.picture if facts is not None else None
     return ImageSummary(
@@ -444,6 +517,7 @@ def _summary(
         versions=versions,
         status=last_run.status if last_run is not None else None,
         last_run=last_run,
+        design=design,
     )
 
 
@@ -599,6 +673,23 @@ def load_runs(folder: Path) -> list[ImageRunRecord]:
     return _read(folder / RUNS, ImageRuns).runs
 
 
+def load_designs(folder: Path) -> list[ImageRunRecord]:
+    return _read(folder / DESIGNS, ImageRuns).runs if (folder / DESIGNS).is_file() else []
+
+
+def refuse_designing(folder: Path, name: str, doing: str) -> None:
+    """Raise when an agent is working on the image kept in `folder`, which `doing` to it would pull out from under."""
+    designs = load_designs(folder)
+    run = designs[-1] if designs else None
+    if run is not None and run.status == "running" and alive(run.pid):
+        raise ImageDesignError(
+            f"An agent is working on {name}. Wait for it to end, or stop it with `image-design cancel-image --name "
+            f"{name}`, then {doing} again.",
+            "already-running",
+            name,
+        )
+
+
 def alive(pid: int) -> bool:
     """Whether a process with this id is running."""
     if sys.platform == "win32":
@@ -632,7 +723,9 @@ def _image_folders(data: Path) -> list[Path]:
 def _load(root: Path, data: Path, folder: Path, record: ImageRecord) -> StoredImage:
     versions = _read(folder / VERSIONS, ImageVersions) if (folder / VERSIONS).is_file() else ImageVersions()
     runs = load_runs(folder) if (folder / RUNS).is_file() else []
-    return StoredImage(root=root, data=data, folder=folder, record=record, versions=versions, runs=runs)
+    return StoredImage(
+        root=root, data=data, folder=folder, record=record, versions=versions, runs=runs, designs=load_designs(folder)
+    )
 
 
 def _read[Model: BaseModel](path: Path, model: type[Model]) -> Model:

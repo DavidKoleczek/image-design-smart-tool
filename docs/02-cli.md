@@ -31,7 +31,7 @@ A few arguments are written differently on the command line:
 - `references`: Repeat `--reference <path>` for each file.
 - `marks`: Pass `--marks <path>`, a JSON file that holds a list of marks.
 - `size` and `canvas`: The width and height joined by `x`, such as `--size 1024x1024`.
-- `max_bytes`, and `timeout_seconds` for `draw-svg-image`: A number, or `none` for no limit.
+- `max_bytes`, and `timeout_seconds` for `draw-svg-image` and `design-image`: A number, or `none` for no limit.
 - `resume_session`: `true`, `false`, or a session ID.
 
 `intelligence` is not available from the CLI.
@@ -58,6 +58,20 @@ image-design steer-svg-image --name sailboat.svg --message "Make the sail red."
 image-design cancel-image --name sailboat.svg
 ```
 
+## Design images with an agent
+
+`design-image` waits for the agent to end, then prints what it said last and the path of the image:
+
+```console
+$ image-design design-image "Less detail: no flower buds or spines." --name concepts/cactus.png
+v2 has no buds or spines, and the shading and background match v1.
+.image-design/concepts/cactus.png
+```
+
+What the agent says and the tools it calls are printed to stderr. `--json`, `--detach`, the exit codes, and Ctrl+C work as for the generate commands. `steer-image` sends the agent a message, and `cancel-image` stops it and the calls it has going.
+
+The agent runs this installation's `image-design` on its PATH, so each call it makes is a command like those above. `--image-model` picks what it makes its images with: an OpenAI image model, or `chatgpt`. Its calls to any other are refused, and it chooses every other setting of a call itself. Each call is a run of its own that names the agent's run as its `parent`.
+
 ## Other commands
 
 ```
@@ -67,6 +81,7 @@ image-design restore-image-version --name <name> --version <v>   put an earlier 
 image-design move-image --name <name> --new-name <name>          rename or move an image
 image-design copy-image --name <name> --new-name <name>          copy an image and its data
 image-design import-image --path <file> [--name <name>]          bring an image file in
+image-design add-image-version --name <name> --path <file>       keep a file as an image's next version
 image-design delete-image --name <name>                          delete an image and its data
 image-design create-folder --name <folder>                       make a folder
 image-design move-folder --name <folder> --new-name <folder>     rename or move a folder
@@ -74,7 +89,8 @@ image-design delete-folder --name <folder>                       delete a folder
 image-design relink-images                                       find images moved outside the tool
 image-design cancel-image --name <name>                          stop the run on an image
 image-design read-image-activity --name <name>                   the history of an image
-image-design steer-svg-image --name <name> --message <text>      send a message to the agent
+image-design steer-image --name <name> --message <text>          send a message to the image's agent
+image-design steer-svg-image --name <name> --message <text>      send a message to the drawing's agent
 image-design check-svg-image --name <name>                       measure a drawing
 image-design export-svg-image --name <name> --output <path>      render a drawing to a file
 image-design list-image-methods                                  the ways to make an image
@@ -86,7 +102,7 @@ image-design mcp                                                 serve the app o
 
 Every command that works on images also takes `--directory` and `--data-directory`.
 
-`steer-svg-image`, `cancel-image`, and `delete-image` print nothing. `delete-folder` prints only the files it left. `create-folder` and `move-folder` print the folder's name. `manifest` prints JSON. The others print text, or JSON with `--json`.
+`steer-image`, `steer-svg-image`, `cancel-image`, and `delete-image` print nothing. `delete-folder` prints only the files it left. `create-folder` and `move-folder` print the folder's name. `manifest` prints JSON. The others print text, or JSON with `--json`.
 
 `move-image`, `copy-image`, `import-image`, `create-folder`, and `move-folder` take `--numbered`. For `relink-images`, repeat `--likely <name>` for each image.
 

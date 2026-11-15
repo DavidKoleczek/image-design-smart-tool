@@ -78,17 +78,20 @@ export function Canvas({
   // The run working on the image now: what it has sent so far, and what it has yet to make.
   const run = image?.status === "running" ? image.last_run : null;
   const latest = run ? runs.get(run.id)?.previews.at(-1) : undefined;
+  // The image's agent works on it between its calls too, before the first of which a new image has no file.
+  const designing = image?.design?.status === "running";
   const live =
-    image && run
+    image && (run || designing)
       ? {
           preview:
-            latest !== undefined ? previewPicture(image, run.id, latest) : null,
-          size: askedSize(run.request),
+            run && latest !== undefined
+              ? previewPicture(image, run.id, latest)
+              : null,
+          size: run ? askedSize(run.request) : null,
           steering,
         }
       : null;
-  const asked = typeof run?.request.count === "number" ? run.request.count : 1;
-  const pending = run ? Math.max(0, asked - run.versions.length) : 0;
+  const pending = run && run.versions.length === 0 ? 1 : 0;
   const whole = shown?.picture ?? null;
   const animated = shown !== null && shown.frames > 1 && whole !== null;
   const playback = usePlayback(image?.name ?? "", whole?.key ?? null, animated);

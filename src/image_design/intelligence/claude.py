@@ -37,7 +37,7 @@ from claude_agent_sdk import (
 
 from image_design.core.skill import DISTRIBUTION
 from image_design.intelligence.events import EventLog
-from image_design.intelligence.interface import require_showable, state_directory
+from image_design.intelligence.interface import agent_environment, require_showable, state_directory
 from image_design.intelligence.schemas import (
     IMAGE_MEDIA_TYPES,
     AgentEvent,
@@ -51,7 +51,7 @@ from image_design.schemas import ImageDesignError
 
 AUTHENTICATION_DOCUMENTATION = "https://code.claude.com/docs/en/agent-sdk/quickstart"
 # The only tools an agent gets, so AskUserQuestion is not among them: nobody answers a question while a run works.
-READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Bash"]
+READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"]
 WRITE_TOOLS = ["Edit", "Write"]
 # Claude Code otherwise reports usage, errors, and other nonessential traffic to Anthropic.
 TELEMETRY_OFF = {
@@ -441,7 +441,7 @@ def claude_options(request: AgentRequest) -> ClaudeAgentOptions:
         resume=request.resume,
         extra_args={"replay-user-messages": None},
         max_buffer_size=MAX_MESSAGE_BYTES,
-        env=dict(TELEMETRY_OFF),
+        env={**agent_environment(request), **TELEMETRY_OFF},
     )
     if request.session_directory is not None:
         options.session_store = FolderSessionStore(request.session_directory)

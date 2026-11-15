@@ -1,41 +1,19 @@
-import {
-  Fragment,
-  useEffect,
-  useRef,
-  useState,
-  type ClipboardEvent,
-  type ReactNode,
-} from "react";
+import { useState, type ClipboardEvent, type ReactNode } from "react";
 
-import { Message, MarkChip } from "@/components/activity/Message";
-import {
-  LiveStrip,
-  RunDivider,
-  RunResult,
-} from "@/components/activity/RunParts";
-import { StepBlock } from "@/components/activity/StepBlock";
+import { AgentPicker, AgentRows } from "@/components/activity/AgentPicker";
+import { Composer } from "@/components/activity/Composer";
+import { LiveStrip } from "@/components/activity/RunParts";
+import { Thread } from "@/components/activity/Thread";
 import { NewImageName } from "@/components/NewImageName";
 import { PromptPicker } from "@/components/PromptPicker";
 import { ReferenceLibrary } from "@/components/ReferenceLibrary";
 import { References } from "@/components/References";
-import { ReferenceThumb } from "@/components/ReferenceThumb";
 import { Button } from "@/components/ui/button";
-import { Dimension } from "@/components/ui/dimension";
 import { Textarea } from "@/components/ui/field";
+import { FormRow } from "@/components/ui/form-row";
 import { Icon } from "@/components/ui/icon";
 import { LoadingMark } from "@/components/ui/loading-mark";
-import { Markdown } from "@/components/ui/markdown";
-import {
-  Menu,
-  MenuContent,
-  MenuGroup,
-  MenuGroupLabel,
-  MenuItem,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-  MenuTrigger,
-} from "@/components/ui/menu";
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
 import { Notice } from "@/components/ui/notice";
 import {
   Popover,
@@ -44,6 +22,7 @@ import {
 } from "@/components/ui/popover";
 import { Section } from "@/components/ui/section";
 import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Thumb } from "@/components/ui/thumb";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -70,19 +49,15 @@ import {
   changeDrawing,
   conversationOf,
   drawOf,
-  effortLabel,
-  providerLabel,
   sentDrawing,
   sizeOf,
   useDrawing,
-  type Agent,
   type Budgets,
 } from "@/lib/drawing";
 import { describe } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
 import { useSourceFrame } from "@/lib/frames";
 import { sentMark } from "@/lib/marks";
-import { versionPicture } from "@/lib/pictures";
 import { earlierPrompts } from "@/lib/prompts";
 import {
   addFiles,
@@ -105,20 +80,11 @@ import {
   type Target,
 } from "@/lib/request";
 import type { Runs } from "@/lib/runs";
+import { sessionOf, setResume, useResume } from "@/lib/sessions";
 import { flushAppState, updateAppState, useAppState } from "@/lib/state";
-import {
-  currentCall,
-  runsOf,
-  toggleOpened,
-  useOpened,
-  type Block,
-  type Run,
-} from "@/lib/thread";
-import { cn } from "@/lib/utils";
+import { currentCall, runsOf } from "@/lib/thread";
 import type { Shown } from "@/lib/viewed";
 
-// How close to the bottom still counts as at it, so new entries keep it scrolled down.
-const PINNED_PX = 48;
 const MATCH = "match";
 const CUSTOM = "custom";
 const FIXED = "fixed";
@@ -148,8 +114,6 @@ function DrawTarget({
   listing,
   folder,
   typed,
-  canRestart,
-  onRestart,
   onUseInNew,
   children,
 }: {
@@ -161,9 +125,6 @@ function DrawTarget({
   folder: string;
   /** A new drawing's name as it stands in the field. */
   typed: string;
-  /** Whether "Start a new conversation" can be picked: the drawing has one, and the next request continues it. */
-  canRestart: boolean;
-  onRestart: () => void;
   onUseInNew: (name: string) => void;
   children?: ReactNode;
 }) {
@@ -215,12 +176,6 @@ function DrawTarget({
                   <Icon name="image" />
                   Use as a reference instead
                 </MenuItem>
-                {target.image && (
-                  <MenuItem disabled={!canRestart} onClick={onRestart}>
-                    <Icon name="add" />
-                    Start a new conversation
-                  </MenuItem>
-                )}
               </MenuContent>
             </Menu>
           </>
@@ -235,306 +190,6 @@ function DrawTarget({
         )}
       </div>
       {children}
-    </div>
-  );
-}
-
-/** A version a run made, as a card that shows it when clicked. */
-function Result({
-  drawing,
-  version,
-  viewing,
-  onView,
-}: {
-  drawing: ImageSummary;
-  version: string;
-  /** Whether that version is the one that shows. */
-  viewing: boolean;
-  onView: (version: string) => void;
-}) {
-  const kept = drawing.versions.find((each) => each.id === version);
-  if (!kept) {
-    return null;
-  }
-  return (
-    <li className="shrink-0">
-      <button
-        type="button"
-        aria-label={`Show ${drawing.name} ${kept.id}`}
-        aria-current={viewing || undefined}
-        onClick={() => onView(kept.id)}
-        className={cn(
-          "flex w-full cursor-default items-center gap-2.5 rounded-md border p-1.5 text-left focus-visible:focus-ring focus-visible:outline-none",
-          viewing
-            ? "border-accent-ink bg-accent-soft"
-            : "border-line bg-panel hover:bg-hover",
-        )}
-      >
-        <Thumb
-          picture={versionPicture(drawing, kept, true)}
-          shape={kept}
-          className="size-12"
-        />
-        <span className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="truncate mono-value">{drawing.name}</span>
-          <span className="shrink-0 mono-annotation text-ink-muted">
-            {kept.id}
-          </span>
-          <span className="shrink-0 mono-annotation text-ink-muted">
-            {dimensions(kept.width, kept.height)}
-          </span>
-        </span>
-      </button>
-    </li>
-  );
-}
-
-/** One part of a run as the activity shows it. */
-function RunBlock({
-  drawing,
-  run,
-  block,
-  opened,
-  viewing,
-  onView,
-}: {
-  drawing: ImageSummary;
-  run: Run;
-  block: Block;
-  opened: Record<string, boolean>;
-  viewing: string | null;
-  onView: (version: string) => void;
-}) {
-  switch (block.kind) {
-    case "message":
-      return <Message block={block} />;
-    case "said":
-      return (
-        <li className="shrink-0">
-          <Markdown>{block.text}</Markdown>
-        </li>
-      );
-    case "steps": {
-      const key = `${drawing.name}:${block.key}`;
-      const open = opened[key] ?? block.latest;
-      return (
-        <StepBlock
-          calls={block.calls}
-          started={block.started}
-          finished={block.finished}
-          state={block.state}
-          open={open}
-          onToggle={() => toggleOpened(key, !open)}
-        />
-      );
-    }
-    case "ended":
-      return (
-        <RunResult
-          status={block.status}
-          started={run.started}
-          ended={block.ended}
-          error={block.error}
-          usage={block.usage}
-        />
-      );
-    case "result":
-      return (
-        <Result
-          drawing={drawing}
-          version={block.version}
-          viewing={viewing === block.version}
-          onView={onView}
-        />
-      );
-  }
-}
-
-/**
- * The drawing's activity, run by run: what was asked of it and by whom, what its agent said and did, how each run
- * ended, and what it made.
- */
-function Activity({
-  drawing,
-  runs,
-  label,
-  viewing,
-  ending,
-  onView,
-}: {
-  drawing: ImageSummary | null;
-  runs: Run[];
-  /** What a model is called, by its id. */
-  label: (model: string) => string;
-  /** The version that shows, by its id. */
-  viewing: string | null;
-  /** What closes the activity, such as the line a new conversation starts under. */
-  ending: ReactNode;
-  onView: (version: string) => void;
-}) {
-  const opened = useOpened();
-  const list = useRef<HTMLOListElement>(null);
-  const pinned = useRef(true);
-  const [behind, setBehind] = useState(false);
-  const size = runs.reduce(
-    (total, run) => total + run.blocks.length + run.calls.length,
-    0,
-  );
-
-  useEffect(() => {
-    if (pinned.current && list.current) {
-      list.current.scrollTop = list.current.scrollHeight;
-    }
-  }, [size, ending, drawing?.name]);
-
-  return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      <ol
-        ref={list}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          pinned.current =
-            element.scrollHeight - element.scrollTop - element.clientHeight <
-            PINNED_PX;
-          setBehind(!pinned.current);
-        }}
-        className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3"
-      >
-        {drawing &&
-          runs.map((run) => (
-            <Fragment key={run.id}>
-              <RunDivider run={run} label={label} />
-              {run.blocks.map((block) => (
-                <RunBlock
-                  key={block.key}
-                  drawing={drawing}
-                  run={run}
-                  block={block}
-                  opened={opened}
-                  viewing={viewing}
-                  onView={onView}
-                />
-              ))}
-            </Fragment>
-          ))}
-        {ending}
-      </ol>
-      {behind && (
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() =>
-            list.current?.scrollTo({
-              top: list.current.scrollHeight,
-              behavior: "smooth",
-            })
-          }
-          className="absolute bottom-2.5 left-1/2 -translate-x-1/2 shadow-popover"
-        >
-          <Icon name="arrow-down" />
-          Jump to latest
-        </Button>
-      )}
-    </div>
-  );
-}
-
-/** The agent that draws, by its agent provider, and how hard it thinks. */
-function AgentPicker({
-  agent,
-  methods,
-}: {
-  agent: Agent;
-  methods: ImageMethods;
-}) {
-  const { models } = methods.svg;
-  const providers = [...new Set(models.map((model) => model.agent_provider))];
-  return (
-    <Menu>
-      <MenuTrigger
-        render={
-          <Button
-            size="sm"
-            disabled={models.length === 0}
-            aria-label="Agent and reasoning effort"
-            className="min-w-0"
-          />
-        }
-      >
-        <span className="truncate">{agent.entry?.label ?? agent.model}</span>
-        <span className="text-ink-muted">{effortLabel(agent.effort)}</span>
-      </MenuTrigger>
-      <MenuContent side="top" align="start" className="w-60">
-        <MenuRadioGroup
-          value={`${agent.provider}/${agent.model}`}
-          onValueChange={(value: string) => {
-            const [provider, ...model] = value.split("/");
-            updateSvg({ agent_provider: provider, model: model.join("/") });
-          }}
-        >
-          {providers.map((provider) => (
-            <MenuGroup key={provider}>
-              <MenuGroupLabel>{providerLabel(provider)}</MenuGroupLabel>
-              {models
-                .filter((model) => model.agent_provider === provider)
-                .map((model) => (
-                  <MenuRadioItem
-                    key={model.id}
-                    value={`${provider}/${model.id}`}
-                    closeOnClick
-                  >
-                    {model.label}
-                  </MenuRadioItem>
-                ))}
-            </MenuGroup>
-          ))}
-        </MenuRadioGroup>
-        {agent.entry && (
-          <>
-            <MenuSeparator />
-            <MenuGroup>
-              <MenuGroupLabel>Reasoning effort</MenuGroupLabel>
-              <MenuRadioGroup
-                value={agent.effort}
-                onValueChange={(value: string) =>
-                  updateSvg({ reasoning_effort: value })
-                }
-              >
-                {agent.entry.reasoning_efforts.map((effort) => (
-                  <MenuRadioItem key={effort} value={effort} closeOnClick>
-                    {effortLabel(effort)}
-                  </MenuRadioItem>
-                ))}
-              </MenuRadioGroup>
-            </MenuGroup>
-          </>
-        )}
-      </MenuContent>
-    </Menu>
-  );
-}
-
-/** A control beside its label. `off` says why it does not apply now, and greys the label. */
-function Row({
-  label,
-  off,
-  children,
-}: {
-  label: string;
-  off?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div title={off} className="flex min-h-7 items-center gap-2">
-      <span
-        className={cn(
-          "w-21 shrink-0 text-label",
-          off ? "text-ink-faint" : "text-ink-muted",
-        )}
-      >
-        {label}
-      </span>
-      <div className="flex min-w-0 flex-1 gap-1.5">{children}</div>
     </div>
   );
 }
@@ -623,48 +278,6 @@ function NumberField({
   );
 }
 
-/** The agent that draws and how hard it thinks, as rows of a form. */
-function AgentRows({
-  agent,
-  methods,
-}: {
-  agent: Agent;
-  methods: ImageMethods;
-}) {
-  const { models } = methods.svg;
-  return (
-    <>
-      <Row label="Agent">
-        <Select
-          label="Agent"
-          value={`${agent.provider}/${agent.model}`}
-          disabled={models.length === 0}
-          onChange={(value) => {
-            const [provider, ...model] = value.split("/");
-            updateSvg({ agent_provider: provider, model: model.join("/") });
-          }}
-          items={models.map((model) => ({
-            value: `${model.agent_provider}/${model.id}`,
-            label: model.label,
-            group: providerLabel(model.agent_provider),
-          }))}
-        />
-      </Row>
-      <Row label="Reasoning">
-        <Select
-          label="Reasoning effort"
-          value={agent.effort}
-          disabled={!agent.entry}
-          onChange={(reasoning_effort) => updateSvg({ reasoning_effort })}
-          items={(agent.entry?.reasoning_efforts ?? [agent.effort]).map(
-            (effort) => ({ value: effort, label: effortLabel(effort) }),
-          )}
-        />
-      </Row>
-    </>
-  );
-}
-
 type BudgetProps = {
   budgets: Budgets;
   /** Whether the canvas is the drawing's own, which a message can ask to change. */
@@ -692,7 +305,7 @@ function BudgetRows({ budgets, fixed, match, timeout, onChange }: BudgetProps) {
   const [width, height] = budgets.canvas;
   return (
     <>
-      <Row label="Canvas" off={fixed ? FIXED_CANVAS : undefined}>
+      <FormRow label="Canvas" off={fixed ? FIXED_CANVAS : undefined}>
         <Select
           label="Canvas"
           value={choice}
@@ -729,9 +342,9 @@ function BudgetRows({ budgets, fixed, match, timeout, onChange }: BudgetProps) {
                 ]
           }
         />
-      </Row>
+      </FormRow>
       {choice === CUSTOM && (
-        <Row label="">
+        <FormRow label="">
           <NumberField
             label="Width"
             value={width}
@@ -748,9 +361,9 @@ function BudgetRows({ budgets, fixed, match, timeout, onChange }: BudgetProps) {
               value !== null && onChange({ canvas: [width, value] })
             }
           />
-        </Row>
+        </FormRow>
       )}
-      <Row label="File size">
+      <FormRow label="File size">
         <NumberField
           label="File size"
           value={budgets.max_bytes}
@@ -759,8 +372,8 @@ function BudgetRows({ budgets, fixed, match, timeout, onChange }: BudgetProps) {
           empty="No limit"
           onChange={(max_bytes) => onChange({ max_bytes })}
         />
-      </Row>
-      <Row label="Time limit">
+      </FormRow>
+      <FormRow label="Time limit">
         <NumberField
           label="Time limit"
           value={timeout}
@@ -769,7 +382,7 @@ function BudgetRows({ budgets, fixed, match, timeout, onChange }: BudgetProps) {
           empty="No limit"
           onChange={(timeout_seconds) => updateSvg({ timeout_seconds })}
         />
-      </Row>
+      </FormRow>
     </>
   );
 }
@@ -884,11 +497,11 @@ export function DrawPane({
   const references = useReferences(key);
   const guides = useGuides(key, shown?.picture?.key ?? null);
   const drawing = useDrawing(key);
+  const resume = useResume(key);
   const [picking, setPicking] = useState(false);
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const [over, setOver] = useState(false);
   const [open, setOpen] = useState({
     prompt: true,
     references: true,
@@ -914,11 +527,13 @@ export function DrawPane({
             from,
           }
         : { image: null, name: typedName(typed, [], folder), from: null };
-  const agent = agentOf(options, methods);
-  const conversation = editing ? conversationOf(image) : null;
-  const providerChanged =
-    conversation !== null && conversation.provider !== agent.provider;
-  const resume = conversation !== null && !drawing.fresh && !providerChanged;
+  const agent = agentOf(options, methods.svg);
+  const session = sessionOf(
+    editing ? (conversationOf(image)?.provider ?? null) : null,
+    agent.provider,
+    resume,
+    "the drawing",
+  );
   // A drawing and one made from an image in view keep what is changed for the session; a new one's are remembered.
   const local = editing || from !== null;
   const base = budgetsOf(editing ? image : null, from, options, methods);
@@ -975,7 +590,7 @@ export function DrawPane({
             options,
             budgets,
             drawing.budgets,
-            resume,
+            session.continuing,
             sent,
             sentMarks,
           ),
@@ -1038,11 +653,9 @@ export function DrawPane({
       listing={listing}
       folder={folder}
       typed={typed}
-      canRestart={resume}
-      onRestart={() => changeDrawing(key, { fresh: true })}
       onUseInNew={onUseInNew}
     >
-      {!editing && <AgentRows agent={agent} methods={methods} />}
+      {!editing && <AgentRows agent={agent} picks="svg" methods={methods} />}
     </DrawTarget>
   );
   const pasted = (event: ClipboardEvent) => {
@@ -1150,30 +763,12 @@ export function DrawPane({
   return (
     <div className="flex min-h-0 flex-1 flex-col" onPaste={pasted}>
       {targetBlock}
-      <Activity
-        drawing={image}
+      <Thread
+        image={image}
         runs={activity}
         label={label}
         viewing={shown?.version?.id ?? null}
         onView={onView}
-        ending={
-          activity.length > 0 &&
-          (providerChanged || drawing.fresh) && (
-            <li className="flex shrink-0 items-center gap-2">
-              <Dimension tone="accent" className="flex-1">
-                Next, a new conversation
-              </Dimension>
-              {!providerChanged && (
-                <Button
-                  size="sm"
-                  onClick={() => changeDrawing(key, { fresh: false })}
-                >
-                  Undo
-                </Button>
-              )}
-            </li>
-          )
-        }
       />
       {running && run && (
         <LiveStrip
@@ -1185,128 +780,44 @@ export function DrawPane({
       )}
       <footer className="shrink-0 border-t border-line bg-panel p-3">
         {notes && <div className="mb-2.5 flex flex-col gap-2">{notes}</div>}
-        <div
-          onDragOver={(event) => {
-            event.preventDefault();
-            setOver(true);
-          }}
-          onDragLeave={() => setOver(false)}
-          onDrop={(event) => {
-            event.preventDefault();
-            setOver(false);
-            addFiles(key, imageFiles(event.dataTransfer), Infinity);
-          }}
-          className={cn(
-            "flex flex-col gap-2 rounded-md border border-line-control bg-field p-2 focus-within:border-ink focus-within:bg-panel",
-            over &&
-              "outline-1 outline-offset-2 outline-accent-ink outline-dashed",
-          )}
+        <Composer
+          label="Message to the drawing agent"
+          placeholder={
+            running
+              ? "Steer the agent while it works"
+              : `Describe a change to ${key}`
+          }
+          value={draft.prompt}
+          onChange={(prompt) => updateDraft(key, { prompt })}
+          marks={marks}
+          references={references}
+          onRemoveMark={(id) => removeMark(key, id)}
+          onRemoveReference={(id) => removeReference(key, id)}
+          onAttach={() => setPicking(true)}
+          onFiles={(transfer) => addFiles(key, imageFiles(transfer), Infinity)}
+          onSend={() => void send()}
+          sending={sending}
+          blocked={problem ? (problem.title ?? problem.text) : null}
+          sendLabel={running ? "Send to the working agent" : "Send"}
         >
-          {(marks.length > 0 || references.length > 0) && (
-            <div className="flex flex-wrap gap-1">
-              {marks.map((mark) => (
-                <MarkChip
-                  key={mark.id}
-                  chip={{
-                    kind: "mark",
-                    number: mark.id,
-                    color: mark.color,
-                    shape: mark.shape,
-                  }}
-                >
-                  <button
-                    type="button"
-                    aria-label={`Remove mark ${mark.id}`}
-                    onClick={() => removeMark(key, mark.id)}
-                    className="-mr-1 grid size-4 shrink-0 cursor-default place-items-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink focus-visible:focus-ring focus-visible:outline-none"
-                  >
-                    <Icon name="close" />
-                  </button>
-                </MarkChip>
-              ))}
-              {references.map((reference) => (
-                <span
-                  key={reference.id}
-                  className="inline-flex h-6 max-w-full items-center gap-1.5 rounded-sm border border-line bg-panel pr-1 pl-0.5"
-                >
-                  <ReferenceThumb reference={reference} className="size-4.5" />
-                  <span
-                    title={reference.name}
-                    className="max-w-32 truncate mono-annotation"
-                  >
-                    {reference.name}
-                  </span>
-                  {reference.state === "uploading" && <LoadingMark size={12} />}
-                  {reference.state === "failed" && (
-                    <Icon name="warning" className="text-danger" />
-                  )}
-                  <button
-                    type="button"
-                    aria-label={`Remove ${reference.name}`}
-                    onClick={() => removeReference(key, reference.id)}
-                    className="grid size-4 shrink-0 cursor-default place-items-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink focus-visible:focus-ring focus-visible:outline-none"
-                  >
-                    <Icon name="close" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          <textarea
-            aria-label="Message to the drawing agent"
-            value={draft.prompt}
-            onChange={(event) =>
-              updateDraft(key, { prompt: event.target.value })
-            }
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void send();
-              }
-            }}
-            placeholder={
-              running
-                ? "Steer the agent while it works"
-                : `Describe a change to ${key}`
-            }
-            className="block field-sizing-content max-h-60 min-h-12 w-full resize-none bg-transparent text-body text-ink outline-none placeholder:text-ink-muted"
+          <AgentPicker agent={agent} picks="svg" methods={methods} />
+          <BudgetPicker
+            key={key}
+            budgets={budgets}
+            fixed
+            match={null}
+            timeout={options.timeout_seconds}
+            onChange={changeBudgets}
           />
-          <div className="flex items-center gap-1">
-            <Tooltip content="Add references" side="top">
-              <Button
-                size="sm"
-                icon
-                variant="ghost"
-                aria-label="Add references"
-                onClick={() => setPicking(true)}
-              >
-                <Icon name="attach" />
-              </Button>
-            </Tooltip>
-            <AgentPicker agent={agent} methods={methods} />
-            <BudgetPicker
-              key={key}
-              budgets={budgets}
-              fixed
-              match={null}
-              timeout={options.timeout_seconds}
-              onChange={changeBudgets}
-            />
-            <span className="flex-1" />
-            <span title={problem?.title ?? problem?.text}>
-              <Button
-                variant="primary"
-                size="sm"
-                icon
-                aria-label={running ? "Send to the working agent" : "Send"}
-                disabled={problem !== null || sending}
-                onClick={() => void send()}
-              >
-                {sending ? <LoadingMark /> : <Icon name="send" />}
-              </Button>
-            </span>
-          </div>
-        </div>
+          <Switch
+            checked={session.continuing}
+            onChange={(resume) => setResume(key, resume)}
+            disabled={!session.continuable}
+            title={session.hint}
+          >
+            Continue session
+          </Switch>
+        </Composer>
       </footer>
       <ReferenceLibrary
         open={picking}

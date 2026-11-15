@@ -10,6 +10,7 @@ from image_design.intelligence import interface
 from image_design.intelligence.interface import AgentRun, resolve_agent_provider, select_intelligence
 from image_design.intelligence.schemas import AgentRequest, Steering
 from image_design.schemas import AGENT_PROVIDERS, DEFAULT_INTELLIGENCE_MODELS, AgentProvider, ImageDesignError
+from image_design.shared import state
 
 
 class FakeIntelligence:
@@ -117,7 +118,7 @@ def test_every_installed_agent_provider_resolves_to_its_implementation(agent_pro
 def test_state_lives_in_the_platform_state_directory_under_the_tool(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent_provider: AgentProvider
 ) -> None:
-    monkeypatch.setattr(interface.sys, "platform", "linux")
+    monkeypatch.setattr(state.sys, "platform", "linux")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
 
     assert interface.state_directory(agent_provider) == tmp_path / "image-design" / agent_provider

@@ -1,6 +1,6 @@
 [project]
 name = "image-design"
-version = "0.2.0"
+version = "0.3.0"
 description = "Image creation and editing workspace"
 readme = "README.md"
 license = "MIT"
@@ -27,10 +27,7 @@ image-design = "image_design.cli:main"
 [project.optional-dependencies]
 codex = ["openai-codex>=0.163.0,<1.0.0"]
 claude = ["claude-agent-sdk>=0.2.177,<0.3.0"]
-openai = [
-    "keyring>=25.7.0,<26.0.0",
-    "openai>=3.46.0,<4.0.0",
-]
+openai = ["keyring>=25.7.0,<26.0.0", "openai>=3.46.0,<4.0.0"]
 all = ["image-design[codex,claude,openai]"]
 
 [build-system]
@@ -59,7 +56,11 @@ dev = [
 [tool.ruff]
 line-length = 120
 target-version = "py313"
-extend-exclude = ["reference", "app"]
+extend-exclude = [
+    "reference",
+    "./app",
+    "src/image_design/capabilities/design_image/craft/prompting-openai-images/references",
+]
 
 [tool.ruff.lint]
 select = [

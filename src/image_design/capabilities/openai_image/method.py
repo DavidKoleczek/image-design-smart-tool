@@ -40,7 +40,6 @@ def describe() -> OpenAIImageMethod:
         complexities=list(get_args(OpenAIImageComplexity)),
         backgrounds=list(get_args(OpenAIImageBackground)),
         max_images=generate.MAX_INPUT_IMAGES,
-        max_count=generate.MAX_COUNT,
         max_previews=generate.MAX_PREVIEWS,
         frames=generate.FRAMES,
         frame_ms=generate.FRAME_MS,

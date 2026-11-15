@@ -65,6 +65,9 @@ image-design mcp
 # Serve the app in the browser
 image-design app
 
+image-design design-image "A paper-cut cactus in a terracotta pot, in the style of the reference." --name concepts/cactus.png --reference style.png
+image-design design-image "Less detail, and keep the shading." --name concepts/cactus.png --resume-session true --image-model chatgpt
+image-design steer-image --name concepts/cactus.png --message "Keep the pot."
 image-design generate-openai-image "A paper-cut cactus in a terracotta pot." --name concepts/cactus.png
 image-design generate-chatgpt-image "Make the pot blue." --name concepts/cactus.png
 image-design draw-svg-image "A flat vector sailboat on calm water at sunset. No text." --name sailboat.svg

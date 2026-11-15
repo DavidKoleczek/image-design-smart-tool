@@ -91,6 +91,9 @@ class InProcessRun:
     `preview_suffix`, which is `suffix` unless they come in another format, as a drawing's renders do.
     """
 
+    # Whether work that ends without keeping an image has failed. An agent that directs image calls makes none itself.
+    needs_image = True
+
     def __init__(
         self,
         image: StoredImage,
@@ -125,11 +128,13 @@ class InProcessRun:
             {
                 "name": self.name,
                 "directory": str(self.directory),
+                "method": run.method,
                 "origin": run.origin,
                 "prompt": run.prompt,
                 # The request names the files it was given relative to this.
                 "run_folder": str(image.run_folder(run.id)),
                 **run.request,
+                **linked(run),
             },
         )
         output = RunOutput(self._preview, self._version, self._used, self._emit)
@@ -141,7 +146,7 @@ class InProcessRun:
         return self._replay()
 
     async def cancel(self) -> None:
-        """Stop the run at once and wait for it to end. A request already sent may still be billed or counted."""
+        """Stop the run at once and wait for it to end."""
         self._working.cancel()
         await asyncio.wait([self._task])
 
@@ -194,16 +199,15 @@ class InProcessRun:
         if timed_out:
             status = "timed-out"
             error = (
-                f"The request did not finish within {self._timeout_seconds} seconds and was stopped. It may still "
-                "have been billed or counted against a plan. Give it more time with timeout_seconds "
-                "(--timeout-seconds)."
+                f"The request did not finish within {self._timeout_seconds} seconds and was stopped. Give it more "
+                "time with timeout_seconds (--timeout-seconds)."
             )
         elif self._working.cancelled():
             status = "cancelled"
         elif (failure := self._working.exception()) is not None:
             status = "failed"
             error = str(failure) if isinstance(failure, ImageDesignError) else f"{type(failure).__name__}: {failure}"
-        elif not self._made:
+        elif not self._made and self.needs_image:
             status = "failed"
             error = "The request ended without an image. Try it again, or change the prompt."
         else:
@@ -254,13 +258,17 @@ class InProcessRun:
 
     def _used(self, usage: ImageUsage) -> None:
         self._run.usage = usage
+        self._save()
+
+    def _save(self) -> None:
+        """Keep the run's record as it is now, where the image's runs are kept."""
         self._image.save_runs()
 
     def _end(self, status: ImageRunStatus, error: str | None) -> None:
         self._run.status = status
         self._run.error = error
         self._run.finished = datetime.now(UTC)
-        self._image.save_runs()
+        self._save()
         release_lock(self._lock, self.run_id)
 
     def _emit(self, kind: ImageEventKind, text: str = "", data: dict[str, Any] | None = None) -> None:
@@ -269,7 +277,7 @@ class InProcessRun:
         with (self._folder / EVENTS).open("a", encoding="utf-8") as events:
             events.write(json.dumps(event.model_dump(mode="json")) + "\n")
         self._run.last_event = event.time
-        self._image.save_runs()
+        self._save()
         self._events.append(event)
         self._appended.set()
         self._appended = asyncio.Event()
@@ -290,7 +298,7 @@ class DetachedRun:
         return self._follow()
 
     async def cancel(self) -> None:
-        """Stop the run at once and wait for it to end. A request already sent may still be billed or counted."""
+        """Stop the run at once and wait for it to end."""
         if await asyncio.to_thread(self._running):
             (self._run_folder / CANCEL).touch()
         await self.result()
@@ -319,7 +327,11 @@ class DetachedRun:
         return self.folder / "runs" / self.run_id
 
     def _record(self) -> ImageRunRecord:
-        return next(run for run in load_runs(self.folder) if run.id == self.run_id)
+        return next(run for run in self._records() if run.id == self.run_id)
+
+    def _records(self) -> list[ImageRunRecord]:
+        """The records of the kind of run this is, among which its own is kept."""
+        return load_runs(self.folder)
 
     def _running(self) -> bool:
         run = self._record()
@@ -339,6 +351,12 @@ class DetachedRun:
             if ended:
                 return
             await asyncio.sleep(POLL_SECONDS)
+
+
+def linked(run: ImageRunRecord) -> dict[str, str]:
+    """What a run's `started` event says of the agent's run that made it."""
+    links = {"parent": run.parent, "parent_image": run.parent_image}
+    return {key: value for key, value in links.items() if value is not None}
 
 
 @contextlib.contextmanager

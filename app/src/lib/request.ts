@@ -25,7 +25,6 @@ export const DEFAULT_REQUEST: AppImageRequest = {
   quality: "auto",
   format: ".png",
   background: "auto",
-  count: 1,
   kind: "image",
   frame_size: null,
   frames: 8,
@@ -147,6 +146,16 @@ export function guideBlock(
   return null;
 }
 
+const QUALITY_LABELS: Record<string, string> = { xhigh: "Extra high" };
+
+/** What an image quality is called. */
+export function qualityLabel(quality: string): string {
+  return (
+    QUALITY_LABELS[quality] ??
+    quality.charAt(0).toUpperCase() + quality.slice(1)
+  );
+}
+
 /** A name's extension, lowercased, with its dot. */
 export function extensionOf(name: string): string {
   const dot = name.lastIndexOf(".");
@@ -159,19 +168,19 @@ export function stillFormats(methods: ImageMethods): string[] {
 }
 
 /**
- * The model the request goes to: the one picked last when it is still offered, else the default of the first method
- * that is set up.
+ * The image model a request goes to: the one picked last when it is still offered, else the default of the first
+ * method that is set up.
  */
 export function pickedModel(
-  options: AppImageRequest,
+  picked: string | null,
   methods: ImageMethods,
 ): string {
   const { openai, chatgpt } = methods;
   if (
-    options.model === CHATGPT ||
-    openai.models.some((model) => model.id === options.model)
+    picked === CHATGPT ||
+    openai.models.some((model) => model.id === picked)
   ) {
-    return options.model as string;
+    return picked as string;
   }
   return openai.ready || !chatgpt.ready ? openai.default_model : CHATGPT;
 }
@@ -185,7 +194,6 @@ export type Resolved = {
   kind: Kind;
   size: [number, number] | null;
   background: string;
-  count: number;
   /**
    * For an animation, how many frames it has and how long each shows; null to keep those of the animation being
    * edited, and for a still image.
@@ -214,7 +222,7 @@ export function resolve(
     frameMs: number | null;
   },
 ): Resolved {
-  const model = pickedModel(options, methods);
+  const model = pickedModel(options.model, methods);
   const method = model === CHATGPT ? "chatgpt" : "openai";
   const offered = stillFormats(methods);
   const format = image
@@ -253,10 +261,6 @@ export function resolve(
       options.background === "transparent" && !transparency
         ? "auto"
         : options.background,
-    count:
-      method === "openai" && !animated
-        ? Math.min(options.count, methods.openai.max_count)
-        : 1,
     frames: !animated
       ? null
       : image
@@ -280,10 +284,14 @@ export function resolve(
 
 /** What the picked model is called. */
 export function modelLabel(resolved: Resolved, methods: ImageMethods): string {
-  return resolved.method === "chatgpt"
+  return imageModelLabel(resolved.model, methods);
+}
+
+/** What an image model a request can go to is called: an OpenAI image model's id, or `chatgpt`. */
+export function imageModelLabel(model: string, methods: ImageMethods): string {
+  return model === CHATGPT
     ? CHATGPT_LABEL
-    : (methods.openai.models.find((model) => model.id === resolved.model)
-        ?.label ?? resolved.model);
+    : (methods.openai.models.find((each) => each.id === model)?.label ?? model);
 }
 
 /**
@@ -543,12 +551,11 @@ export function requestOf(
       ...(resolved.compression !== null
         ? { compression: resolved.compression }
         : {}),
-      count: resolved.count,
       ...(resolved.frames !== null ? { frames: resolved.frames } : {}),
       ...(resolved.frameMs !== null ? { frame_ms: resolved.frameMs } : {}),
-      // The API sends none with several images, or for an animation.
+      // The API sends none for an animation.
       previews:
-        resolved.count === 1 && resolved.kind === "image"
+        resolved.kind === "image"
           ? Math.min(PREVIEWS, methods.openai.max_previews)
           : 0,
     },

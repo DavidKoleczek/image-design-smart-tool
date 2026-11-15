@@ -17,7 +17,7 @@ from typing import IO, Any, TextIO
 from pydantic import BaseModel
 
 from image_design.schemas import ImageDesignError
-from image_design.shared.images.runs import DetachedRun, InProcessRun, stopped_by_signals
+from image_design.shared.images.runs import DetachedRun, ImageRun, stopped_by_signals
 from image_design.shared.images.store import PROCESS_LOG
 
 # Set in the process that runs the request. The process the caller starts only starts that one, with the same pipes,
@@ -35,7 +35,7 @@ async def detach[Run: DetachedRun](
     return follow(directory, data_directory, Path(report["folder"]), report["name"], report["run_id"])
 
 
-def serve(start: Callable[[str], Awaitable[InProcessRun]]) -> int:
+def serve(start: Callable[[str], Awaitable[ImageRun]]) -> int:
     """Run the request on stdin to its end with `start`, as the process a detached run runs in."""
     if RUNNING not in os.environ:
         try:
@@ -54,7 +54,7 @@ def serve(start: Callable[[str], Awaitable[InProcessRun]]) -> int:
     return asyncio.run(_serve(start, sys.stdin.buffer.read().decode("utf-8"), report))
 
 
-async def _serve(start: Callable[[str], Awaitable[InProcessRun]], request: str, report: TextIO) -> int:
+async def _serve(start: Callable[[str], Awaitable[ImageRun]], request: str, report: TextIO) -> int:
     with report:
         try:
             run = await start(request)

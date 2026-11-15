@@ -31,7 +31,7 @@ export function RunDivider({
   }
   if (resumed) {
     parts.push("same conversation");
-  } else if (run.number > 1) {
+  } else if (run.kind === "agent" ? run.fresh : run.number > 1) {
     parts.push("new conversation");
   }
   return (

@@ -1,5 +1,5 @@
 `generate-openai-image` creates or edits an image with an OpenAI image model through the Images API.
-It needs the `openai` extra and an OpenAI API key: `OPENAI_API_KEY` in the environment, or else the key saved with `save_openai_api_key`. Each request is billed to that key, and it is never retried.
+It needs the `openai` extra and an OpenAI API key: `OPENAI_API_KEY` in the environment, or else the key saved with `save_openai_api_key`. A request is never retried.
 
 A new `--name` creates the image. The name of an image that exists edits it and overwrites its file.
 Every image made is kept as a version in the data directory, so `restore-image-version` can put an earlier one back.
@@ -46,11 +46,10 @@ A sketch drawn in several strokes has the first in `points` and the others, each
 - `--complexity`: How much the model plans the image: `low`, `medium`, or `high`.
 - `--background`: `transparent`, `opaque`, or `auto`. Transparent needs a `.png` or `.webp`.
 - `--compression`: 0 to 100, for a `.jpg` or `.webp`.
-- `--count`: How many images to make, 1 to 10. The first goes in the image's file, and each is kept as a version.
 - `--frames`, `--frame-ms`: For a `.gif`, 2 to 16 frames, each shown for 20 to 2000 ms. An edit of a `.gif` keeps
   the image's own.
 - `--previews`: In-progress images to receive before the final one, 0 to 3. Each adds 100 output tokens to the cost.
-  Only with a `--count` of 1, and not for a `.gif`.
+  Not for a `.gif`.
 - `--timeout-seconds`: How long the request may take. Defaults to 600.
 - `--origin`: Who asked, such as `app`.
 - `--detach`: Leave the run going in a process of its own once it is sent. Stop it with `image-design cancel-image`.
@@ -58,13 +57,13 @@ A sketch drawn in several strokes has the first in `points` and the others, each
 
 ## Result
 
-The path of each image made, one per line: the image's file, then the version files of any more. Progress goes to
-stderr. The command exits 0 when the run is done and 1 when it failed, timed out, or was cancelled. Ctrl+C cancels it.
+The path of the image's file. Progress goes to stderr. The command exits 0 when the run is done and 1 when it failed,
+timed out, or was cancelled. Ctrl+C cancels it.
 
 ```
 .image-design/concepts/cactus.png
 ```
 
-With `--json`, each event is a line of JSON: `started`, a `preview` for each in-progress image, a `version` for each
+With `--json`, each event is a line of JSON: `started`, a `preview` for each in-progress image, a `version` for the
 image kept, and last `finished` or `failed`, whose `data` is the result. The result has the run's `status`, the
 `versions` it made, and its `usage`: tokens, and their cost in US dollars at the model's published prices.

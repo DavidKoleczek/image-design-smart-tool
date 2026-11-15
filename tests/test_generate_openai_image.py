@@ -181,7 +181,6 @@ async def test_a_sketch_of_several_strokes_is_drawn_as_one_mark_with_a_stroke_th
     [
         ({"name": "cactus.svg"}, "does not end in an image format"),
         ({"name": "../cactus.png"}, "cannot name an image"),
-        ({"previews": 2, "count": 2}, "Previews work only with a count of 1"),
         ({"name": "sway.gif", "previews": 1}, "A .gif has no previews"),
         ({"frames": 4}, "frames and frame_ms are for a .gif"),
         ({"compression": 50}, "compression is for a .jpg or .webp"),
@@ -279,7 +278,7 @@ async def test_previews_arrive_before_the_image_and_a_gif_is_made_and_edited_fra
     run = await lib.generate_openai_image("A cactus.", name="cactus.png", previews=2)
     events = [event async for event in run.events()]
     gif = await made(prompt="A swaying cactus.", name="sway.gif", frames=4, frame_ms=100)
-    edited = await made(prompt="Sway faster.", name="sway.gif", frame=2, count=2)
+    edited = await made(prompt="Sway faster.", name="sway.gif", frame=2)
 
     streamed, animating, editing = images_api.requests
     assert [event.kind for event in events] == ["started", "preview", "preview", "version", "finished"]
@@ -289,14 +288,13 @@ async def test_previews_arrive_before_the_image_and_a_gif_is_made_and_edited_fra
     assert animating.fields["output_format"] == "gif"
     assert gif.versions[0].frames == 4
     assert color_of(editing.files["image[]"][0]) == hex_color(COLORS[2])
-    assert editing.fields["n"] == "2"
     # An edit of a .gif keeps its size, frames, and timing unless asked otherwise.
     assert (editing.fields["size"], editing.fields["frame_count"], editing.fields["frame_duration_ms"]) == (
         "512x512",
         "4",
         "100",
     )
-    assert [version.id for version in edited.versions] == ["v2", "v3"]
+    assert [version.id for version in edited.versions] == ["v2"]
     assert edited.path.read_bytes() == edited.versions[0].file.read_bytes()
 
 
@@ -330,14 +328,11 @@ async def test_a_request_preview_is_what_the_request_then_sends_and_nothing_is_s
         "prompt": "Make the pot blue.",
         "name": "cactus.jpg",
         "references": [Path("palette.png")],
-        "count": 2,
     }
     # A preview sends nothing, so it needs no key.
     monkeypatch.delenv("OPENAI_API_KEY")
     creating = lib.preview_openai_image_request(**create)
     kept_for_a_preview = Path(".image-design").exists()
-    with pytest.raises(ImageDesignError, match="Previews work only with a count of 1"):
-        lib.preview_openai_image_request("A cactus.", name="cactus.png", previews=2, count=2)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     await made(**create)
     before = sorted(Path(".image-design").rglob("*"))
@@ -354,7 +349,6 @@ async def test_a_request_preview_is_what_the_request_then_sends_and_nothing_is_s
         "quality": "low",
         "output_format": "jpeg",
         "output_compression": 80,
-        "n": 1,
         "partial_images": 2,
     }
     assert {name: created.fields[name] for name in creating.parameters} == creating.parameters
@@ -378,7 +372,7 @@ async def test_a_request_preview_is_what_the_request_then_sends_and_nothing_is_s
 def test_the_cli_prints_each_image_made_and_exits_with_the_run_s_status(images_api: FakeImagesAPI) -> None:
     Path("marks.json").write_text(json.dumps([{"shape": "box", "points": [[0.1, 0.1], [0.5, 0.5]]}]), encoding="utf-8")
 
-    made = runner.invoke(app, ["generate-openai-image", "A cactus.", "--name", "cactus.jpg", "--count", "2"])
+    made = runner.invoke(app, ["generate-openai-image", "A cactus.", "--name", "cactus.jpg"])
     edited = runner.invoke(
         app, ["generate-openai-image", "A blue pot.", "--name", "cactus.jpg", "--marks", "marks.json", "--json"]
     )
@@ -387,9 +381,7 @@ def test_the_cli_prints_each_image_made_and_exits_with_the_run_s_status(images_a
     refused = runner.invoke(app, ["generate-openai-image", "A cactus.", "--name", "other.png", "--size", "1024x1024"])
 
     assert made.exit_code == 0, made.output
-    first, second = made.stdout.splitlines()
-    assert first == str(Path(".image-design", "cactus.jpg"))
-    assert second.endswith("v2.jpg")
+    assert made.stdout.splitlines() == [str(Path(".image-design", "cactus.jpg"))]
     assert "Saved v1 of cactus.jpg" in made.stderr
     assert edited.exit_code == 0, edited.output
     events = [ImageEvent.model_validate_json(line) for line in edited.stdout.splitlines()]

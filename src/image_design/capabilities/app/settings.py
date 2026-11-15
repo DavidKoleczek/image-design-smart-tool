@@ -113,7 +113,9 @@ def _read[Model: BaseModel](path: Path, model: type[Model]) -> Model:
         return model()
 
 
-def _checked[Model: BaseModel](values: dict[str, Any], model: type[Model], what: str, reader: str, reason: str) -> Model:
+def _checked[Model: BaseModel](
+    values: dict[str, Any], model: type[Model], what: str, reader: str, reason: str
+) -> Model:
     try:
         return model.model_validate(values)
     except ValidationError as error:

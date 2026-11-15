@@ -76,7 +76,7 @@ export function describeEnding(
     return "Stopped before it finished.";
   }
   if (status === "timed-out") {
-    return "The request took too long and was stopped. It may still have been billed, or counted against a plan.";
+    return "The request took too long and was stopped.";
   }
   return error ?? "The request failed without saying why.";
 }

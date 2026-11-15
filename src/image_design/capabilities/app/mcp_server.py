@@ -15,8 +15,8 @@ from mcp.server import Server, ServerRequestContext
 from mcp.server.apps import APP_MIME_TYPE, EXTENSION_ID, client_supports_apps
 from mcp.types import (
     INVALID_PARAMS,
-    CallToolRequestParams,
     BlobResourceContents,
+    CallToolRequestParams,
     CallToolResult,
     ElicitRequest,
     ElicitRequestURLParams,
@@ -66,6 +66,7 @@ from image_design.capabilities.app.tools import (
     CREATE_FOLDER,
     DELETE_FOLDER,
     DELETE_IMAGE,
+    DESIGN_IMAGE,
     DRAW_SVG,
     ENTER_OPENAI_KEY,
     EXPORT_SVG,
@@ -100,6 +101,7 @@ from image_design.capabilities.app.tools import (
     SAVE_SETTINGS,
     SAVE_STATE,
     SHOW_IMAGE,
+    STEER_IMAGE,
     STEER_SVG,
     UPLOAD_FILE,
     VIEW,
@@ -139,7 +141,19 @@ EXPORT_TITLE = "Export the drawing"
 ENTER_KEY_TITLE = "Image Design: OpenAI API key"
 ENTER_KEY_LABEL = "Paste your OpenAI API key. It is saved in this computer's credential store."
 # The tools whose arguments are a request to a library function, by their names.
-REQUEST_TOOLS = {tool.name: tool for tool in (GENERATE_OPENAI, GENERATE_CHATGPT, DRAW_SVG, PREVIEW_OPENAI, PREVIEW_CHATGPT)}
+REQUEST_TOOLS = {
+    tool.name: tool
+    for tool in (
+        GENERATE_OPENAI,
+        GENERATE_CHATGPT,
+        DRAW_SVG,
+        DESIGN_IMAGE,
+        PREVIEW_OPENAI,
+        PREVIEW_CHATGPT,
+        STEER_SVG,
+        STEER_IMAGE,
+    )
+}
 INSTRUCTIONS = (
     "Image Design has an app where the user sees the images in one directory. Call `open_app` when they ask for it."
 )
@@ -177,6 +191,8 @@ class AppServer:
         preview_chatgpt_image_request: Callable[..., ImageRequestPreview],
         draw_svg_image: Callable[..., Awaitable[ImageRun]],
         steer_svg_image: Callable[..., None],
+        design_image: Callable[..., Awaitable[ImageRun]],
+        steer_image: Callable[..., None],
         export_svg_image: Callable[[str, Path, float, str | None, Path, Path], Path],
         cancel_image: Callable[[str, Path, Path], None],
         choose_files: Callable[[Path, str], list[Path]],
@@ -207,12 +223,13 @@ class AppServer:
             GENERATE_OPENAI.name: generate_openai_image,
             GENERATE_CHATGPT.name: generate_chatgpt_image,
             DRAW_SVG.name: draw_svg_image,
+            DESIGN_IMAGE.name: design_image,
         }
+        self._steer = {STEER_SVG.name: steer_svg_image, STEER_IMAGE.name: steer_image}
         self._preview = {
             PREVIEW_OPENAI.name: preview_openai_image_request,
             PREVIEW_CHATGPT.name: preview_chatgpt_image_request,
         }
-        self._steer_svg_image = steer_svg_image
         self._export_svg_image = export_svg_image
         self._cancel_image = cancel_image
         self._choose_files = choose_files
@@ -461,7 +478,9 @@ class AppServer:
     def _keep(self, upload: str) -> ReferenceEntry:
         kept = library.entry(library.keep(uploads.staged(upload), self.data_directory))
         if kept is None:
-            raise ImageDesignError(f"The upload {upload} could not be kept to pin it. Add the file again.", "bad-upload")
+            raise ImageDesignError(
+                f"The upload {upload} could not be kept to pin it. Add the file again.", "bad-upload"
+            )
         return kept
 
     async def _in_dialog[Asked, Chosen](self, ask: Callable[[Asked, str], Chosen], first: Asked, second: str) -> Chosen:
@@ -595,7 +614,12 @@ class AppServer:
             return _structured(image.model_dump(mode="json"))
         if params.name == COPY_IMAGE.name:
             image = await asyncio.to_thread(
-                self._copy_image, arguments["name"], arguments["new_name"], self.directory, self.data_directory, numbered
+                self._copy_image,
+                arguments["name"],
+                arguments["new_name"],
+                self.directory,
+                self.data_directory,
+                numbered,
             )
             return _structured(image.model_dump(mode="json"))
         if params.name == IMPORT_IMAGE.name:
@@ -624,9 +648,7 @@ class AppServer:
             await asyncio.to_thread(self._follow, arguments["name"].replace("\\", "/"), moved, directory, data)
             return _structured({"name": moved})
         if params.name == DELETE_FOLDER.name:
-            left = await asyncio.to_thread(
-                self._delete_folder, arguments["name"], self.directory, self.data_directory
-            )
+            left = await asyncio.to_thread(self._delete_folder, arguments["name"], self.directory, self.data_directory)
             self._listing = None
             return _structured({"left": left})
         if params.name == RELINK_IMAGE.name:
@@ -668,12 +690,13 @@ class AppServer:
             tool = REQUEST_TOOLS[params.name]
             preview = await asyncio.to_thread(lambda: self._preview[params.name](**self._request(arguments, tool)))
             return _structured(preview.model_dump(mode="json"))
-        if params.name == STEER_SVG.name:
-            request = await asyncio.to_thread(self._request, arguments, STEER_SVG)
-            await asyncio.to_thread(lambda: self._steer_svg_image(**request, origin=ORIGIN))
+        if params.name in self._steer:
+            steer = self._steer[params.name]
+            request = await asyncio.to_thread(self._request, arguments, REQUEST_TOOLS[params.name])
+            await asyncio.to_thread(lambda: steer(**request, origin=ORIGIN))
             # The message left for the run holds copies of what it was given.
             await asyncio.to_thread(self._clear_taken, arguments)
-            return _text(f"Left the message for the agent drawing {arguments['name']}.")
+            return _text(f"Left the message for the agent working on {arguments['name']}.")
         if params.name == EXPORT_SVG.name:
             return _structured({"path": await self._export(arguments)})
         if params.name == CANCEL_IMAGE.name:

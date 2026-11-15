@@ -27,6 +27,7 @@ from openai_codex import (
     Sandbox,
     TextInput,
 )
+from openai_codex.generated.v2_all import SkillsExtraRootsSetResponse
 from openai_codex.models import Notification, UnknownNotification
 from openai_codex.types import (
     GetAccountResponse,
@@ -37,7 +38,7 @@ from openai_codex.types import (
 )
 
 from image_design.intelligence.events import EventLog, fresh_input
-from image_design.intelligence.interface import require_showable, state_directory
+from image_design.intelligence.interface import agent_environment, require_showable, state_directory
 from image_design.intelligence.schemas import AgentEvent, AgentEventKind, AgentRequest, AgentResult, Steering
 from image_design.intelligence.submission import MAX_INVALID_SUBMISSIONS, resubmit_prompt, submission_problem
 from image_design.schemas import ImageDesignError
@@ -57,7 +58,10 @@ IMAGE_SIGNATURES = ((b"\x89PNG", ".png"), (b"\xff\xd8\xff", ".jpg"), (b"GIF8", "
 DRAIN_SECONDS = 30
 # Without it the runtime leaves reasoning summaries out, and they are what the activity shows of reasoning.
 SUMMARY = ReasoningSummary.model_validate("detailed")
-SKILLS_DIRECTORY = Path(".agents") / "skills"
+SKILL_ROOTS_METHOD = "skills/extraRoots/set"
+# A run given skills of its own goes without the ones bundled with Codex, such as imagegen, which points at an image
+# tool the run may not have.
+NO_BUNDLED_SKILLS = ("skills.bundled.enabled=false",)
 # The items that are a call to a tool, rather than words, reasoning, or the turn's own bookkeeping.
 TOOL_ITEMS = frozenset(
     {
@@ -204,11 +208,8 @@ class CodexRun:
     async def _open(self, codex: AsyncCodex) -> None:
         request = self._request
         cwd = workspace(request)
-        await asyncio.to_thread(copy_skills, request.skill_directories, cwd)
         config: dict[str, Any] = {
             "model_reasoning_summary": "detailed",
-            # A workspace's AGENTS.md is written for whoever develops there, not for the tool's agent.
-            "project_doc_max_bytes": 0,
             # Otherwise a writable thread in an untrusted project records it as trusted in ~/.codex/config.toml.
             "projects": {str(cwd): {"trust_level": "trusted"}},
         }
@@ -232,6 +233,15 @@ class CodexRun:
         else:
             self._thread = await codex.thread_start(**options)
         self._session_id = self._thread.id
+        if request.skill_directories:
+            # Codex takes extra skill directories only for its whole runtime, and the SDK starts one for each run, so
+            # nothing is written into the workspace. The SDK has no method for it, so it goes through the client the
+            # SDK keeps.
+            await codex._client.request(
+                SKILL_ROOTS_METHOD,
+                {"extraRoots": [str(path.resolve()) for path in request.skill_directories]},
+                response_model=SkillsExtraRootsSetResponse,
+            )
         content: list[InputItem] = [TextInput(request.prompt)]
         content.extend(LocalImageInput(str(path)) for path in request.images)
         await self._begin(content)
@@ -450,10 +460,12 @@ class CodexIntelligence:
 
 
 def codex_config(request: AgentRequest) -> CodexConfig:
-    """The configuration one run's Codex runtime starts with."""
+    """The configuration one run's Codex runtime starts with. Its commands inherit the runtime's environment."""
+    environment = agent_environment(request)
+    overrides = TELEMETRY_OFF + (NO_BUNDLED_SKILLS if request.skill_directories else ())
     if request.generated_images is None:
-        return CodexConfig(config_overrides=TELEMETRY_OFF)
-    return CodexConfig(config_overrides=TELEMETRY_OFF + CHATGPT_ONLY, env=NO_API_KEYS)
+        return CodexConfig(config_overrides=overrides, env=environment or None)
+    return CodexConfig(config_overrides=overrides + CHATGPT_ONLY, env={**environment, **NO_API_KEYS})
 
 
 def require_chatgpt(response: GetAccountResponse) -> None:
@@ -482,20 +494,6 @@ def workspace(request: AgentRequest) -> Path:
     directory = state_directory("codex")
     directory.mkdir(parents=True, exist_ok=True)
     return directory.resolve()
-
-
-def copy_skills(skill_directories: list[Path], cwd: Path) -> None:
-    """Copy each skill into the project skills Codex finds under `cwd`.
-
-    Codex takes no skill directories, only the ones it finds itself. Existing copies are overwritten and nothing is
-    deleted, since runs at the same time in the same workspace may be reading them.
-    """
-    for directory in skill_directories:
-        if not directory.is_dir():
-            continue
-        for skill in sorted(directory.iterdir()):
-            if (skill / "SKILL.md").is_file():
-                shutil.copytree(skill, cwd / SKILLS_DIRECTORY / skill.name, dirs_exist_ok=True)
 
 
 def _content(text: str, images: list[Path]) -> Input | str:

@@ -75,6 +75,7 @@ export function TabView({
   // Something done in a preview tab keeps it from being taken by the next image opened.
   const worked =
     draft.prompt.trim() !== "" ||
+    draft.message.trim() !== "" ||
     guides.marks.length > 0 ||
     guides.painted > 0 ||
     references.length > 0 ||

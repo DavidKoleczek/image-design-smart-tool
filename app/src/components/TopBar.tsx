@@ -4,7 +4,6 @@ import { SettingsMenu } from "@/components/SettingsMenu";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Segmented } from "@/components/ui/segmented";
-import { StatusMark } from "@/components/ui/status-mark";
 import { Tooltip } from "@/components/ui/tooltip";
 import { AppMark, Wordmark } from "@/components/Wordmark";
 import type { ImageSummary } from "@/lib/api";
@@ -47,7 +46,7 @@ function PaneToggle({
   );
 }
 
-/** The bar along the top: the brand, the image in view and how it is doing, and the app's controls. */
+/** The bar along the top: the brand, the path of the image in view, and the app's controls. */
 export function TopBar({
   breakpoint,
   image,
@@ -76,16 +75,6 @@ export function TopBar({
   onExpand?: () => void;
   onShortcuts: () => void;
 }) {
-  const state = image ? (
-    image.status !== null &&
-    image.status !== "done" && (
-      <StatusMark status={image.status} since={image.last_run?.started} />
-    )
-  ) : (
-    <span className="shrink-0 text-label whitespace-nowrap text-ink-muted">
-      Not generated yet
-    </span>
-  );
   return (
     <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-panel pr-2 pl-3">
       {breakpoint === "narrow" ? (
@@ -103,7 +92,6 @@ export function TopBar({
       ) : (
         switcher
       )}
-      {breakpoint !== "narrow" && state}
       <span className="flex-1" />
       {breakpoint !== "narrow" && center}
       {breakpoint === "wide" && <span className="flex-1" />}

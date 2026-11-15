@@ -14,6 +14,18 @@ DISTRIBUTION = "image-design"
 # the Markdown in its folder's skills, at `capabilities/<name>/skills/skill_<capability>.md`.
 CAPABILITIES = (
     Capability(
+        "design-image",
+        "Create or edit an image with an agent that writes the image calls and makes them.",
+        model_backed=True,
+        skill="capabilities/design_image/skills/skill_design_image.md",
+    ),
+    Capability(
+        "steer-image",
+        "Send a message to the agent working on an image while it works.",
+        model_backed=False,
+        skill="capabilities/design_image/skills/skill_steer_image.md",
+    ),
+    Capability(
         "generate-openai-image",
         "Create or edit an image with an OpenAI image model through the Images API.",
         model_backed=True,
@@ -120,6 +132,12 @@ CAPABILITIES = (
         "Put an earlier version of an image back in its file.",
         model_backed=False,
         skill="capabilities/manage_images/skills/skill_restore_image_version.md",
+    ),
+    Capability(
+        "add-image-version",
+        "Keep a file, such as a crop a script made, as the next version of an image.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_add_image_version.md",
     ),
     Capability(
         "cancel-image",

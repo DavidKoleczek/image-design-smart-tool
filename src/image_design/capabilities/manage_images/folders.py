@@ -14,6 +14,7 @@ from image_design.shared.images.store import (
     found,
     free_name,
     records,
+    refuse_designing,
     release_lock,
     save_record,
     take_lock,
@@ -80,8 +81,9 @@ def move_folder(
     locks: list[Path] = []
     try:
         # Claimed as a run claims it, so the move is refused while a run works on an image in the folder.
-        for _, record in inside:
+        for folder, record in inside:
             locks.append(take_lock(data, record.name, holder))
+            refuse_designing(folder, record.name, f"move {old}")
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             source.rename(target)

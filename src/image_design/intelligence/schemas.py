@@ -55,6 +55,13 @@ class AgentRequest(BaseModel):
     skill_directories: list[Path] = Field(
         default_factory=list, description="Directories of Agent Skills, a folder holding a SKILL.md each, it may use"
     )
+    path_directories: list[Path] = Field(
+        default_factory=list,
+        description="Directories put first on the PATH of the agent's own processes, so it runs what they hold by name",
+    )
+    environment: dict[str, str] = Field(
+        default_factory=dict, description="Variables set for the agent's own processes, over this process's"
+    )
     generated_images: Path | None = Field(
         default=None,
         description="Where each image the agent makes with the agent provider's image tool is saved, announced by an "

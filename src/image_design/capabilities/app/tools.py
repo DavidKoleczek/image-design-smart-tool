@@ -147,7 +147,10 @@ IMPORT_IMAGE = Tool(
         "type": "object",
         "properties": {
             "upload": {"type": "string", "description": "The upload holding the image file"},
-            "folder": {"type": "string", "description": "The folder to put it in. Omit it for the top of the directory"},
+            "folder": {
+                "type": "string",
+                "description": "The folder to put it in. Omit it for the top of the directory",
+            },
             "numbered": NUMBERED,
         },
         "required": ["upload"],
@@ -162,7 +165,10 @@ CHOOSE_IMAGES = Tool(
     input_schema={
         "type": "object",
         "properties": {
-            "folder": {"type": "string", "description": "The folder to put them in. Omit it for the top of the directory"}
+            "folder": {
+                "type": "string",
+                "description": "The folder to put them in. Omit it for the top of the directory",
+            }
         },
     },
     _meta=APP_ONLY,
@@ -301,13 +307,12 @@ OPENAI_REQUEST = {
         "complexity": {"type": "string"},
         "background": {"type": "string"},
         "compression": {"type": "integer", "description": "0 to 100, for a .jpg or .webp"},
-        "count": {"type": "integer", "description": "How many images to make. Each is kept as a version"},
         "frames": {"type": "integer", "description": "For a .gif, how many frames. Omit it on an edit to keep its own"},
         "frame_ms": {
             "type": "integer",
             "description": "For a .gif, how long each frame shows. Omit it on an edit to keep its own",
         },
-        "previews": {"type": "integer", "description": "In-progress images to ask for, with a count of 1"},
+        "previews": {"type": "integer", "description": "In-progress images to ask for"},
     },
     "required": ["prompt", "name"],
 }
@@ -359,15 +364,14 @@ SVG_REQUEST = {
 GENERATE_OPENAI = Tool(
     name="generate_openai_image",
     description="Start creating or editing an image in the app's directory with an OpenAI image model, in a process "
-    "of its own, and return the image's name and the run's id. Billed to the OpenAI API key. Called by the view.",
+    "of its own, and return the image's name and the run's id. Called by the view.",
     input_schema=OPENAI_REQUEST,
     _meta=APP_ONLY,
 )
 GENERATE_CHATGPT = Tool(
     name="generate_chatgpt_image",
     description="Start creating or editing an image in the app's directory with the image generation built into "
-    "Codex, in a process of its own, and return the image's name and the run's id. Counts against the ChatGPT plan "
-    "Codex is signed in with. Called by the view.",
+    "Codex, in a process of its own, and return the image's name and the run's id. Called by the view.",
     input_schema=CHATGPT_REQUEST,
     _meta=APP_ONLY,
 )
@@ -408,6 +412,63 @@ STEER_SVG = Tool(
     },
     _meta=APP_ONLY,
 )
+DESIGN_REQUEST = {
+    "type": "object",
+    "properties": {
+        "prompt": {"type": "string", "description": "What the person asks of the agent, not what an image model gets"},
+        "name": REQUEST["name"],
+        "references": REFERENCES,
+        "marks": MARKS,
+        "mask": {
+            "type": "string",
+            "description": "The upload holding a PNG the image's size, transparent where changes may go",
+        },
+        "version": {"type": "string", "description": "The version the request is about. Omit it for the file"},
+        "frame": {"type": "integer", "minimum": 0, "description": "For an animation, the frame it is about"},
+        "resume_session": {
+            "type": "boolean",
+            "description": "Continue the image's agent's last session, so it remembers the conversation",
+        },
+        "image_model": {
+            "type": "string",
+            "description": "What the agent makes its images with: an OpenAI image model's ID, or `chatgpt`. Omit it "
+            "for the default",
+        },
+        "size": {
+            **OPENAI_REQUEST["properties"]["size"],
+            "description": "Width and height the agent passes to its calls. Omit it for the agent's choice",
+        },
+        "quality": {"type": "string", "description": "The quality the agent passes to its calls"},
+        "agent_provider": {"type": "string", "description": "`codex` or `claude`. Omit it for the default"},
+        "model": {"type": "string", "description": "The agent's model. Omit it for the agent provider's default"},
+        "reasoning_effort": {"type": "string", "description": "That model's reasoning effort"},
+        "timeout_seconds": {**SVG_LIMIT, "description": "How long the agent may work; null for no limit"},
+    },
+    "required": ["prompt", "name"],
+}
+DESIGN_IMAGE = Tool(
+    name="design_image",
+    description="Start the image's agent on a request in the app's directory, in a process of its own: it writes the "
+    "image calls and makes them. Returns the image's name and the run's id. Called by the view.",
+    input_schema=DESIGN_REQUEST,
+    _meta=APP_ONLY,
+)
+STEER_IMAGE = Tool(
+    name="steer_image",
+    description="Send a message to the agent working on an image in the app's directory while it works, with "
+    "references and marks on the image. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": IMAGE_NAME,
+            "message": {"type": "string", "description": "What the agent should do, sent as written"},
+            "references": REFERENCES,
+            "marks": MARKS,
+        },
+        "required": ["name", "message"],
+    },
+    _meta=APP_ONLY,
+)
 EXPORT_SVG = Tool(
     name="export_svg_image",
     description="Ask the person where to save a render of an SVG in their platform's save dialog, and render it there. "
@@ -426,8 +487,7 @@ EXPORT_SVG = Tool(
 )
 CANCEL_IMAGE = Tool(
     name="cancel_image",
-    description="Stop the run working on an image, whichever process started it. A request already sent may still be "
-    "billed or counted. Called by the view.",
+    description="Stop the run working on an image, whichever process started it. Called by the view.",
     input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
     _meta=APP_ONLY,
 )
@@ -546,6 +606,8 @@ VIEW_TOOLS = [
     PREVIEW_CHATGPT,
     DRAW_SVG,
     STEER_SVG,
+    DESIGN_IMAGE,
+    STEER_IMAGE,
     EXPORT_SVG,
     CANCEL_IMAGE,
     UPLOAD_FILE,

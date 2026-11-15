@@ -31,7 +31,9 @@ def receive(upload: str, name: str, offset: int, data: str) -> int:
     try:
         piece = base64.b64decode(data, validate=True)
     except (binascii.Error, ValueError):
-        raise ImageDesignError(f"The upload {name} did not arrive as base64. Add the file again.", "bad-upload") from None
+        raise ImageDesignError(
+            f"The upload {name} did not arrive as base64. Add the file again.", "bad-upload"
+        ) from None
     if offset < 0 or offset + len(piece) > MAX_BYTES:
         raise ImageDesignError(
             f"The upload {name} is larger than {MAX_BYTES // (1024 * 1024)} MB. Use a smaller image.", "bad-upload"
@@ -49,7 +51,9 @@ def receive(upload: str, name: str, offset: int, data: str) -> int:
             file.write(piece)
         return target.stat().st_size
     except OSError as error:
-        raise ImageDesignError(f"Could not keep the upload {name}: {error}. Add the file again.", "bad-upload") from None
+        raise ImageDesignError(
+            f"Could not keep the upload {name}: {error}. Add the file again.", "bad-upload"
+        ) from None
 
 
 def stage(upload: str, name: str, content: bytes) -> Path:
@@ -60,7 +64,9 @@ def stage(upload: str, name: str, content: bytes) -> Path:
         folder.mkdir(parents=True, exist_ok=True)
         (folder / name).write_bytes(content)
     except OSError as error:
-        raise ImageDesignError(f"Could not keep {name} for the request: {error}. Send it again.", "bad-upload") from None
+        raise ImageDesignError(
+            f"Could not keep {name} for the request: {error}. Send it again.", "bad-upload"
+        ) from None
     return folder / name
 
 

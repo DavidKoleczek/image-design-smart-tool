@@ -1,13 +1,16 @@
 import { useSyncExternalStore } from "react";
 
 import type {
+  AppDesignRequest,
   AppSvgRequest,
+  DesignImageMethod,
   DrawRequest,
   ImageMethods,
   ImageSummary,
   IntelligenceModel,
   SentMark,
   SentReference,
+  SvgImageMethod,
 } from "@/lib/api";
 import { movedPath } from "@/lib/paths";
 import { onRenamed, rekey } from "@/lib/renames";
@@ -26,6 +29,16 @@ export const DEFAULT_SVG: AppSvgRequest = {
   canvas: null,
   max_bytes: null,
   timeout_seconds: null,
+};
+
+/** `AppDesignRequest()` in schemas.py, for when the state cannot be read. */
+export const DEFAULT_DESIGN: AppDesignRequest = {
+  agent_provider: null,
+  model: null,
+  reasoning_effort: null,
+  image_model: null,
+  size: null,
+  quality: null,
 };
 
 /** The canvases offered for a new drawing. A drawing keeps its canvas, which a message can ask to change. */
@@ -57,7 +70,7 @@ export function effortLabel(effort: string): string {
 /** What a drawing is held to: its canvas, and the most bytes its file may have, null for no limit. */
 export type Budgets = { canvas: [number, number]; max_bytes: number | null };
 
-/** The agent that draws: the model picked last when it is still offered, else the default. */
+/** An agent that works on an image: the model picked last when it is still offered, else the default. */
 export type Agent = {
   provider: string;
   model: string;
@@ -66,8 +79,11 @@ export type Agent = {
   entry: IntelligenceModel | null;
 };
 
-export function agentOf(options: AppSvgRequest, methods: ImageMethods): Agent {
-  const { models, default: fallback } = methods.svg;
+export function agentOf(
+  options: AppSvgRequest | AppDesignRequest,
+  offered: SvgImageMethod | DesignImageMethod,
+): Agent {
+  const { models, default: fallback } = offered;
   const entry =
     models.find(
       (model) =>
@@ -185,14 +201,12 @@ export function drawOf(
   };
 }
 
-/** What is picked for one drawing for the session: a new conversation, and budgets changed from the drawing's. */
+/** What is picked for one drawing for the session: budgets changed from the drawing's. */
 export type Drawing = {
-  /** Whether the next request starts a new conversation rather than continuing the last. */
-  fresh: boolean;
   budgets: Partial<Budgets>;
 };
 
-const NOTHING: Drawing = { fresh: false, budgets: {} };
+const NOTHING: Drawing = { budgets: {} };
 const listeners = new Set<() => void>();
 const drawings = new Map<string, Drawing>();
 
@@ -218,10 +232,7 @@ export function changeDrawing(name: string, change: Partial<Drawing>) {
   set(name, { ...(drawings.get(name) ?? NOTHING), ...change });
 }
 
-/**
- * Once a request has gone: the conversation it was in is the one to continue, and the budgets it set are the
- * drawing's.
- */
+/** Once a request has gone, the budgets it set are the drawing's. */
 export function sentDrawing(name: string) {
   set(name, NOTHING);
 }

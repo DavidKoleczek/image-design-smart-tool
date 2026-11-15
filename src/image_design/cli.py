@@ -175,7 +175,6 @@ def generate_openai_image(
     compression: Annotated[
         int | None, typer.Option("--compression", min=0, max=100, help="For a .jpg or .webp.")
     ] = None,
-    count: Annotated[int, typer.Option("--count", min=1, max=10, help="How many images to make.")] = 1,
     frames: Annotated[int | None, typer.Option("--frames", min=2, max=16, help="For a .gif.")] = None,
     frame_ms: Annotated[
         int | None, typer.Option("--frame-ms", min=20, max=2000, help="For a .gif, how long each frame shows.")
@@ -190,7 +189,7 @@ def generate_openai_image(
     ] = False,
     json: Annotated[bool, typer.Option("--json", help="Print each event as a line of JSON instead.")] = False,
 ) -> None:
-    """Create or edit an image with an OpenAI image model. Model-backed, and billed to OPENAI_API_KEY.
+    """Create or edit an image with an OpenAI image model. Model-backed, and needs an OpenAI API key.
 
     Prints the path of each image made, with progress on stderr. Exits 0 when the run is done.
     """
@@ -212,7 +211,6 @@ def generate_openai_image(
                 complexity=complexity,
                 background=background,
                 compression=compression,
-                count=count,
                 frames=frames,
                 frame_ms=frame_ms,
                 previews=previews,
@@ -288,6 +286,123 @@ def generate_chatgpt_image(
         )
     )
     raise typer.Exit(code)
+
+
+@app.command()
+def design_image(
+    prompt: Annotated[str, typer.Argument(help="What you want, for the agent.", show_default=False)],
+    name: Annotated[
+        str,
+        typer.Option(
+            "--name", help="The image's path in the directory, such as concepts/cactus.png; one that exists is edited."
+        ),
+    ],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    references: Annotated[
+        list[Path] | None, typer.Option("--reference", help="An image that goes with the request; repeatable.")
+    ] = None,
+    marks: Annotated[
+        Path | None, typer.Option("--marks", help="A JSON file with a list of marks drawn on the image.")
+    ] = None,
+    mask: Annotated[
+        Path | None, typer.Option("--mask", help="An image the image's size, transparent where changes may go.")
+    ] = None,
+    version: Annotated[
+        str | None, typer.Option("--version", help="The version the request is about; the image's file when omitted.")
+    ] = None,
+    frame: Annotated[
+        int | None, typer.Option("--frame", min=0, help="For an animation, the frame it is about.")
+    ] = None,
+    resume_session: Annotated[
+        str,
+        typer.Option(
+            "--resume-session", metavar="true|false|ID", help="Go on in the image's agent's last session, or this one."
+        ),
+    ] = "false",
+    image_model: Annotated[
+        str | None,
+        typer.Option("--image-model", help="What the agent makes its images with: an OpenAI image model, or chatgpt."),
+    ] = None,
+    size: Annotated[
+        str | None,
+        typer.Option("--size", metavar="WIDTHxHEIGHT", help="The size the agent passes to its calls."),
+    ] = None,
+    quality: Annotated[
+        OpenAIImageQuality | None, typer.Option("--quality", help="The quality the agent passes to its calls.")
+    ] = None,
+    agent_provider: Annotated[AgentProvider | None, typer.Option("--agent-provider")] = None,
+    model: Annotated[str | None, typer.Option("--model", help="See image-design list-intelligence-models.")] = None,
+    reasoning_effort: Annotated[
+        ReasoningEffort, typer.Option("--reasoning-effort", help="The model's reasoning effort.")
+    ] = DEFAULT_REASONING_EFFORT,
+    timeout_seconds: Annotated[
+        str, typer.Option("--timeout-seconds", metavar="N|none", help="How long the agent may work.")
+    ] = "none",
+    origin: Annotated[str | None, typer.Option("--origin", help="Who asked, such as app.")] = None,
+    detach: Annotated[
+        bool, typer.Option("--detach", help="Leave the agent going in a process of its own once it starts.")
+    ] = False,
+    json: Annotated[bool, typer.Option("--json", help="Print each event as a line of JSON instead.")] = False,
+) -> None:
+    """Create or edit an image with an agent that writes the image calls and makes them. Agentic.
+
+    Prints what the agent said last and the image's path, with its progress on stderr. Exits 0 when the run is done.
+    """
+    code = asyncio.run(
+        _follow_agent(
+            lib.design_image(
+                prompt=prompt,
+                name=name,
+                directory=directory,
+                data_directory=data_directory,
+                references=references,
+                marks=_marks(marks),
+                mask=mask,
+                version=version,
+                frame=frame,
+                resume_session=_resume_session(resume_session),
+                image_model=image_model,
+                size=_size(size),
+                quality=quality,
+                agent_provider=agent_provider,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                timeout_seconds=_limit(timeout_seconds, "--timeout-seconds"),
+                origin=origin,
+                detach=detach,
+            ),
+            detach,
+            json,
+        )
+    )
+    raise typer.Exit(code)
+
+
+@app.command()
+def steer_image(
+    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    message: Annotated[str, typer.Option("--message", help="What the agent should do.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    origin: Annotated[str | None, typer.Option("--origin", help="Who asked, such as app.")] = None,
+    references: Annotated[
+        list[Path] | None, typer.Option("--reference", help="An image to show the agent with it; repeatable.")
+    ] = None,
+    marks: Annotated[
+        Path | None, typer.Option("--marks", help="A JSON file with a list of marks to draw on the image.")
+    ] = None,
+) -> None:
+    """Send a message to the agent working on an image while it works. Deterministic."""
+    lib.steer_image(
+        name=name,
+        message=message,
+        directory=directory,
+        data_directory=data_directory,
+        origin=origin,
+        references=references,
+        marks=_marks(marks),
+    )
 
 
 @app.command()
@@ -533,6 +648,19 @@ def import_image(
 
 
 @app.command()
+def add_image_version(
+    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    path: Annotated[Path, typer.Option("--path", help="The file to keep as its next version, in the image's format.")],
+    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
+    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """Keep a file, such as a crop a script made, as the next version of an image. Deterministic."""
+    summary = lib.add_image_version(name=name, path=path, directory=directory, data_directory=data_directory)
+    typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
+
+
+@app.command()
 def delete_image(
     name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
     directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
@@ -722,6 +850,27 @@ async def _follow(starting: Coroutine[Any, Any, lib.ImageRun], detach: bool, as_
     if not as_json:
         for path in _made(result):
             typer.echo(_shown(path))
+    return 0 if result.status == "done" else 1
+
+
+async def _follow_agent(starting: Coroutine[Any, Any, lib.DesignRun], detach: bool, as_json: bool) -> int:
+    """Follow an image's agent to its end, and print what it said last and the image's path."""
+    run = await starting
+    if detach:
+        _print_event(await anext(run.events()), as_json)
+        return 0
+    said = ""
+    with lib.stopped_by_signals(run):
+        async for event in run.events():
+            _print_event(event, as_json)
+            if event.kind == "agent" and event.data.get("kind") == "message":
+                said = event.text
+        result = await run.result()
+    if not as_json:
+        if said:
+            typer.echo(said)
+        if result.path.is_file():
+            typer.echo(_shown(result.path))
     return 0 if result.status == "done" else 1
 
 

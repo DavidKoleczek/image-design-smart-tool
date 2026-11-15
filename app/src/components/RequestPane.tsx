@@ -1,12 +1,15 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 import { DrawPane } from "@/components/DrawPane";
+import { ImageModelSelect } from "@/components/ImageModelPicker";
+import { ImagePane } from "@/components/ImagePane";
 import { NewImageName } from "@/components/NewImageName";
 import { PromptPicker } from "@/components/PromptPicker";
 import { References } from "@/components/References";
 import { RequestPreview } from "@/components/RequestPreview";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/field";
+import { FormRow } from "@/components/ui/form-row";
 import { Icon } from "@/components/ui/icon";
 import { LoadingMark } from "@/components/ui/loading-mark";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
@@ -38,7 +41,6 @@ import {
 import { moveDraft, updateDraft, useDraft } from "@/lib/drafts";
 import { describe, describeEnding } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
-import { openKeyDialog, useKey } from "@/lib/key";
 import { sentMark } from "@/lib/marks";
 import { useMethods } from "@/lib/methods";
 import { earlierPrompts } from "@/lib/prompts";
@@ -47,12 +49,10 @@ import {
   clearReferences,
   imageFiles,
   sentReferences,
-  settleReferences,
   uploadMask,
   useReferences,
 } from "@/lib/references";
 import {
-  CHATGPT,
   CHATGPT_LABEL,
   folderIn,
   FRAME_SIZES,
@@ -64,12 +64,14 @@ import {
   nameFrom,
   pickedModel,
   problemOf,
+  qualityLabel,
   referenceRoom,
   requestOf,
   resolve,
   sendsSource,
   SIZES,
   sourcePicture,
+  stem,
   stillFormats,
   typedName,
   type Kind,
@@ -78,8 +80,9 @@ import {
   type Source,
   type Target,
 } from "@/lib/request";
-import type { Runs } from "@/lib/runs";
+import { readRunsAgain, type Runs } from "@/lib/runs";
 import { updateSettings, useSettings } from "@/lib/settings";
+import { closeSheet, openSheet, useSheet, type Sheet } from "@/lib/sheets";
 import { flushAppState, updateAppState, useAppState } from "@/lib/state";
 import { useElapsed } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -90,10 +93,7 @@ const KEEPS_FORMAT = "An edit keeps the image's format";
 const NO_TRANSPARENCY = "JPEG has no transparency";
 const AS_GIF = "An animation is saved as a GIF";
 const OPAQUE_ANIMATION = "An animation has no transparent background";
-const ONE_ANIMATION = "A request makes one animation";
 const AUTO = "auto";
-// In the model list, opens the dialog about the key rather than picking a model.
-const SET_KEY = "set-openai-key";
 
 const QUALITIES: Record<string, string> = { xhigh: "Extra high" };
 const FORMATS: Record<string, string> = {
@@ -119,31 +119,6 @@ function update(change: Partial<AppImageRequest>) {
   }));
 }
 
-/** A control of the form beside its label. `off` says why it does not apply now, and greys the label. */
-function Row({
-  label,
-  off,
-  children,
-}: {
-  label: string;
-  off?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div title={off} className="flex min-h-7 items-center gap-2">
-      <span
-        className={cn(
-          "w-21 shrink-0 text-label",
-          off ? "text-ink-faint" : "text-ink-muted",
-        )}
-      >
-        {label}
-      </span>
-      <div className="flex min-w-0 flex-1">{children}</div>
-    </div>
-  );
-}
-
 /** What the request is for, the image in view or a new image and its name, and the model it goes to. */
 function TargetBlock({
   target,
@@ -167,8 +142,6 @@ function TargetBlock({
   methods: ImageMethods;
   onUseInNew: (name: string) => void;
 }) {
-  const { openai, chatgpt } = methods;
-  const key = useKey();
   const source = target.image ? target : target.from;
   const shown = source ? source.shown : null;
   return (
@@ -229,43 +202,13 @@ function TargetBlock({
           />
         )}
       </div>
-      <Row label="Model">
-        <Select
-          label="Image model"
+      <FormRow label="Model">
+        <ImageModelSelect
           value={resolved.model}
-          onChange={(model) =>
-            model === SET_KEY ? openKeyDialog() : update({ model })
-          }
-          items={[
-            ...openai.models.map((model) => ({
-              value: model.id,
-              label: model.label,
-              group: "OpenAI API",
-              disabled: openai.ready
-                ? undefined
-                : (openai.problem ?? "Not set up"),
-            })),
-            // Where the person looks when the models are greyed out for want of a key.
-            ...(key.status?.source === null
-              ? [
-                  {
-                    value: SET_KEY,
-                    label: "Set API key...",
-                    group: "OpenAI API",
-                  },
-                ]
-              : []),
-            {
-              value: CHATGPT,
-              label: CHATGPT_LABEL,
-              group: "ChatGPT",
-              disabled: chatgpt.ready
-                ? undefined
-                : (chatgpt.problem ?? "Not set up"),
-            },
-          ]}
+          onChange={(model) => update({ model })}
+          methods={methods}
         />
-      </Row>
+      </FormRow>
     </div>
   );
 }
@@ -311,7 +254,7 @@ function Output({
   );
   return (
     <div className="flex flex-col gap-2">
-      <Row label="Type">
+      <FormRow label="Type">
         <Segmented<Kind>
           label="Type"
           size="sm"
@@ -329,8 +272,8 @@ function Output({
             },
           ]}
         />
-      </Row>
-      <Row label={animated ? "Frame size" : "Size"} off={byChatGPT}>
+      </FormRow>
+      <FormRow label={animated ? "Frame size" : "Size"} off={byChatGPT}>
         <Select
           label={animated ? "Frame size" : "Size"}
           value={size}
@@ -361,10 +304,10 @@ function Output({
             })),
           ]}
         />
-      </Row>
+      </FormRow>
       {animated && (
         <>
-          <Row label="Frames">
+          <FormRow label="Frames">
             <ValueField
               label="Count"
               className="flex-1"
@@ -377,8 +320,8 @@ function Output({
                   : update({ frames })
               }
             />
-          </Row>
-          <Row label="Frame time">
+          </FormRow>
+          <FormRow label="Frame time">
             <ValueField
               label="Each"
               className="flex-1"
@@ -393,10 +336,10 @@ function Output({
                   : update({ frame_ms: frameMs })
               }
             />
-          </Row>
+          </FormRow>
         </>
       )}
-      <Row label="Quality" off={byChatGPT}>
+      <FormRow label="Quality" off={byChatGPT}>
         <Select
           label="Quality"
           value={options.quality}
@@ -404,11 +347,11 @@ function Output({
           onChange={(quality) => update({ quality })}
           items={openai.qualities.map((quality) => ({
             value: quality,
-            label: QUALITIES[quality] ?? titled(quality),
+            label: qualityLabel(quality),
           }))}
         />
-      </Row>
-      <Row label="Format">
+      </FormRow>
+      <FormRow label="Format">
         <Segmented
           label="Format"
           size="sm"
@@ -429,8 +372,8 @@ function Output({
                     : undefined)),
           }))}
         />
-      </Row>
-      <Row label="Background">
+      </FormRow>
+      <FormRow label="Background">
         <Segmented
           label="Background"
           size="sm"
@@ -469,21 +412,7 @@ function Output({
                     : undefined,
           }))}
         />
-      </Row>
-      <Row
-        label="Images"
-        off={byChatGPT ?? (animated ? ONE_ANIMATION : undefined)}
-      >
-        <ValueField
-          label="Count"
-          className="flex-1"
-          value={resolved.count}
-          min={1}
-          max={openai.max_count}
-          disabled={byChatGPT !== undefined || animated}
-          onChange={(count) => update({ count })}
-        />
-      </Row>
+      </FormRow>
       <button
         type="button"
         aria-expanded={advanced}
@@ -503,7 +432,7 @@ function Output({
       </button>
       {advanced && (
         <>
-          <Row label="Complexity" off={byChatGPT}>
+          <FormRow label="Complexity" off={byChatGPT}>
             <Segmented
               label="Complexity"
               size="sm"
@@ -519,8 +448,8 @@ function Output({
                 disabled: byChatGPT,
               }))}
             />
-          </Row>
-          <Row
+          </FormRow>
+          <FormRow
             label="Compression"
             off={
               byChatGPT ??
@@ -539,10 +468,10 @@ function Output({
               }
               onChange={(compression) => update({ compression })}
             />
-          </Row>
+          </FormRow>
           {resolved.method === "chatgpt" && (
             <>
-              <Row label="Codex model">
+              <FormRow label="Codex model">
                 <Select
                   label="Codex model"
                   value={resolved.codexModel}
@@ -552,8 +481,8 @@ function Output({
                     label: model.label,
                   }))}
                 />
-              </Row>
-              <Row label="Reasoning">
+              </FormRow>
+              <FormRow label="Reasoning">
                 <Select
                   label="Reasoning effort"
                   value={resolved.reasoningEffort}
@@ -565,7 +494,7 @@ function Output({
                     label: QUALITIES[effort] ?? titled(effort),
                   }))}
                 />
-              </Row>
+              </FormRow>
             </>
           )}
         </>
@@ -652,6 +581,8 @@ function RequestForm({
   onCreated,
   onChanged,
   onView,
+  sheet,
+  onBack,
 }: {
   methods: ImageMethods;
   listing: ImageListing | null;
@@ -664,6 +595,10 @@ function RequestForm({
   onCreated: (name: string) => Promise<void>;
   onChanged: () => Promise<void>;
   onView: (version: string | null) => void;
+  /** What the form is open on, over the image's conversation. */
+  sheet: Sheet;
+  /** Go back to the conversation. */
+  onBack: () => void;
 }) {
   const { state } = useAppState();
   const options = state.request;
@@ -687,7 +622,7 @@ function RequestForm({
     mask: { upload: string; url: string } | null;
   } | null>(null);
 
-  const model = pickedModel(options, methods);
+  const model = pickedModel(options.model, methods);
   const kind = kindOf(image, draft.kind, options, model);
   // A request that cannot change the image in view, or that makes another type of image, makes a new image from it,
   // which takes what a new image is picked.
@@ -702,24 +637,29 @@ function RequestForm({
   });
   const folder = folderIn(listing, draft.folder);
   const typed = draft.name ?? freeNewName(listing, resolved.format, folder);
-  const source: Source | null = image && shown ? { image, shown, frame } : null;
-  const target: Target = source
-    ? crossing
-      ? {
+  // Nothing shows yet of an image whose first call has not made it, so there is no source to edit.
+  const source: Source | null =
+    image && shown && shown.picture !== null ? { image, shown, frame } : null;
+  const unmade = image !== null && source === null;
+  const target: Target = unmade
+    ? { image: null, name: stem(image.name), from: null }
+    : source
+      ? crossing
+        ? {
+            image: null,
+            name: freeName(
+              listing,
+              resolved.format,
+              nameFrom(source, resolved.kind),
+            ),
+            from: source,
+          }
+        : source
+      : {
           image: null,
-          name: freeName(
-            listing,
-            resolved.format,
-            nameFrom(source, resolved.kind),
-          ),
-          from: source,
-        }
-      : source
-    : {
-        image: null,
-        name: typedName(typed, methods.openai.formats, folder),
-        from: null,
-      };
+          name: typedName(typed, methods.openai.formats, folder),
+          from: null,
+        };
   // Only the guide of the mode the canvas is in goes out, since a request takes marks or a mask and not both.
   const marks = image && mode === "markup" ? guides.marks : [];
   const masked = image !== null && mode === "mask" && guides.painted > 0;
@@ -738,7 +678,8 @@ function RequestForm({
     draft.prompt,
     resolved,
     methods,
-    listing,
+    // The image the call makes is already listed, under the name the call gives it.
+    unmade ? null : listing,
     references,
     room,
   );
@@ -778,30 +719,34 @@ function RequestForm({
       // The server sends only references it knows the app offers, a pin among them once the pin is saved.
       await flushAppState();
       const mask = await sendMask();
-      const sent = references;
-      const started = await generateImage(
-        requestOf(
-          target,
-          draft.prompt,
-          options,
-          resolved,
-          methods,
-          guide(mask?.upload ?? null),
-        ),
+      const request = requestOf(
+        target,
+        draft.prompt,
+        options,
+        resolved,
+        methods,
+        guide(mask?.upload ?? null),
       );
+      const started = await generateImage(request);
       watched.add(started.run_id);
-      if (target.image) {
-        // The marks and the mask were for this request. The references stay for the next one.
+      if (unmade) {
+        clearReferences(key);
+        await onChanged();
+        onBack();
+      } else if (target.image) {
+        // What guided the call went with it. The next message to the agent starts with nothing attached.
         clearGuides(target.image.name);
-        settleReferences(key, sent, started.references);
+        clearReferences(key);
         // What the run makes lands in the image's file, so that is what shows while it works.
         onView(null);
         await onChanged();
+        onBack();
       } else {
         // What the new image was made from says nothing about how it is changed next.
         clearReferences(key);
         moveDraft(key, started.name);
         await onCreated(started.name);
+        onBack();
       }
     } catch (cause) {
       setFailure(`The request did not start. ${describe(cause)}`);
@@ -856,6 +801,23 @@ function RequestForm({
         }
       }}
     >
+      <header className="flex h-9 shrink-0 items-center gap-1.5 border-b border-line pr-3 pl-1.5">
+        <Tooltip content="Back to the conversation" side="bottom">
+          <Button
+            size="sm"
+            icon
+            aria-label="Back to the conversation"
+            onClick={onBack}
+          >
+            <Icon name="chevron" className="rotate-90" />
+          </Button>
+        </Tooltip>
+        <h2 className="text-label">{sheet.title}</h2>
+        <span className="flex-1" />
+        <span className="truncate text-caption text-ink-muted">
+          Sent as written, with no agent
+        </span>
+      </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <TargetBlock
           target={target}
@@ -1080,9 +1042,25 @@ export function RequestPane({
   const { error } = useAppState();
   const { methods, error: unread } = useMethods();
   const drawing = method === "svg";
+  const key = image ? image.name : newKey;
+  // The editor of an image call, for the image it was opened on; another image in view leaves it.
+  const opened = useSheet(key);
+  const sheet = drawing ? null : opened;
+  const working =
+    image?.status === "running" || image?.design?.status === "running";
+
+  const leaveSheet = () => {
+    if (sheet?.filled) {
+      updateDraft(key, { prompt: "" });
+      clearReferences(key);
+    }
+    closeSheet();
+    readRunsAgain();
+  };
+
   return (
     <aside
-      aria-label={drawing ? "Conversation" : "Request"}
+      aria-label="Conversation"
       className="flex h-full min-w-0 flex-col bg-panel"
     >
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-line pr-2 pl-3">
@@ -1096,6 +1074,35 @@ export function RequestPane({
             { value: "svg", label: "SVG" },
           ]}
         />
+        <span className="flex-1" />
+        {methods && !drawing && (
+          <Tooltip
+            content={
+              sheet
+                ? "Back to the conversation"
+                : "Write the image call yourself, sent with no agent"
+            }
+            side="bottom"
+          >
+            <Button
+              size="sm"
+              aria-pressed={sheet !== null}
+              disabled={sheet === null && working}
+              onClick={() =>
+                sheet
+                  ? leaveSheet()
+                  : openSheet(key, {
+                      title: "Your image call",
+                      filled: false,
+                    })
+              }
+              className="min-w-0"
+            >
+              <Icon name="sliders" />
+              <span className="truncate">Write image call</span>
+            </Button>
+          </Tooltip>
+        )}
       </header>
       {error && <Notice className="m-2">{error}</Notice>}
       {unread && <Notice className="m-2">{unread}</Notice>}
@@ -1114,7 +1121,7 @@ export function RequestPane({
           onChanged={onChanged}
           onView={onView}
         />
-      ) : methods ? (
+      ) : methods && sheet ? (
         <RequestForm
           methods={methods}
           listing={listing}
@@ -1127,6 +1134,23 @@ export function RequestPane({
           onCreated={onCreated}
           onChanged={onChanged}
           onView={onView}
+          sheet={sheet}
+          onBack={leaveSheet}
+        />
+      ) : methods ? (
+        <ImagePane
+          key={key}
+          methods={methods}
+          listing={listing}
+          image={image}
+          shown={shown}
+          runs={runs}
+          mode={mode}
+          newKey={newKey}
+          onCreated={onCreated}
+          onChanged={onChanged}
+          onView={onView}
+          onSheet={(filled) => openSheet(key, filled)}
         />
       ) : (
         <div className="min-h-0 flex-1" />

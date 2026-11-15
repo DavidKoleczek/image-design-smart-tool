@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from image_design.capabilities.openai_image import images_api
 from image_design.schemas import (
+    CHATGPT_IMAGE_MODEL,
     DEFAULT_OPENAI_IMAGE_MODEL,
     IMAGE_FORMATS,
     OPENAI_IMAGE_MODELS,
@@ -24,12 +25,13 @@ from image_design.schemas import (
     OpenAIImageModel,
     OpenAIImageQuality,
 )
+from image_design.shared.images import calls, pictures
 from image_design.shared.images import detach as detaching
 from image_design.shared.images import marks as marking
-from image_design.shared.images import pictures
 from image_design.shared.images.requests import (
     Reference,
     claimed,
+    edited_version,
     invalid,
     previewed_source,
     source,
@@ -46,7 +48,6 @@ BACKGROUND_COMMAND = [sys.executable, "-m", "image_design.capabilities.openai_im
 # The Images API's limits, from https://developers.openai.com/api/reference/resources/images/methods/edit and
 # https://developers.openai.com/api/docs/guides/image-generation.
 MAX_INPUT_IMAGES = 16
-MAX_COUNT = 10
 MAX_PREVIEWS = 3
 FRAMES = (2, 16)
 FRAME_MS = (20, 2000)
@@ -75,12 +76,12 @@ class OpenAIImageRequest(BaseModel):
     complexity: OpenAIImageComplexity | None = None
     background: OpenAIImageBackground | None = None
     compression: int | None = None
-    count: int = 1
     frames: int | None = None
     frame_ms: int | None = None
     previews: int = 0
     timeout_seconds: int = 600
     origin: str | None = None
+    parent: str | None = None
 
 
 async def generate_openai_image(
@@ -99,13 +100,13 @@ async def generate_openai_image(
     complexity: OpenAIImageComplexity | None = None,
     background: OpenAIImageBackground | None = None,
     compression: int | None = None,
-    count: int = 1,
     frames: int | None = None,
     frame_ms: int | None = None,
     previews: int = 0,
     timeout_seconds: int = 600,
     origin: str | None = None,
     detach: bool = False,
+    parent: str | None = None,
 ) -> ImageRun:
     """Start creating the image named `name`, or editing it when it exists, and return its run once it is sent."""
     request = validated(
@@ -125,12 +126,12 @@ async def generate_openai_image(
         complexity=complexity,
         background=background,
         compression=compression,
-        count=count,
         frames=frames,
         frame_ms=frame_ms,
         previews=previews,
         timeout_seconds=timeout_seconds,
         origin=origin,
+        parent=parent,
     )
     if not detach:
         return await start(request)
@@ -164,7 +165,6 @@ def preview_openai_image_request(
     complexity: OpenAIImageComplexity | None = None,
     background: OpenAIImageBackground | None = None,
     compression: int | None = None,
-    count: int = 1,
     frames: int | None = None,
     frame_ms: int | None = None,
     previews: int = 0,
@@ -187,7 +187,6 @@ def preview_openai_image_request(
         complexity=complexity,
         background=background,
         compression=compression,
-        count=count,
         frames=frames,
         frame_ms=frame_ms,
         previews=previews,
@@ -225,22 +224,28 @@ async def start(request: OpenAIImageRequest) -> InProcessRun:
     root, data = directories(request.directory, request.data_directory)
     name = image_name(request.name, root, data)
     suffix = PurePosixPath(name).suffix.lower()
-    model = _model(request.model)
+    parent = calls.parent_of(root, data, request.parent, name)
+    given = calls.given(parent)
+    # An agent's call that names no model goes to the one the agent was given.
+    model = _model(request.model or (None if given == CHATGPT_IMAGE_MODEL else given))
+    calls.require_given(parent, model.id, name)
     images_api.preflight()
     sent = sent_references(request.references)
     run_id = new_run_id()
     with claimed(root, data, name, run_id) as (image, lock):
         folder = image.run_folder(run_id)
         api_request = _prepare(request, sent, image, suffix, model, folder / "inputs")
+        version = edited_version(image, request.version)
         run = ImageRunRecord(
             id=run_id,
             method="openai",
             prompt=request.prompt,
-            request=_recorded(api_request, folder),
+            request={**_recorded(api_request, folder), **({"version": version} if version else {})},
             origin=request.origin,
             pid=os.getpid(),
             started=datetime.now(UTC),
         )
+        calls.record(run, parent, image)
         image.runs.append(run)
         image.save_runs()
         work = partial(images_api.send, api_request, model, request.timeout_seconds)
@@ -350,7 +355,6 @@ def _api_request(
         background=request.background,
         output_format=IMAGE_FORMATS[suffix],
         compression=request.compression,
-        count=request.count,
         frames=plan.frames,
         frame_ms=plan.frame_ms,
         previews=request.previews,
@@ -370,12 +374,8 @@ def _require_arguments(request: OpenAIImageRequest) -> None:
         )
     if not request.prompt.strip():
         raise invalid("The prompt is empty. Say what to make, or what to change.", name)
-    if not 1 <= request.count <= MAX_COUNT:
-        raise invalid(f"count is {request.count}. Make from 1 to {MAX_COUNT} images at a time.", name)
     if not 0 <= request.previews <= MAX_PREVIEWS:
         raise invalid(f"previews is {request.previews}. Ask for 0 to {MAX_PREVIEWS} previews.", name)
-    if request.previews and request.count > 1:
-        raise invalid("Previews work only with a count of 1. Leave out previews, or make one image.", name)
     if request.previews and animated:
         raise invalid("A .gif has no previews. Leave out previews.", name)
     if request.timeout_seconds <= 0:

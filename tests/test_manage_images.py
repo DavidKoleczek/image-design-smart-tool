@@ -12,6 +12,7 @@ import pytest
 from typer.testing import CliRunner
 
 from image_design import lib
+from image_design.capabilities.design_image import method as design_method
 from image_design.cli import app
 from image_design.intelligence import interface
 from image_design.schemas import ImageDesignError
@@ -472,7 +473,7 @@ def test_the_methods_say_what_each_takes_and_what_is_left_to_set_up(monkeypatch:
     assert ready.openai.formats == [".png", ".jpg", ".webp", ".gif"]
     assert [model.id for model in ready.openai.models] == ["gpt-image-2.6-sunburst", "gpt-image-2.6-flare"]
     assert ready.openai.default_model == "gpt-image-2.6-sunburst"
-    assert (ready.openai.max_images, ready.openai.max_count, ready.openai.max_previews) == (16, 10, 3)
+    assert (ready.openai.max_images, ready.openai.max_previews) == (16, 3)
     assert (ready.chatgpt.formats, ready.chatgpt.max_images, ready.chatgpt.default_reasoning_effort) == (
         [".png"],
         5,
@@ -487,6 +488,29 @@ def test_the_methods_say_what_each_takes_and_what_is_left_to_set_up(monkeypatch:
     assert "codex agent provider is not installed" in (missing.chatgpt.problem or "")
     assert "none is installed" in (missing.svg.problem or "")
     assert missing.svg.models == []
+    assert ready.design.ready
+    assert ready.design.default == ready.svg.default
+    assert ready.svg.default.reasoning_effort == "high"
+    assert not missing.design.ready
+    assert "none is installed" in (missing.design.problem or "")
+    assert ready.design.default_image_model == "gpt-image-2.6-sunburst"
+
+
+def test_the_agent_is_not_ready_without_a_method_to_make_its_images(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    methods = lib.list_image_methods()
+    unset = {"ready": False, "problem": "Set it up."}
+
+    design = design_method.describe(methods.openai.model_copy(update=unset), methods.chatgpt.model_copy(update=unset))
+    only_chatgpt = design_method.describe(methods.openai.model_copy(update=unset), methods.chatgpt)
+
+    assert not design.ready
+    assert "neither is set up" in (design.problem or "")
+    assert only_chatgpt.default_image_model == "chatgpt"
+    with pytest.raises(ImageDesignError, match=r"which is not set up\. Set it up\."):
+        design_method.image_model(
+            "gpt-image-2.6-flare", "cactus.png", methods.openai.model_copy(update=unset), methods.chatgpt
+        )
 
 
 def test_the_cli_lists_views_moves_and_deletes_images(images_api: FakeImagesAPI) -> None:

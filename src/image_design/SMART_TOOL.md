@@ -1,7 +1,7 @@
 ---
 smart_tool_format: 1
 name: image-design
-version: 0.2.0
+version: 0.3.0
 description: >-
   Image creation and editing workspace
 use_cases:
@@ -22,7 +22,7 @@ requires:
   - name: openai-api-key
     purpose: >-
       OPENAI_API_KEY, and image-design installed with the openai extra, for generate-openai-image.
-      Without them, images cannot be made through the OpenAI Images API. Each request is billed to the key.
+      Without them, images cannot be made through the OpenAI Images API.
     optional: true
     install: https://platform.openai.com/api-keys
   - name: codex-sign-in

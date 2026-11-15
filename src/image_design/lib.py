@@ -9,11 +9,16 @@ from image_design.capabilities.app import settings as app_settings
 from image_design.capabilities.app.mcp_server import AppServer
 from image_design.capabilities.chatgpt_image import generate as chatgpt_image
 from image_design.capabilities.chatgpt_image import method as chatgpt_method
+from image_design.capabilities.design_image import design
+from image_design.capabilities.design_image import method as design_method
+from image_design.capabilities.design_image import steering as design_steering
+from image_design.capabilities.design_image.runs import DesignRun
 from image_design.capabilities.intelligence_models import intelligence_models
 from image_design.capabilities.manage_images import folders as image_folders
 from image_design.capabilities.manage_images import imports as image_imports
 from image_design.capabilities.manage_images import manage_images
 from image_design.capabilities.manage_images import relink as image_relink
+from image_design.capabilities.manage_images import versions as image_versions
 from image_design.capabilities.openai_image import generate
 from image_design.capabilities.openai_image import key as openai_key
 from image_design.capabilities.openai_image import method as openai_method
@@ -68,19 +73,19 @@ async def generate_openai_image(
     complexity: OpenAIImageComplexity | None = None,
     background: OpenAIImageBackground | None = None,
     compression: int | None = None,
-    count: int = 1,
     frames: int | None = None,
     frame_ms: int | None = None,
     previews: int = 0,
     timeout_seconds: int = 600,
     origin: str | None = None,
     detach: bool = False,
+    parent: str | None = None,
 ) -> ImageRun:
     """Create or edit an image with an OpenAI image model through the Images API. Model-backed.
 
     A `name` new to `directory` creates the image, and the name of one that exists edits it, overwriting its file. Every
     image made is kept as a version in `data_directory`, which `restore_image_version` puts back. Needs the openai
-    extra and an `OPENAI_API_KEY`; each request is billed to that key, and is never retried.
+    extra and an `OPENAI_API_KEY`. A request is never retried.
 
     Args:
         prompt: What to make, or what to change.
@@ -99,13 +104,14 @@ async def generate_openai_image(
         complexity: How much the model plans the image; the API's default when None.
         background: `transparent` needs a .png or .webp; the API's default when None.
         compression: 0 to 100, for a .jpg or .webp.
-        count: How many images to make, 1 to 10; each is kept as a version, and the first goes in the file.
         frames: For a .gif, 2 to 16 frames.
         frame_ms: For a .gif, how long each frame shows, 20 to 2000.
-        previews: In-progress images the API sends before the final one, 0 to 3; only with a count of 1.
+        previews: In-progress images the API sends before the final one, 0 to 3.
         timeout_seconds: How long the request may take before it is stopped.
         origin: Who asked, such as `app`.
         detach: Run the request in a process of its own, which goes on when the caller exits.
+        parent: The run of the image's agent that makes the call, from `design_image`; the one the
+            IMAGE_DESIGN_PARENT environment variable names when None, which that agent's processes have.
 
     Returns:
         The run, once the request is sent. Its `events()` yields each step, including `preview` events with the path of
@@ -127,13 +133,13 @@ async def generate_openai_image(
         complexity=complexity,
         background=background,
         compression=compression,
-        count=count,
         frames=frames,
         frame_ms=frame_ms,
         previews=previews,
         timeout_seconds=timeout_seconds,
         origin=origin,
         detach=detach,
+        parent=parent,
     )
 
 
@@ -152,6 +158,7 @@ async def generate_chatgpt_image(
     origin: str | None = None,
     detach: bool = False,
     intelligence: Intelligence | None = None,
+    parent: str | None = None,
 ) -> ImageRun:
     """Create or edit an image with the image generation built into Codex. Agentic.
 
@@ -177,6 +184,7 @@ async def generate_chatgpt_image(
         origin: Who asked, such as `app`.
         detach: Run the request in a process of its own, which goes on when the caller exits.
         intelligence: An agent to use in place of Codex, such as a fake in tests. Not with `detach`.
+        parent: The run of the image's agent that makes the call, as for `generate_openai_image`.
 
     Returns:
         The run, once the agent has started. Its `result()` waits for the `ImageResult`, whose `usage` is None since
@@ -197,7 +205,110 @@ async def generate_chatgpt_image(
         origin=origin,
         detach=detach,
         intelligence=intelligence,
+        parent=parent,
     )
+
+
+async def design_image(
+    prompt: str,
+    name: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+    mask: Path | None = None,
+    version: str | None = None,
+    frame: int | None = None,
+    resume_session: bool | str = False,
+    image_model: str | None = None,
+    size: tuple[int, int] | None = None,
+    quality: OpenAIImageQuality | None = None,
+    agent_provider: AgentProvider | None = None,
+    model: str | None = None,
+    reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT,
+    timeout_seconds: int | None = None,
+    origin: str | None = None,
+    detach: bool = False,
+    intelligence: Intelligence | None = None,
+) -> DesignRun:
+    """Create or edit an image with an agent that writes the image calls and makes them. Agentic.
+
+    The agent has a shell in the working directory and drives this tool's own commands, with skills for the craft: it
+    looks at the image and its history, and writes each call to the image model it is given and makes it, with
+    `generate_openai_image` or `generate_chatgpt_image`, choosing every other argument of the call itself. It may make
+    several images, write scripts for exact work, and read the project. Needs the codex or claude extra, and the method
+    of the image model set up.
+
+    Args:
+        prompt: What the person wants, for the agent; not what an image model receives.
+        name: The image's path in `directory`, not an SVG. A new name creates the image.
+        directory: Where images are kept; `.image-design` in the working directory when None.
+        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        references: Images that go with the request, which the agent decides how to use.
+        marks: Shapes the person drew on the image, which the agent is shown and may pass on.
+        mask: An image the image's size, transparent where changes may go, which the agent may pass on.
+        version: The version the request is about; the image's file when None.
+        frame: For an animation, the frame the request is about.
+        resume_session: True to go on in the image's agent's last session, or the ID of an earlier one. A new session
+            is told the image's history; one that goes on is told what happened since its last turn.
+        image_model: What the agent makes its images with: an OpenAI image model, through `generate_openai_image`,
+            or `chatgpt`, through `generate_chatgpt_image`; its calls to any other are refused. The default OpenAI image
+            model when that method is set up, else `chatgpt`, when None. See `list_image_methods`.
+        size, quality: What the person wants the image's calls to pass, which the agent is told; its own choice when
+            None. Only with an OpenAI image model, since ChatGPT chooses its own.
+        agent_provider: `codex` or `claude`; the resumed session's, else the first installed, when None.
+        model: The agent provider's model; its default when None. See `list_intelligence_models`.
+        reasoning_effort: The model's reasoning effort.
+        timeout_seconds: How long the agent may work before it is stopped; None for no limit.
+        origin: Who asked, such as `app`.
+        detach: Run the agent in a process of its own, which goes on when the caller exits.
+        intelligence: An agent to use in place of the agent provider's, such as a fake in tests. Not with `detach`.
+
+    Returns:
+        The run, once the agent's run is kept. Its `events()` yields what the agent says and the tools it calls,
+        `steer()` sends it a message, and `result()` waits for the `ImageResult`. The calls it makes are runs of their
+        own, which name it as their `parent`, and `read_image_activity` has them with it.
+    """
+    image_model = design_method.image_model(image_model, name, openai_method.describe(), chatgpt_method.describe())
+    return await design.design_image(
+        prompt=prompt,
+        name=name,
+        image_model=image_model,
+        size=size,
+        quality=quality,
+        directory=directory,
+        data_directory=data_directory,
+        references=references,
+        marks=marks,
+        mask=mask,
+        version=version,
+        frame=frame,
+        resume_session=resume_session,
+        agent_provider=agent_provider,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        timeout_seconds=timeout_seconds,
+        origin=origin,
+        detach=detach,
+        intelligence=intelligence,
+    )
+
+
+def steer_image(
+    name: str,
+    message: str,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    origin: str | None = None,
+    references: list[Path] | None = None,
+    marks: list[Mark] | None = None,
+) -> None:
+    """Send a message to the agent working on an image while it works, from any process.
+
+    The process running the agent delivers it within a second or so. `references` are shown to the agent with it, and
+    `marks` are drawn on the image's file.
+    """
+    design_steering.steer_image(name, message, directory, data_directory, origin, references, marks)
 
 
 def preview_openai_image_request(
@@ -216,7 +327,6 @@ def preview_openai_image_request(
     complexity: OpenAIImageComplexity | None = None,
     background: OpenAIImageBackground | None = None,
     compression: int | None = None,
-    count: int = 1,
     frames: int | None = None,
     frame_ms: int | None = None,
     previews: int = 0,
@@ -246,7 +356,6 @@ def preview_openai_image_request(
         complexity=complexity,
         background=background,
         compression=compression,
-        count=count,
         frames=frames,
         frame_ms=frame_ms,
         previews=previews,
@@ -487,6 +596,19 @@ def import_image(
     return image_imports.import_image(path, name, directory, data_directory, numbered)
 
 
+def add_image_version(
+    name: str, path: Path, directory: Path | None = None, data_directory: Path | None = None, parent: str | None = None
+) -> ImageSummary:
+    """Keep a file as the next version of an image, such as a crop or a composite a script made, and put it in the
+    image's file. The file is copied and left as it is.
+
+    It has to be in the image's format, except that any still image becomes a PNG for a .png. `parent` is the run of
+    the image's agent that made it, which the version names; the one the IMAGE_DESIGN_PARENT environment variable names
+    when None.
+    """
+    return image_versions.add_image_version(name, path, directory, data_directory, parent)
+
+
 def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
     """Delete an image's file and everything kept for it. A run working on it is stopped first."""
     manage_images.delete_image(name, directory, data_directory)
@@ -549,12 +671,16 @@ def relink_images(
 
 
 def list_image_methods() -> ImageMethods:
-    """The three ways of making an image, whether each is set up on this machine, and what each takes.
+    """The three ways of making an image and the agent that directs the first two, whether each is set up on this
+    machine, and what each takes.
 
     Set up means what a method needs is installed and, for the OpenAI API, that its key is set. Whether Codex or
     Claude is signed in is checked when a request is sent.
     """
-    return ImageMethods(openai=openai_method.describe(), chatgpt=chatgpt_method.describe(), svg=svg_method.describe())
+    openai, chatgpt = openai_method.describe(), chatgpt_method.describe()
+    return ImageMethods(
+        openai=openai, chatgpt=chatgpt, svg=svg_method.describe(), design=design_method.describe(openai, chatgpt)
+    )
 
 
 def openai_api_key_status() -> OpenAIKeyStatus:
@@ -600,10 +726,7 @@ def read_image_activity(
 
 
 def cancel_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
-    """Stop the run working on an image, from any process.
-
-    A request already sent may still be billed, or counted against a plan.
-    """
+    """Stop the run working on an image, from any process."""
     manage_images.cancel_image(name, directory, data_directory)
 
 
@@ -670,6 +793,8 @@ def app_server(directory: Path | None = None, data_directory: Path | None = None
         preview_chatgpt_image_request,
         draw_svg_image,
         steer_svg_image,
+        design_image,
+        steer_image,
         export_svg_image,
         cancel_image,
         app_folders.choose_files,

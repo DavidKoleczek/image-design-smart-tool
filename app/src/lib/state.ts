@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { readAppState, saveAppState, type AppState } from "@/lib/api";
-import { DEFAULT_SVG } from "@/lib/drawing";
+import { DEFAULT_DESIGN, DEFAULT_SVG } from "@/lib/drawing";
 import { movedFile } from "@/lib/images";
 import { keep } from "@/lib/kept";
 import { movedPath } from "@/lib/paths";
@@ -13,6 +13,7 @@ const DEFAULT_STATE: AppState = {
   method: "model",
   request: DEFAULT_REQUEST,
   svg: DEFAULT_SVG,
+  design: DEFAULT_DESIGN,
   closed_folders: [],
   pins: [],
   folders: [],

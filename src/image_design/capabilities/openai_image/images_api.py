@@ -42,7 +42,6 @@ class ApiRequest(BaseModel):
     background: OpenAIImageBackground | None = None
     output_format: ImageFormat
     compression: int | None = None
-    count: int = 1
     frames: int | None = None
     frame_ms: int | None = None
     previews: int = 0
@@ -78,7 +77,6 @@ def parameters(request: ApiRequest) -> dict[str, str | int | bool]:
         "background": request.background,
         "output_format": request.output_format,
         "output_compression": request.compression,
-        "n": request.count,
         "frame_count": request.frames,
         "frame_duration_ms": request.frame_ms,
         "partial_images": request.previews or None,

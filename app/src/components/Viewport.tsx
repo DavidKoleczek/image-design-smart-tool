@@ -258,6 +258,14 @@ export function Viewport({
 }) {
   const [box, setBox] = useState({ width: 0, height: 0 });
   const [view, setView] = useState(FITTED);
+  // A new image is fitted once its first file comes, whatever was done to the view while it was made.
+  const [hadFile, setHadFile] = useState(shown.width !== null);
+  if ((shown.width !== null) !== hadFile) {
+    setHadFile(shown.width !== null);
+    if (shown.width !== null) {
+      setView(FITTED);
+    }
+  }
   const [compare, setCompare] = useState(false);
   const [panning, setPanning] = useState(false);
   const [draft, setDraft] = useState<NewMark | null>(null);
@@ -673,7 +681,7 @@ export function Viewport({
     picture === null &&
     live === null &&
     image.versions.length === 0 &&
-    image.last_run !== null;
+    (image.last_run !== null || (image.design ?? null) !== null);
   const missing =
     picture !== null || live !== null || unmade
       ? null

@@ -27,6 +27,8 @@ const PREVIEW_TOOLS = {
   chatgpt: "preview_chatgpt_image_request",
 };
 const DRAW_TOOL = "draw_svg_image";
+const DESIGN_TOOL = "design_image";
+const STEER_IMAGE_TOOL = "steer_image";
 const STEER_TOOL = "steer_svg_image";
 const EXPORT_TOOL = "export_svg_image";
 const CANCEL_TOOL = "cancel_image";
@@ -129,6 +131,13 @@ export type ImageSummary = {
   versions: ImageVersion[];
   status: ImageRunStatus | null;
   last_run: ImageRun | null;
+  /** The agent's last run on the image's conversation; left out by a server that has no agent for images. */
+  design?: {
+    run_id: string;
+    status: ImageRunStatus;
+    /** ISO 8601. */
+    started: string;
+  } | null;
 };
 
 /** `ImageEvent` in schemas.py. */
@@ -230,7 +239,6 @@ export type OpenAIImageMethod = MethodSetup & {
   backgrounds: string[];
   /** The images a request can send, counting the image being edited. */
   max_images: number;
-  max_count: number;
   max_previews: number;
   /** The fewest and the most frames an animation can have. */
   frames: [number, number];
@@ -273,11 +281,21 @@ export type SvgImageMethod = MethodSetup & {
   export_formats: string[];
 };
 
+/** `DesignImageMethod` in schemas.py: the agent that writes the image calls, which the other methods make. */
+export type DesignImageMethod = MethodSetup & {
+  /** Those of the agent providers that are installed. */
+  models: IntelligenceModel[];
+  default: IntelligenceChoice;
+  /** What the agent makes its images with when none is picked: an OpenAI image model's id, or `chatgpt`. */
+  default_image_model: string;
+};
+
 /** `ImageMethods` in schemas.py. */
 export type ImageMethods = {
   openai: OpenAIImageMethod;
   chatgpt: ChatGPTImageMethod;
   svg: SvgImageMethod;
+  design: DesignImageMethod;
 };
 
 /** `AppImageRequest` in schemas.py: what was last picked for a request to an image model. */
@@ -290,7 +308,6 @@ export type AppImageRequest = {
   /** The extension a new still image's name ends in. */
   format: string;
   background: string;
-  count: number;
   /** `AppImageKind` in schemas.py: what a new image is. */
   kind: "image" | "animation";
   /** A new animation's width and height; null for the service's choice. */
@@ -317,6 +334,19 @@ export type AppSvgRequest = {
   /** Null for no limit, here and below. */
   max_bytes: number | null;
   timeout_seconds: number | null;
+};
+
+/** `AppDesignRequest` in schemas.py: what was last picked for the image's agent. */
+export type AppDesignRequest = {
+  /** Null for the default, here and below. */
+  agent_provider: string | null;
+  model: string | null;
+  reasoning_effort: string | null;
+  /** What it makes its images with: an OpenAI image model's id, or `chatgpt`. */
+  image_model: string | null;
+  /** A new image's size and quality, which it passes to its calls; null for its own choice. */
+  size: [number, number] | null;
+  quality: string | null;
 };
 
 /** `Mark` in schemas.py, as a request sends one: its points are fractions of the image from its top left. */
@@ -394,7 +424,6 @@ export type ImageRequest =
         complexity?: string;
         background: string;
         compression?: number;
-        count: number;
         /** For an animation; left out of an edit to keep its own. */
         frames?: number;
         frame_ms?: number;
@@ -449,6 +478,7 @@ export type AppState = {
   method: AppMethod;
   request: AppImageRequest;
   svg: AppSvgRequest;
+  design: AppDesignRequest;
   /** The folders closed in Your images, by their paths. */
   closed_folders: string[];
   /** The image files pinned as references, by their paths, newest first. */
@@ -737,6 +767,46 @@ export async function drawSvgImage(
     request,
     START_TIMEOUT_MS,
   )) as StartedRequest;
+}
+
+/** What `design_image` takes: a message to the agent that creates or edits the image, and what goes with it. */
+export type DesignRequest = RequestGuides & {
+  prompt: string;
+  name: string;
+  /** The upload holding the mask. */
+  mask?: string;
+  version?: string;
+  frame?: number;
+  resume_session: boolean;
+  /** What the agent makes its images with: an OpenAI image model's id, or `chatgpt`. */
+  image_model: string;
+  /** The size and quality it passes to its calls; left out for its own choice. */
+  size?: [number, number];
+  quality?: string;
+  agent_provider: string;
+  model: string;
+  reasoning_effort: string;
+};
+
+/** Start the agent on an image. It answers once the agent has started. */
+export async function designImage(
+  request: DesignRequest,
+): Promise<StartedRequest> {
+  return (await structuredFrom(
+    DESIGN_TOOL,
+    request,
+    START_TIMEOUT_MS,
+  )) as StartedRequest;
+}
+
+/** Leave a message for the agent working on an image, which it gets while it works. */
+export async function steerImage(request: {
+  name: string;
+  message: string;
+  references?: SentReference[];
+  marks?: SentMark[];
+}): Promise<void> {
+  await call(STEER_IMAGE_TOOL, request);
 }
 
 /** Leave a message for the agent drawing the SVG, which it gets while it works. */
