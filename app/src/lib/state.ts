@@ -16,6 +16,7 @@ const DEFAULT_STATE: AppState = {
   closed_folders: [],
   pins: [],
   folders: [],
+  tabs: [],
 };
 
 const store = keep<AppState>({
@@ -25,6 +26,7 @@ const store = keep<AppState>({
   what: "what you picked here",
 });
 let followed: string | null = null;
+let following: Promise<void> = Promise.resolve();
 
 /** Read what the person last picked for the images in the app's directory, before the view first paints. */
 export const loadAppState = store.load;
@@ -58,16 +60,17 @@ export function appStateNow(): AppState {
   return store.snapshot().value;
 }
 
-/** Read it again once the app shows another directory, whose picks are its own. */
-export function followDirectory(dataDirectory: string | null) {
+/** Read it again once the app shows another directory, whose picks are its own. Resolves once they are read. */
+export function followDirectory(dataDirectory: string | null): Promise<void> {
   if (dataDirectory === null || dataDirectory === followed) {
-    return;
+    return following;
   }
   const switched = followed !== null;
   followed = dataDirectory;
   if (switched) {
-    void store.moved();
+    following = store.moved();
   }
+  return following;
 }
 
 export function useAppState(): { state: AppState; error: string | null } {

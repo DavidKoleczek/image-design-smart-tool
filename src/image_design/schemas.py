@@ -770,6 +770,15 @@ class AppFolder(BaseModel):
     )
 
 
+class AppTab(BaseModel):
+    """An image open in a tab of the app."""
+
+    name: str = Field(description="The image's path in the directory, with forward slashes")
+    preview: bool = Field(
+        default=False, description="Whether the next image opened takes its place, since nothing was done in it yet"
+    )
+
+
 class ReferenceEntry(BaseModel):
     """An image file the app offers as a reference."""
 
@@ -777,6 +786,21 @@ class ReferenceEntry(BaseModel):
     path: Path
     width: int | None = Field(description="None for a drawing, which has no size in pixels, or a file not read")
     height: int | None
+
+
+class FolderReference(ReferenceEntry):
+    """An image in a folder pinned to show its files, or in a folder inside it."""
+
+    folder: str = Field(description="The folder it is in, from the pinned one, with forward slashes; empty for the top")
+
+
+class ReferenceFolderPage(BaseModel):
+    """Some of the images in a folder pinned to show its files, in the order the folder lists them."""
+
+    entries: list[FolderReference]
+    after: str | None = Field(
+        description="Where the next page starts, to pass back as `after`; None once every image is listed"
+    )
 
 
 class ReferenceLibrary(BaseModel):
@@ -803,7 +827,9 @@ class AppState(BaseModel):
     """app/app.json in a data directory: what the person last picked in the app for the images there."""
 
     method: AppMethod = Field(
-        default="model", description="The way of making an image picked last: an image model, or drawing an SVG"
+        default="model",
+        description="The way a new image was last made, which the next one starts on: an image model, or drawing an "
+        "SVG",
     )
     request: AppImageRequest = Field(default_factory=AppImageRequest)
     svg: AppSvgRequest = Field(default_factory=AppSvgRequest)
@@ -812,6 +838,7 @@ class AppState(BaseModel):
     )
     pins: list[Path] = Field(default_factory=list, description="The image files pinned as references, newest first")
     folders: list[AppFolder] = Field(default_factory=list, description="The folders pinned to find references in")
+    tabs: list[AppTab] = Field(default_factory=list, description="The images open in tabs, in the order they show")
     shown: str | None = Field(
         default=None,
         description="The image the app showed last, which it opens on. `show_image` and `open_app` set it, and a "

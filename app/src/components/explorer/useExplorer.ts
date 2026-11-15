@@ -52,6 +52,7 @@ export function useExplorer({
   closed,
   fixed,
   onOpen,
+  onOpenTab,
   onToggle,
   onMove,
   onCopy,
@@ -64,7 +65,7 @@ export function useExplorer({
   /** Everything there is, when `entries` is only some of it, so a name is known to be taken though it does not show. */
   every?: Entry[];
   view: View;
-  /** The file in view, which the selection goes to when something else brings another into view. */
+  /** The file in view, which the selection goes to when something else brings another into view; none clears it. */
   current: string | null;
   /** The folders that are closed in the details view. */
   closed: ReadonlySet<string>;
@@ -72,6 +73,8 @@ export function useExplorer({
   fixed: ReadonlySet<string>;
   /** A file was picked alone, by a click, an arrow, or Enter. */
   onOpen: (path: string) => void;
+  /** A file was asked to open in a tab of its own, by a double click or a middle click. */
+  onOpenTab: (path: string) => void;
   onToggle: (folder: string, open: boolean) => void;
   /** An entry was given another name, or put in another folder. `to` is free: a name that was taken has a number. */
   onMove: (from: string, to: string, folder: boolean) => void;
@@ -90,7 +93,10 @@ export function useExplorer({
   const [clip, setClip] = useState<Clip | null>(null);
   if (current !== followed) {
     setFollowed(current);
-    if (current !== null && !kept.paths.has(current)) {
+    // With no file in view, as while a new one is described, nothing that is there shows as picked.
+    if (current === null) {
+      setKept(NOTHING);
+    } else if (!kept.paths.has(current)) {
       setKept(only(current));
     }
   }
@@ -227,8 +233,16 @@ export function useExplorer({
     selection,
     editing,
     row: (path: string): Row | undefined => byPath.get(path),
+    /** The folder the selection is in, as a new file goes in: a folder picked, or the folder of a file; null for none. */
+    here: selection.lead === null ? null : folderBy(),
     select: setKept,
     pick,
+    /** Open a file in a tab of its own. */
+    openTab(path: string) {
+      if (byPath.get(path)?.folder === false) {
+        onOpenTab(path);
+      }
+    },
     toggle,
     folderAt,
     /** A click on an entry, as a file manager takes it with Ctrl or Shift held. */

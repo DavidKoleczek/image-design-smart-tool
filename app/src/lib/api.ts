@@ -50,6 +50,7 @@ const IMAGE_FRAME_PREFIX = "image-design://frames/";
 const FRAME_THUMBNAIL_PREFIX = "image-design://frame-thumbnails/";
 const RUN_PREVIEW_PREFIX = "image-design://previews/";
 const REFERENCE_PREFIX = "image-design://references/";
+const REFERENCE_FILE_PREFIX = "image-design://reference-files/";
 // In the URI of a thumbnail or a frame, names the image file where a version id would be.
 const FILE = "file";
 
@@ -343,6 +344,19 @@ export type ReferenceEntry = {
   height: number | null;
 };
 
+/** `FolderReference` in schemas.py: an image in a pinned folder, or in a folder inside it. */
+export type FolderReference = ReferenceEntry & {
+  /** The folder it is in, from the pinned one, with forward slashes; empty for the top. */
+  folder: string;
+};
+
+/** `ReferenceFolderPage` in schemas.py: some of the images in a pinned folder, in the order it lists them. */
+export type ReferenceFolderPage = {
+  entries: FolderReference[];
+  /** Where the next page starts; null once every image is listed. */
+  after: string | null;
+};
+
 /** `ReferenceLibrary` in schemas.py. */
 export type ReferenceLibrary = {
   pinned: ReferenceEntry[];
@@ -352,6 +366,9 @@ export type ReferenceLibrary = {
 
 /** `AppFolder` in schemas.py: a pinned folder, which lists its images in the app or opens the file dialog in it. */
 export type AppFolder = { path: string; shows: "files" | "dialog" };
+
+/** `AppTab` in schemas.py: an image open in a tab, which is a preview until something is done in it. */
+export type AppTab = { name: string; preview: boolean };
 
 /** What guides a request besides its prompt. */
 type RequestGuides = {
@@ -437,6 +454,8 @@ export type AppState = {
   /** The image files pinned as references, by their paths, newest first. */
   pins: string[];
   folders: AppFolder[];
+  /** The images open in tabs, in the order they show. */
+  tabs: AppTab[];
 };
 
 // Deleting an image first stops a run working on it, which the server waits on for up to 15 seconds.
@@ -803,8 +822,17 @@ export function readRunPreview(
 }
 
 /** A small copy of an image the app offers as a reference, by its path on the machine the app runs on. */
-export async function readReference(path: string): Promise<string> {
-  const uri = `${REFERENCE_PREFIX}${encodeURIComponent(path)}`;
+export function readReference(path: string): Promise<string> {
+  return readReferenceAt(REFERENCE_PREFIX, path);
+}
+
+/** An image the app offers as a reference as a request sends it, to show it large. */
+export function readReferenceFile(path: string): Promise<string> {
+  return readReferenceAt(REFERENCE_FILE_PREFIX, path);
+}
+
+async function readReferenceAt(prefix: string, path: string): Promise<string> {
+  const uri = `${prefix}${encodeURIComponent(path)}`;
   const result = await app.readServerResource({ uri });
   const content = result.contents[0];
   if (!content || !("blob" in content)) {
@@ -834,12 +862,15 @@ export async function readReferenceLibrary(): Promise<ReferenceLibrary> {
   return (await structuredFrom(LIBRARY_TOOL, {})) as ReferenceLibrary;
 }
 
-/** The images in a folder pinned to show its files. */
+/** A page of the images in a folder pinned to show its files and in the folders in it, from `after` when given. */
 export async function listReferenceFolder(
   path: string,
-): Promise<ReferenceEntry[]> {
-  const structured = await structuredFrom(FOLDER_TOOL, { path });
-  return structured.entries as ReferenceEntry[];
+  after: string | null,
+): Promise<ReferenceFolderPage> {
+  return (await structuredFrom(
+    FOLDER_TOOL,
+    after === null ? { path } : { path, after },
+  )) as ReferenceFolderPage;
 }
 
 /** Ask the person for image files in their platform's file dialog, opened in `folder` when given. */

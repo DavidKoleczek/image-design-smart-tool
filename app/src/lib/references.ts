@@ -3,13 +3,15 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   keepReference,
   readReference,
+  type ImageSummary,
+  type ImageVersion,
   type ReferenceEntry,
   type SentReference,
 } from "@/lib/api";
 import { maskPng, maskRevision } from "@/lib/canvas";
 import { describe } from "@/lib/errors";
 import { fileOf, movedFile } from "@/lib/images";
-import { movedPath } from "@/lib/paths";
+import { baseName, movedPath, splitName } from "@/lib/paths";
 import { onGone, onRenamed, rekey } from "@/lib/renames";
 import { updateAppState } from "@/lib/state";
 import { newUploadId, thumbOf, uploadFile } from "@/lib/uploads";
@@ -83,6 +85,38 @@ function ofEntry(entry: { name: string; path: string }): Reference {
     thumb: null,
     state: "ready",
   };
+}
+
+/**
+ * A version kept for an image, as a reference named after the image and the version, as the app names it once used.
+ */
+export function versionEntry(
+  image: ImageSummary,
+  version: ImageVersion,
+): ReferenceEntry {
+  const [stem] = splitName(baseName(image.name));
+  const [, extension] = splitName(fileName(version.file));
+  return {
+    name: `${stem}-${version.id}${extension}`,
+    path: version.file,
+    width: version.width,
+    height: version.height,
+  };
+}
+
+/**
+ * Why a version of an image cannot be a reference; null when it can. The version the image's file holds is the image
+ * itself, which is offered as that, and the version a request edits, its `edited`, is sent as what it edits.
+ */
+export function versionBlock(
+  image: ImageSummary,
+  version: ImageVersion,
+  edited: string | null,
+): string | null {
+  if (version.id === image.current) {
+    return `${version.id} is in ${baseName(image.name)}, so add the image itself`;
+  }
+  return version.id === edited ? `${version.id} is what is being edited` : null;
 }
 
 /** Add files the app offers to a request's references, up to `room` in all, each path once. */

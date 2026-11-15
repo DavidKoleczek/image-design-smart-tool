@@ -33,11 +33,11 @@ import {
   useFailures,
   usePreview,
 } from "@/lib/organize";
-import { baseName, folderOf, topmost } from "@/lib/paths";
+import { baseName, folderOf, topmost, within } from "@/lib/paths";
 import { filePicture } from "@/lib/pictures";
 import { onRenamed } from "@/lib/renames";
 import { updateSettings, useSettings } from "@/lib/settings";
-import { updateAppState, useAppState } from "@/lib/state";
+import { appStateNow, updateAppState, useAppState } from "@/lib/state";
 import { failed } from "@/lib/status";
 import { ago, useElapsed } from "@/lib/time";
 import { matching, type Entry } from "@/lib/tree";
@@ -159,8 +159,10 @@ export function ImagesPane({
   current,
   creating,
   search,
+  hereRef,
   onNew,
   onSelect,
+  onOpenTab,
   onRemove,
   onChanged,
   ...references
@@ -168,11 +170,14 @@ export function ImagesPane({
   listing: ImageListing | null;
   /** The name of the image in view; none while a new image is being described. */
   current: string | null;
-  /** Whether a new image is being described, which then has its own line at the top. */
-  creating: boolean;
+  /** The folder of the new image being described, which shows last in that folder; null while none is. */
+  creating: string | null;
   /** The search field, so a key can put focus in it. */
   search: RefObject<HTMLInputElement | null>;
-  onNew: () => void;
+  /** Kept up to date with the folder the selection is in, where a new image goes; null while none is selected. */
+  hereRef: RefObject<string | null>;
+  /** Start a new image in the folder, or by default where a new image goes. */
+  onNew: (folder?: string) => void;
   onSelect: (name: string) => void;
   /** Delete was asked for, of these images and folders, none of them inside another. */
   onRemove: (entries: Entry[]) => void;
@@ -212,6 +217,7 @@ export function ImagesPane({
     closed: searching ? NONE : new Set(state.closed_folders),
     fixed,
     onOpen: onSelect,
+    onOpenTab,
     onToggle: (folder, open) =>
       updateAppState((before) => ({
         ...before,
@@ -234,6 +240,29 @@ export function ImagesPane({
   });
   const { follow } = explorer;
   useEffect(() => onRenamed(follow), [follow]);
+  useEffect(() => {
+    hereRef.current = explorer.here;
+  }, [hereRef, explorer.here]);
+  useEffect(
+    () => () => {
+      hereRef.current = null;
+    },
+    [hereRef],
+  );
+  // A new image shows in the folder it goes in, which opens to show it, as do the folders that folder is in.
+  useEffect(() => {
+    if (
+      creating &&
+      appStateNow().closed_folders.some((folder) => within(creating, folder))
+    ) {
+      updateAppState((before) => ({
+        ...before,
+        closed_folders: before.closed_folders.filter(
+          (folder) => !within(creating, folder),
+        ),
+      }));
+    }
+  }, [creating]);
 
   /** Ask for image files in the machine's own file dialog, and bring them into the folder. */
   const addImages = (folder: string) =>
@@ -320,7 +349,7 @@ export function ImagesPane({
     if (entry === null) {
       return (
         <>
-          <MenuItem onClick={onNew}>
+          <MenuItem onClick={() => onNew("")}>
             <Icon name="add" />
             New image
           </MenuItem>
@@ -359,6 +388,10 @@ export function ImagesPane({
     if (entry.folder) {
       return (
         <>
+          <MenuItem onClick={() => onNew(path)}>
+            <Icon name="add" />
+            New image
+          </MenuItem>
           {making(path)}
           {adding(path)}
           <MenuSeparator />
@@ -390,6 +423,11 @@ export function ImagesPane({
     }
     return (
       <>
+        <MenuItem onClick={() => onOpenTab(path)}>
+          <Icon name="link-out" />
+          Open in a new tab
+        </MenuItem>
+        <MenuSeparator />
         <ReferenceItems name={path} {...references} />
         <MenuSeparator />
         {organizing(path)}
@@ -490,7 +528,11 @@ export function ImagesPane({
       </header>
       <div className="m-2 flex shrink-0 items-center gap-1.5">
         <Tooltip content="New image" keys="N">
-          <Button variant="secondary" aria-label="New image" onClick={onNew}>
+          <Button
+            variant="secondary"
+            aria-label="New image"
+            onClick={() => onNew()}
+          >
             <Icon name="add" />
             {/* The pane can be dragged narrower than the label and the search field need. */}
             <span className="hidden @3xs:inline">New image</span>
@@ -532,20 +574,23 @@ export function ImagesPane({
             <span className={COLUMNS.changed}>Changed</span>
           </div>
         }
-        before={
-          creating && (
-            <div
-              role="none"
-              className="mb-px flex h-6.5 items-center gap-2 rounded-sm bg-accent-soft pr-2 pl-6.5 whitespace-nowrap"
-            >
-              <span className="grid size-4.5 shrink-0 place-items-center rounded-[2px] border border-dashed border-line-control text-ink-muted">
-                <Icon name="add" className="size-3" />
-              </span>
-              <span className="min-w-10 flex-1 truncate font-medium">
-                New image
-              </span>
-            </div>
-          )
+        pending={
+          creating === null
+            ? undefined
+            : {
+                folder: creating,
+                label: "New image",
+                icon: (
+                  <span className="grid size-4.5 shrink-0 place-items-center rounded-[2px] border border-dashed border-line-control text-ink-muted">
+                    <Icon name="add" className="size-3" />
+                  </span>
+                ),
+                tile: (
+                  <span className="grid aspect-square w-full place-items-center rounded-sm border border-dashed border-line-control text-ink-muted">
+                    <Icon name="add" size={20} />
+                  </span>
+                ),
+              }
         }
       >
         {found.length === 0 && searching && (

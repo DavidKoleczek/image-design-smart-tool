@@ -1,8 +1,12 @@
 """The references the app offers: what the person pinned, what requests sent from the app were given, and the images
 in the folders they pinned."""
 
+from collections.abc import Iterator
+import os
 from pathlib import Path
+import re
 import shutil
+import stat
 import uuid
 
 from PIL import Image, UnidentifiedImageError
@@ -10,8 +14,10 @@ from PIL import Image, UnidentifiedImageError
 from image_design.capabilities.app.settings import STATE_FOLDER, moved_path
 from image_design.schemas import (
     AppState,
+    FolderReference,
     ImageDesignError,
     ReferenceEntry,
+    ReferenceFolderPage,
     ReferenceLibrary,
     UsedReference,
     UsedReferences,
@@ -25,8 +31,10 @@ USED = "used.json"
 KEPT = "pins"
 # What the app offers as used before, at most.
 USED_ENTRIES = 50
-# What a pinned folder lists, at most, so a folder of thousands still shows at once.
+# The images a pinned folder lists at a time, so a folder of thousands still shows at once and the rest on asking.
 FOLDER_ENTRIES = 500
+# The folders a pinned folder's listing goes into at a time, so one as large as a whole drive still answers soon.
+FOLDER_VISITS = 1000
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".tif", ".tiff")
 DRAWING_SUFFIXES = (".svg",)
 
@@ -35,14 +43,7 @@ def entry(path: Path, name: str | None = None) -> ReferenceEntry | None:
     """The image file at `path` as the app offers it; None when it is not a file any more."""
     if not path.is_file():
         return None
-    width = height = None
-    if path.suffix.lower() not in DRAWING_SUFFIXES:
-        try:
-            # Opening reads only the file's header, so a folder of large images still lists quickly.
-            with Image.open(path) as image:
-                width, height = image.size
-        except (UnidentifiedImageError, OSError):
-            pass
+    width, height = _size(path)
     return ReferenceEntry(name=name or path.name, path=path, width=width, height=height)
 
 
@@ -95,23 +96,35 @@ def is_used(data: Path, path: Path) -> bool:
     return any(each.path == path for each in _read_used(data).used)
 
 
-def list_folder(folder: Path) -> list[ReferenceEntry]:
-    """The images in a pinned folder, by name, leaving out hidden files and what is in its folders."""
+def list_folder(folder: Path, after: str | None = None) -> ReferenceFolderPage:
+    """A page of the images in a pinned folder and in the folders in it: those in a folder by name, then each folder
+    in it the same way. What is hidden is left out, and so are links to folders, which could lead back up.
+
+    A page ends at `FOLDER_ENTRIES` images or once it has gone into `FOLDER_VISITS` folders. Pass the `after` it
+    returns for the next.
+    """
+    entries: list[FolderReference] = []
+    visits = 0
+    reached = after
     try:
-        files = [
-            child
-            for child in folder.iterdir()
-            if not child.name.startswith(".") and child.suffix.lower() in IMAGE_SUFFIXES
-        ]
+        for at, path in _walk(folder, (), _place(after)):
+            if len(entries) >= FOLDER_ENTRIES or visits >= FOLDER_VISITS:
+                return ReferenceFolderPage(entries=entries, after=reached)
+            reached = at
+            if path is None:
+                visits += 1
+                continue
+            width, height = _size(path)
+            entries.append(
+                FolderReference(name=path.name, path=path, width=width, height=height, folder=at.rpartition("/")[0])
+            )
     except OSError as error:
         raise ImageDesignError(
             f"Could not read the pinned folder {folder}: {error}. If it moved, unpin it and pin it from where it is "
             "now.",
             "missing-folder",
         ) from None
-    files.sort(key=lambda child: child.name.lower())
-    entries = (entry(child) for child in files[:FOLDER_ENTRIES])
-    return [found for found in entries if found is not None]
+    return ReferenceFolderPage(entries=entries, after=None)
 
 
 def keep(source: Path, data: Path) -> Path:
@@ -147,3 +160,95 @@ def _read_used(data: Path) -> UsedReferences:
         return UsedReferences.model_validate_json((data / STATE_FOLDER / USED).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return UsedReferences()
+
+
+def _size(path: Path) -> tuple[int | None, int | None]:
+    if path.suffix.lower() in DRAWING_SUFFIXES:
+        return None, None
+    try:
+        # Opening reads only the file's header, so a folder of large images still lists quickly.
+        with Image.open(path) as image:
+            return image.size
+    except (UnidentifiedImageError, OSError):
+        return None, None
+
+
+# A name in the order a file manager lists it, whatever its case and with `2` before `10`: its runs of digits as
+# numbers between the text around them, so the same place in two names holds the same kind of piece.
+type _Order = tuple[tuple[int, str], ...]
+# Where an entry is in a pinned folder's listing: for each folder down to it and then the entry itself, whether it is
+# a folder, which comes after the images beside it, its name's order, and its name, to tell apart names that order
+# the same.
+type _Place = tuple[tuple[bool, _Order, str], ...]
+
+
+def _order(name: str) -> _Order:
+    pieces = re.split(r"(\d+)", name.casefold())
+    return tuple((int(piece), "") if index % 2 else (0, piece) for index, piece in enumerate(pieces))
+
+
+def _place(at: str | None) -> _Place:
+    """Where `at`, as `_walk` gives it, is in the listing; before everything for None."""
+    if not at:
+        return ()
+    names = at.removesuffix("/").split("/")
+    return tuple((index < len(names) - 1 or at.endswith("/"), _order(name), name) for index, name in enumerate(names))
+
+
+def _walk(directory: Path, place: _Place, start: _Place) -> Iterator[tuple[str, Path | None]]:
+    """What is in `directory` past `start`, in listing order: each image with its path, and each folder, with none,
+    before what is in it. Each comes with where the listing is once it is listed: its path from the pinned folder
+    with forward slashes, which ends in one for a folder."""
+    try:
+        images, folders = _scan(directory)
+    except OSError:
+        # A folder inside the pinned one that cannot be read is left out, as a file manager does.
+        if not place:
+            raise
+        return
+    inside = [name for _, _, name in place]
+    for name in images:
+        if (*place, (False, _order(name), name)) > start:
+            yield "/".join([*inside, name]), directory / name
+    for name in folders:
+        here = (*place, (True, _order(name), name))
+        if here > start:
+            yield "/".join([*inside, name, ""]), None
+        # A page that ended inside this folder goes on from there.
+        if here > start or start[: len(here)] == here:
+            yield from _walk(directory / name, here, start)
+
+
+def _scan(directory: Path) -> tuple[list[str], list[str]]:
+    """The names of the images and of the folders in `directory`, each in order, leaving out what is hidden and links
+    to folders."""
+    images: list[str] = []
+    folders: list[str] = []
+    # scandir rather than iterdir, since on Windows what it finds comes with the attribute that hides it.
+    with os.scandir(directory) as found:
+        for each in found:
+            try:
+                if each.is_dir(follow_symlinks=False):
+                    if not each.is_junction() and not _hidden(each):
+                        folders.append(each.name)
+                elif each.name.lower().endswith(IMAGE_SUFFIXES) and each.is_file() and not _hidden(each):
+                    images.append(each.name)
+            except OSError:
+                continue
+    return sorted(images, key=_ordered), sorted(folders, key=_ordered)
+
+
+def _ordered(name: str) -> tuple[_Order, str]:
+    return _order(name), name
+
+
+def _hidden(found: os.DirEntry[str]) -> bool:
+    """Whether the platform's file manager hides `found`: by the dot its name starts with, or by the attribute Windows
+    or the flag macOS marks it with."""
+    if found.name.startswith("."):
+        return True
+    status = found.stat(follow_symlinks=False)
+    return bool(
+        getattr(status, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_HIDDEN
+        or getattr(status, "st_flags", 0) & stat.UF_HIDDEN
+    )

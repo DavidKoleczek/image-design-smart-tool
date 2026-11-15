@@ -9,6 +9,7 @@ import type {
   SentReference,
 } from "@/lib/api";
 import type { CanvasMode } from "@/lib/canvas";
+import { baseName, joined } from "@/lib/paths";
 import { framePicture, type Picture } from "@/lib/pictures";
 import type { Reference } from "@/lib/references";
 import type { Shown } from "@/lib/viewed";
@@ -324,19 +325,42 @@ export function freeName(
   }
 }
 
+/** A name for a new image in `folder` that no image there has, without the folder or the extension. */
+export function freeNewName(
+  listing: ImageListing | null,
+  format: string,
+  folder: string,
+): string {
+  return baseName(freeName(listing, format, joined(folder, NEW_NAME)));
+}
+
+/** The folder a new image goes in: the one picked, while the directory has it, and otherwise the top. */
+export function folderIn(listing: ImageListing | null, picked: string): string {
+  return listing?.folders.includes(picked) ? picked : "";
+}
+
 /** An image's name without its extension, in its folder. */
 export function stem(name: string): string {
   const extension = extensionOf(name);
   return extension ? name.slice(0, -extension.length) : name;
 }
 
-/** A new image's name as typed, without an extension typed after it, since the format sets that. */
-export function typedName(typed: string, formats: string[]): string {
+/**
+ * A new image's name in `folder` as typed, without an extension typed after it, since the format sets that; "" while
+ * none is typed.
+ */
+export function typedName(
+  typed: string,
+  formats: string[],
+  folder: string,
+): string {
   const name = typed.trim().replaceAll("\\", "/");
   const extension = extensionOf(name);
-  return formats.includes(extension) || extension === DRAWING
-    ? name.slice(0, -extension.length)
-    : name;
+  const bare =
+    formats.includes(extension) || extension === DRAWING
+      ? name.slice(0, -extension.length)
+      : name;
+  return bare && joined(folder, bare);
 }
 
 /**

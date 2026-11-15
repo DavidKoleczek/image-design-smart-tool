@@ -15,6 +15,12 @@ import {
 import { describe } from "@/lib/errors";
 import { dimensions, methodLabel, usageLabel } from "@/lib/format";
 import { filePicture, versionPicture, type Picture } from "@/lib/pictures";
+import {
+  toggleEntry,
+  useReferences,
+  versionBlock,
+  versionEntry,
+} from "@/lib/references";
 import { isDrawing } from "@/lib/request";
 import type { Runs } from "@/lib/runs";
 import { ago, between } from "@/lib/time";
@@ -50,6 +56,13 @@ function facts(image: ImageSummary, shown: Shown, runs: Runs): string[] {
   ];
 }
 
+/** A version as a reference of the request on its image: whether it is one, and why it cannot be. */
+type Referring = {
+  picked: boolean;
+  blocked: string | null;
+  onToggle: () => void;
+};
+
 function Tile({
   label,
   picture,
@@ -58,6 +71,7 @@ function Tile({
   held,
   animated,
   about,
+  referring,
   onView,
 }: {
   label: string;
@@ -69,6 +83,8 @@ function Tile({
   animated: boolean;
   /** What made it, shown on hover. */
   about: string | null;
+  /** For a version, which can be a reference. */
+  referring?: Referring;
   onView: () => void;
 }) {
   const button = useRef<HTMLButtonElement>(null);
@@ -103,18 +119,48 @@ function Tile({
       </span>
     </button>
   );
-  return about ? (
+  const told = about ? (
     <Tooltip content={about} side="top">
       {tile}
     </Tooltip>
   ) : (
     tile
   );
+  if (!referring) {
+    return told;
+  }
+  const { picked, blocked, onToggle } = referring;
+  return (
+    <div className="group relative shrink-0">
+      {told}
+      <button
+        type="button"
+        aria-pressed={picked}
+        aria-disabled={blocked ? true : undefined}
+        aria-label={`${picked ? "Remove" : "Add"} ${label} as a reference`}
+        title={
+          blocked ?? (picked ? "Remove as a reference" : "Add as a reference")
+        }
+        onClick={() => !blocked && onToggle()}
+        className={cn(
+          "absolute top-1.5 right-1.5 grid size-5 place-items-center rounded-sm bg-panel/90 focus-visible:focus-ring focus-visible:outline-none",
+          picked
+            ? "text-accent-ink"
+            : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
+          !picked &&
+            (blocked ? "text-ink-faint" : "text-ink-muted hover:text-ink"),
+        )}
+      >
+        <Icon name="attach" />
+      </button>
+    </div>
+  );
 }
 
 /**
  * The versions kept for the image in view, oldest first, under what there is to say of the one that shows. Picking
- * one shows it; Restore puts it back in the image's file. Each version a run has yet to make holds its place.
+ * one shows it; Restore puts it back in the image's file. One the file does not hold can be added as a reference of
+ * the request on the image. Each version a run has yet to make holds its place.
  */
 export function Versions({
   image,
@@ -140,6 +186,10 @@ export function Versions({
 }) {
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The request on the image is kept under its name, and takes the versions before as references.
+  const references = useReferences(image.name);
+  const referred = new Set(references.map((reference) => reference.path));
+  const edited = shown.file ? null : (shown.version?.id ?? null);
   // A file that holds none of its versions, such as one changed by hand, shows beside them as itself.
   const loose =
     image.current === null &&
@@ -244,6 +294,18 @@ export function Versions({
               held={image.current === version.id}
               animated={version.frames > 1}
               about={about(version)}
+              referring={{
+                picked: referred.has(version.file),
+                blocked: referred.has(version.file)
+                  ? null
+                  : versionBlock(image, version, edited),
+                onToggle: () =>
+                  toggleEntry(
+                    image.name,
+                    versionEntry(image, version),
+                    Infinity,
+                  ),
+              }}
               onView={() => onView(version.id)}
             />
           ))}

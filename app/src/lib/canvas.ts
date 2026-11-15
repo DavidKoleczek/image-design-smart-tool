@@ -4,7 +4,10 @@ import type { Mark, MarkColor, NewMark } from "@/lib/marks";
 import { movedPath } from "@/lib/paths";
 import { onRenamed, rekey } from "@/lib/renames";
 
-/** What the canvas is for: marks and the mask are two ways to guide a request, and one shows at a time. */
+/**
+ * What the canvas is for: marks and the mask are two ways to guide a request, and one shows at a time. Each tab has
+ * its own.
+ */
 export type CanvasMode = "markup" | "mask";
 
 export type Tool =
@@ -22,7 +25,6 @@ const MASK_INK = "#f06e64";
 const SAMPLE = 4;
 
 type CanvasState = {
-  mode: CanvasMode;
   tool: Tool;
   color: MarkColor;
   /** The brush's width, in the image's pixels. */
@@ -48,7 +50,6 @@ const NO_GUIDES: Guides = {
 };
 const listeners = new Set<() => void>();
 let state: CanvasState = {
-  mode: "markup",
   tool: "circle",
   color: "red",
   brush: 64,
@@ -83,17 +84,16 @@ export function useCanvas(): CanvasState {
   return useSyncExternalStore(subscribe, () => state);
 }
 
-/** Switch what the canvas is for, to a tool of that mode. */
-export function setMode(mode: CanvasMode) {
+/** Switch to a tool of the mode the canvas is in now, when the one picked is not. */
+export function fitTool(mode: CanvasMode) {
   const keeps =
     state.tool === "pan" ||
     (mode === "mask"
       ? MASK_TOOLS.includes(state.tool)
       : !MASK_TOOLS.includes(state.tool));
-  change({
-    mode,
-    tool: keeps ? state.tool : mode === "mask" ? "brush" : "circle",
-  });
+  if (!keeps) {
+    change({ tool: mode === "mask" ? "brush" : "circle" });
+  }
 }
 
 export function setTool(tool: Tool) {

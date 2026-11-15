@@ -226,6 +226,15 @@ export function sentDrawing(name: string) {
   set(name, NOTHING);
 }
 
+/** Forget what was picked for a drawing, as once it is no longer being worked on. */
+export function dropDrawing(name: string) {
+  if (drawings.delete(name)) {
+    for (const listener of listeners) {
+      listener();
+    }
+  }
+}
+
 onRenamed((from, to) => {
   if (rekey(drawings, (name) => movedPath(name, from, to))) {
     for (const listener of listeners) {

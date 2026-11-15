@@ -31,6 +31,7 @@ from image_design.schemas import (
     AppLayout,
     AppSettings,
     AppState,
+    AppTab,
     ImageActivity,
     ImageDesignError,
     ImageListing,
@@ -343,7 +344,8 @@ async def test_the_view_files_images_in_folders_copies_and_imports_them_and_foll
         again = await client.call_tool("create_folder", {"name": "plants", "numbered": True})
         taken = await client.call_tool("create_folder", {"name": "plants"})
         await client.call_tool("show_image", {"name": "cactus.png"})
-        await client.call_tool("save_app_state", {"state": {"pins": [str(root / "cactus.png")]}})
+        tabs = [{"name": "cactus.png", "preview": True}, {"name": "photo.png"}]
+        await client.call_tool("save_app_state", {"state": {"pins": [str(root / "cactus.png")], "tabs": tabs}})
         moved = await client.call_tool("move_image", {"name": "cactus.png", "new_name": "plants/cactus.png"})
         numbered = await client.call_tool(
             "move_image", {"name": "photo.png", "new_name": "plants/cactus.png", "numbered": True}
@@ -377,8 +379,10 @@ async def test_the_view_files_images_in_folders_copies_and_imports_them_and_foll
     assert ImageSummary.model_validate(moved.structured_content).name == "plants/cactus.png"
     assert ImageSummary.model_validate(numbered.structured_content).name == "plants/cactus (2).png"
     assert renamed.structured_content == {"name": "garden"}
-    # What the app keeps by an image's name or path went with it: the image shown, a pin, and a reference used before.
+    # What the app keeps by an image's name or path went with it: the image shown, the tabs, a pin, and a reference
+    # used before.
     assert (followed.shown, followed.folders) == ("garden/cactus.png", ["garden", "plants (2)"])
+    assert state.tabs == [AppTab(name="garden/cactus.png", preview=True), AppTab(name="garden/cactus (2).png")]
     assert state.pins == [root / "garden/cactus.png"]
     assert [(entry.name, entry.path) for entry in offered.used] == [("cactus.png", root / "garden/cactus.png")]
     assert ImageSummary.model_validate(copied.structured_content).name == "garden/cactus (3).png"
@@ -614,6 +618,10 @@ async def test_the_view_guides_a_request_with_uploads_marks_and_the_references_t
     folder.mkdir()
     (folder / "palette.png").write_bytes(picture(640, 480, "#ff0000"))
     (folder / "notes.txt").write_text("Not an image.", encoding="utf-8")
+    (folder / "swatches").mkdir()
+    (folder / "swatches" / "teal.png").write_bytes(picture(48, 32, "#008080"))
+    (folder / ".cache").mkdir()
+    (folder / ".cache" / "hidden.png").write_bytes(picture(16, 16, "#000000"))
     elsewhere = tmp_path / "elsewhere.png"
     elsewhere.write_bytes(picture(64, 64, "#00ff00"))
     chosen = tmp_path / "chosen.png"
@@ -670,8 +678,13 @@ async def test_the_view_guides_a_request_with_uploads_marks_and_the_references_t
             "preview_openai_image_request", {**edit, "references": [{"path": str(elsewhere)}]}
         )
         [small] = (await client.read_resource(f"image-design://references/{quote(str(chosen), safe='')}")).contents
+        teal = folder / "swatches" / "teal.png"
+        [large] = (await client.read_resource(f"image-design://reference-files/{quote(str(teal), safe='')}")).contents
         with pytest.raises(MCPError) as unread:
             await client.read_resource(f"image-design://references/{quote(str(elsewhere), safe='')}")
+        climbed = folder / "swatches" / ".." / ".." / elsewhere.name
+        with pytest.raises(MCPError) as climbed_out:
+            await client.read_resource(f"image-design://reference-files/{quote(str(climbed), safe='')}")
         await client.call_tool("save_app_state", {"state": {**pinned, "pins": []}})
         unpinned = await client.call_tool("read_reference_library", {})
 
@@ -680,9 +693,13 @@ async def test_the_view_guides_a_request_with_uploads_marks_and_the_references_t
     assert picked_folder.structured_content == {"path": str(folder)}
     assert (kept.name, kept.width, kept.height, kept_content) == ("dropped.png", 800, 600, dropped)
     assert kept.path.is_relative_to(app_server.data_directory / "app" / "pins")
-    assert (in_folder.structured_content or {})["entries"] == [
-        {"name": "palette.png", "path": str(folder / "palette.png"), "width": 640, "height": 480}
-    ]
+    assert in_folder.structured_content == {
+        "entries": [
+            {"name": "palette.png", "path": str(folder / "palette.png"), "width": 640, "height": 480, "folder": ""},
+            {"name": "teal.png", "path": str(teal), "width": 48, "height": 32, "folder": "swatches"},
+        ],
+        "after": None,
+    }
     assert not_pinned.structured_content == {"reason": "missing-folder", "image": None}
     assert [entry["path"] for entry in (picked.structured_content or {})["entries"]] == [str(chosen)]
     assert ([entry.path for entry in library.pinned], library.used) == ([kept.path], [])
@@ -708,13 +725,78 @@ async def test_the_view_guides_a_request_with_uploads_marks_and_the_references_t
     assert outside.structured_content == {"reason": "not-a-reference", "image": None}
     assert isinstance(small, BlobResourceContents)
     assert small.mime_type == "image/webp"
+    assert isinstance(large, BlobResourceContents)
+    assert (large.mime_type, base64.b64decode(large.blob)) == ("image/png", teal.read_bytes())
     assert "is not an image the app offers as a reference" in str(unread.value)
+    assert "is not an image the app offers as a reference" in str(climbed_out.value)
     assert ReferenceLibrary.model_validate(unpinned.structured_content).pinned == []
     assert not kept.path.exists()
     # Closing the app clears the uploads no request took.
     app_server.close()
     assert not (tmp_path / "uploads" / ("a" * 32)).exists()
     assert len(images_api.requests) == 2
+
+
+async def test_a_version_given_as_a_reference_is_offered_again_under_its_image_s_name(
+    open_app: Callable[..., lib.AppServer], images_api: FakeImagesAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await made("A paper-cut cactus.", "cactus.png")
+    await made("Make it bloom.", "cactus.png")
+    app_server = open_app()
+    runs: list[lib.ImageRun] = []
+
+    # In this process, so the run can be waited on here; a run in a process of its own is the detached tests'.
+    async def generate_here(detach: bool, **arguments: Any) -> lib.ImageRun:
+        run = await lib.generate_openai_image(**arguments)
+        runs.append(run)
+        return run
+
+    monkeypatch.setattr(app_server, "_generate", {**app_server._generate, "generate_openai_image": generate_here})
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        [cactus] = (await listed(client)).images
+        first = cactus.versions[0]
+        started = await client.call_tool(
+            "generate_openai_image",
+            {"prompt": "A fern in its style.", "name": "fern.png", "references": [{"path": str(first.file)}]},
+        )
+        await runs[0].result()
+        library = ReferenceLibrary.model_validate(
+            (await client.call_tool("read_reference_library", {})).structured_content
+        )
+
+    assert (started.structured_content or {})["references"] == [str(first.file)]
+    assert [(entry.name, entry.path) for entry in library.used] == [("cactus-v1.png", first.file)]
+    assert len(images_api.requests) == 3
+
+
+@pytest.mark.parametrize(("entries", "visits"), [(2, 1000), (500, 1)])
+def test_a_pinned_folder_lists_the_folders_in_it_a_page_at_a_time_and_each_page_goes_on_where_the_last_ended(
+    entries: int, visits: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    names = ["b10.png", "b2.png", "A.png", "west/utah/arches.png", "west/canyon.jpg", "east/maine.png"]
+    for name in names:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_bytes(picture(8, 8, "#336699"))
+    (tmp_path / "empty").mkdir()
+    monkeypatch.setattr(library_module, "FOLDER_ENTRIES", entries)
+    monkeypatch.setattr(library_module, "FOLDER_VISITS", visits)
+
+    pages = [library_module.list_folder(tmp_path)]
+    while (after := pages[-1].after) is not None and len(pages) < 20:
+        pages.append(library_module.list_folder(tmp_path, after))
+
+    listed = [(entry.folder, entry.name) for page in pages for entry in page.entries]
+    assert listed == [
+        ("", "A.png"),
+        ("", "b2.png"),
+        ("", "b10.png"),
+        ("east", "maine.png"),
+        ("west", "canyon.jpg"),
+        ("west/utah", "arches.png"),
+    ]
+    assert len(pages) > 1
+    assert all(len(page.entries) <= entries for page in pages)
 
 
 async def test_the_view_has_the_key_typed_on_the_machine_and_never_sees_it(

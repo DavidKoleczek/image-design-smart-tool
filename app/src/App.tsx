@@ -1,46 +1,48 @@
-import { useEffect, useRef, useState } from "react";
+import { Activity, useEffect, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 
-import { Canvas } from "@/components/Canvas";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { DeleteDialog, RenameDialog } from "@/components/ImageMenu";
 import { ImagesPane } from "@/components/ImagesPane";
 import { ImageSwitcher } from "@/components/ImageSwitcher";
 import { KeyDialog } from "@/components/KeyDialog";
-import { RequestPane } from "@/components/RequestPane";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { StatusBar } from "@/components/StatusBar";
+import { TabStrip } from "@/components/TabStrip";
+import { TabView } from "@/components/TabView";
 import { TopBar, type NarrowPane, type Pane } from "@/components/TopBar";
 import { Segmented } from "@/components/ui/segmented";
 import { Workspace } from "@/components/Workspace";
-import { clearGuides, setMode, useCanvas, type CanvasMode } from "@/lib/canvas";
+import { fitTool, type CanvasMode } from "@/lib/canvas";
+import { draftOf, updateDraft, useDraft } from "@/lib/drafts";
+import { useGuidance } from "@/lib/guidance";
 import { onDisplay, requestDisplayMode } from "@/lib/host";
-import { NEW_IMAGE, updateDraft, useDraft } from "@/lib/drafts";
-import { sentDrawing } from "@/lib/drawing";
 import { useImages } from "@/lib/images";
 import { paneLayout, useBreakpoint } from "@/lib/layout";
-import { useMethods } from "@/lib/methods";
-import { addEntries, clearReferences } from "@/lib/references";
-import { onGone, renamed } from "@/lib/renames";
-import {
-  guideBlock,
-  isDrawing,
-  kindOf,
-  makesNew,
-  pickedModel,
-} from "@/lib/request";
-import { useRuns } from "@/lib/runs";
-import { updateSettings, useLayoutResets, useSettings } from "@/lib/settings";
+import { folderOf } from "@/lib/paths";
+import { addEntries, referencesOf } from "@/lib/references";
+import { renamed } from "@/lib/renames";
+import { folderIn } from "@/lib/request";
+import { updateSettings, useSettings } from "@/lib/settings";
 import { useShortcuts } from "@/lib/shortcuts";
+import { followDirectory } from "@/lib/state";
 import {
-  appStateNow,
-  followDirectory,
-  updateAppState,
-  useAppState,
-} from "@/lib/state";
+  activateTab,
+  bringUp,
+  closeOtherTabs,
+  closeTab,
+  closeTabsAfter,
+  keepTab,
+  keyOf,
+  openImage,
+  openNew,
+  openTabs,
+  updateTab,
+  useTabs,
+} from "@/lib/tabs";
 import type { Entry } from "@/lib/tree";
 import { cn } from "@/lib/utils";
-import { useViewed } from "@/lib/viewed";
+import { viewed } from "@/lib/viewed";
 
 function App() {
   const [root, breakpoint, width] = useBreakpoint();
@@ -50,70 +52,58 @@ function App() {
   });
   const [narrowPane, setNarrowPane] = useState<NarrowPane>("image");
   const [shortcuts, setShortcuts] = useState(false);
-  const { mode: pickedMode } = useCanvas();
-  const { listing, image, error, startNew, select, refresh } = useImages();
-  const { shown, before, view } = useViewed(image);
-  const runs = useRuns(image);
-  const { state } = useAppState();
-  const { methods } = useMethods();
-  const method = state.method;
-  const model =
-    methods && method === "model" ? pickedModel(state.request, methods) : null;
-  const draft = useDraft(image?.name ?? NEW_IMAGE);
-  // A request that makes a new image from the one in view takes neither marks nor a mask.
-  const fresh =
-    image !== null &&
-    methods !== null &&
-    makesNew(
-      image,
-      method,
-      model,
-      methods,
-      kindOf(image, draft.kind, state.request, model),
-    );
-  const blocks: Record<CanvasMode, string | null> = {
-    markup: guideBlock("markup", image, shown, model, fresh),
-    mask: guideBlock("mask", image, shown, model, fresh),
-  };
-  // Marks drawn while an agent draws the image go to it with the next message.
-  const steering = method === "svg" && image !== null && isDrawing(image.name);
-  // A mode the image or the model does not take gives way to marks, which every model takes.
-  const mode: CanvasMode | null =
-    blocks[pickedMode] === null
-      ? pickedMode
-      : blocks.markup === null
-        ? "markup"
-        : null;
+  const { listing, error, brought, refresh } = useImages();
+  const { tabs, active, current: tab } = useTabs();
+  const images = new Map(
+    (listing?.images ?? []).map((each) => [each.name, each]),
+  );
+  // The tab in view, whose image and mode the bars around the tabs show.
+  const image = tab?.image ? (images.get(tab.image) ?? null) : null;
+  const { shown } = viewed(image, tab?.version ?? null);
+  const { blocks, mode } = useGuidance(tab, image, shown);
+  const draft = useDraft(tab ? keyOf(tab) : "");
+  // The folder the new image in view goes in, which Your images shows it in.
+  const creating =
+    listing !== null && tab?.image === null && listing.images.length > 0
+      ? folderIn(listing, draft.folder)
+      : null;
   // The image a dialog is asking to rename, by its name, and the images and folders one is asking to delete.
   const [renaming, setRenaming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Entry[] | null>(null);
-  // So an image made later under the name of one that was deleted starts with nothing of that one.
-  useEffect(
-    () =>
-      onGone((name) => {
-        updateDraft(name, { prompt: "", size: null });
-        clearReferences(name);
-        clearGuides(name);
-        sentDrawing(name);
-      }),
-    [],
-  );
   const search = useRef<HTMLInputElement>(null);
+  // The folder a new image goes in by default: the one selected in Your images, or the one its selection is in.
+  const here = useRef<string | null>(null);
   const dataDirectory = listing?.data_directory ?? null;
-  useEffect(() => followDirectory(dataDirectory), [dataDirectory]);
-  const viewing = image?.name ?? null;
-  // An image opens on the method that made it: a drawing on SVG, anything else on an image model.
+  // The data directory whose picks are read, so its tabs can open.
+  const [ready, setReady] = useState<string | null>(null);
   useEffect(() => {
-    if (viewing === null) {
-      return;
+    let current = true;
+    void followDirectory(dataDirectory).then(() => {
+      if (current) {
+        setReady(dataDirectory);
+      }
+    });
+    return () => {
+      current = false;
+    };
+  }, [dataDirectory]);
+  useEffect(() => {
+    if (listing !== null && listing.data_directory === ready) {
+      openTabs(listing);
     }
-    const made = isDrawing(viewing) ? "svg" : "model";
-    if (appStateNow().method !== made) {
-      updateAppState((current) => ({ ...current, method: made }));
+  }, [listing, ready]);
+  useEffect(() => {
+    if (brought !== null) {
+      bringUp(brought);
     }
-  }, [viewing]);
+  }, [brought]);
+  // The tool picked fits what the canvas of the tab in view is for.
+  useEffect(() => {
+    if (mode !== null) {
+      fitTool(mode);
+    }
+  }, [mode, active]);
   const { settings } = useSettings();
-  const resets = useLayoutResets();
   const panes = { images: usePanelRef(), request: usePanelRef() };
   // A pane opened or closed from the top bar, which the next layout change saves like a drag.
   const toggled = useRef(false);
@@ -132,10 +122,7 @@ function App() {
   const layoutKey = breakpoint === "wide" ? "wide" : "medium";
   const layout = settings[layoutKey];
 
-  const saveLayout = (
-    widths: Record<"images" | "request", number>,
-    user: boolean,
-  ) => {
+  const saveLayout = (pane: Pane, size: number, user: boolean) => {
     if (!user && !toggled.current) {
       return;
     }
@@ -143,11 +130,8 @@ function App() {
     updateSettings((current) => ({
       ...current,
       [layoutKey]: {
-        images:
-          breakpoint === "wide"
-            ? paneLayout(widths.images, current[layoutKey].images)
-            : current[layoutKey].images,
-        request: paneLayout(widths.request, current[layoutKey].request),
+        ...current[layoutKey],
+        [pane]: paneLayout(size, current[layoutKey][pane]),
       },
     }));
   };
@@ -166,14 +150,40 @@ function App() {
   };
 
   const pickMode = (picked: CanvasMode) => {
-    if (blocks[picked] === null) {
-      setMode(picked);
+    if (tab && blocks[picked] === null) {
+      updateTab(tab.id, { mode: picked });
+      keepTab(tab.id);
     }
+  };
+
+  /**
+   * Start a new image in `folder`, by default the folder selected in Your images, or the one the image in view, or the
+   * new image in view, is in. A new image in view with nothing written for it yet is the one started. Returns what its
+   * request is kept under.
+   */
+  const startNew = (folder?: string): string => {
+    const where =
+      folder ??
+      here.current ??
+      (tab?.image ? folderOf(tab.image) : folderIn(listing, draft.folder));
+    if (tab && tab.image === null) {
+      const key = keyOf(tab);
+      const draft = draftOf(key);
+      if (
+        draft.prompt.trim() === "" &&
+        draft.name === null &&
+        referencesOf(key).length === 0
+      ) {
+        updateDraft(key, { folder: where });
+        return key;
+      }
+    }
+    return keyOf(openNew(where));
   };
 
   /** Add an image of the directory to the references of a request, which `key` names. */
   const refer = (name: string, key: string) => {
-    const added = listing?.images.find((each) => each.name === name);
+    const added = images.get(name);
     if (added) {
       addEntries(key, [{ name: added.name, path: added.path }], Infinity);
     }
@@ -184,7 +194,7 @@ function App() {
     "2": () => pickMode("mask"),
     "[": () => breakpoint === "wide" && togglePane("images"),
     "]": () => breakpoint !== "narrow" && togglePane("request"),
-    n: startNew,
+    n: () => startNew(),
     "/": () => {
       if (breakpoint !== "wide") {
         return;
@@ -201,47 +211,48 @@ function App() {
   });
 
   const picking = {
-    onSelect: select,
-    onUseInNew: (name: string) => {
-      refer(name, NEW_IMAGE);
-      startNew();
-    },
-    onAddReference: (name: string) =>
-      refer(name, image ? image.name : NEW_IMAGE),
+    onSelect: (name: string) => openImage(name),
+    onOpenTab: (name: string) => openImage(name, "keep"),
+    onUseInNew: (name: string) => refer(name, startNew()),
+    onAddReference: (name: string) => tab && refer(name, keyOf(tab)),
     source: image?.name ?? null,
   };
-  const canvas = (
-    <Canvas
-      listing={listing}
-      image={image}
-      shown={shown}
-      before={before}
-      runs={runs}
-      mode={mode}
-      tools={mode ?? "markup"}
-      blocked={mode === null ? blocks.markup : null}
-      steering={steering}
-      error={error}
-      onView={view}
-      onChanged={refresh}
-    />
-  );
-  const request = (
-    <RequestPane
-      listing={listing}
-      image={image}
-      shown={shown}
-      runs={runs}
-      mode={mode}
-      onUseInNew={picking.onUseInNew}
-      onCreated={async (name) => {
-        // Listed first, so the image is there to come into view.
-        await refresh();
-        select(name);
-      }}
-      onChanged={refresh}
-      onView={view}
-    />
+  const narrow = breakpoint === "narrow" ? narrowPane : null;
+  const work = (
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+      <TabStrip
+        tabs={tabs}
+        active={active}
+        images={images}
+        onActivate={activateTab}
+        onKeep={keepTab}
+        onClose={closeTab}
+        onCloseOthers={closeOtherTabs}
+        onCloseAfter={closeTabsAfter}
+        onNew={() => startNew()}
+      />
+      {tabs.map((each) => (
+        <Activity
+          key={each.id}
+          mode={each.id === active ? "visible" : "hidden"}
+        >
+          <TabView
+            tab={each}
+            active={each.id === active}
+            listing={listing}
+            error={error}
+            wide={breakpoint === "wide"}
+            narrow={narrow}
+            layout={layout}
+            width={width}
+            requestPanel={panes.request}
+            onLayout={(size, user) => saveLayout("request", size, user)}
+            onUseInNew={picking.onUseInNew}
+            onRefresh={refresh}
+          />
+        </Activity>
+      ))}
+    </div>
   );
 
   return (
@@ -259,7 +270,7 @@ function App() {
           <ImageSwitcher
             listing={listing}
             image={image}
-            onNew={startNew}
+            onNew={() => startNew()}
             onRename={setRenaming}
             onDelete={(name) => setDeleting([{ path: name, folder: false }])}
             {...picking}
@@ -269,7 +280,7 @@ function App() {
         onTogglePane={togglePane}
         narrowPane={narrowPane}
         onNarrowPane={setNarrowPane}
-        onNew={startNew}
+        onNew={() => startNew()}
         onExpand={
           display.expandable
             ? () => void requestDisplayMode("fullscreen")
@@ -300,37 +311,29 @@ function App() {
       />
       <main className="flex min-h-0 flex-1">
         <ErrorBoundary what="The workspace" className="m-4 flex-1">
-          {breakpoint === "narrow" ? (
-            <div className="flex min-w-0 flex-1 flex-col">
-              {narrowPane === "image" ? canvas : request}
-            </div>
-          ) : (
+          {breakpoint === "wide" ? (
             <Workspace
-              key={`${layoutKey}-${resets}`}
-              wide={breakpoint === "wide"}
               layout={layout}
               width={width}
-              panes={panes}
+              imagesPanel={panes.images}
               images={
                 <ImagesPane
                   listing={listing}
                   current={image?.name ?? null}
-                  creating={
-                    listing !== null &&
-                    image === null &&
-                    listing.images.length > 0
-                  }
+                  creating={creating}
                   search={search}
+                  hereRef={here}
                   onNew={startNew}
                   onRemove={setDeleting}
                   onChanged={refresh}
                   {...picking}
                 />
               }
-              canvas={canvas}
-              request={request}
-              onChanged={saveLayout}
+              tabs={work}
+              onChanged={(size, user) => saveLayout("images", size, user)}
             />
+          ) : (
+            work
           )}
         </ErrorBoundary>
       </main>

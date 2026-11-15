@@ -474,8 +474,8 @@ class AppServer:
 The server has one tool for an agent, `open_app`. It opens the browser page and returns its URL. It also takes `directory` and `data_directory`, and switches the app to them when the directory can be listed, and `name`, an image to bring up as `show` does.
 The other tools are for the view. They are listed only to hosts that render MCP Apps, and marked for the app alone. The view and the resource templates are listed to the same hosts.
 
-- `list_images`, `view_image`, `move_image`, `copy_image`, `delete_image`, `create_folder`, `move_folder`, `delete_folder`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's directory. `view_image` writes no frames out. After an image or a folder moves, the image the app shows, the pins, and the used references follow it.
-- `list_images` first calls `relink_images`, so an image moved outside the app is listed where its file is. It also returns `shown`, the image the app showed last, and `likely`, the images `relink_images` left as likely.
+- `list_images`, `view_image`, `move_image`, `copy_image`, `delete_image`, `create_folder`, `move_folder`, `delete_folder`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's directory.
+  - `list_images` first calls `relink_images`, so an image moved outside the app is listed where its file is. It also returns `shown`, the image the app showed last, and `likely`, the images `relink_images` left as likely.
 - `relink_image` relinks one of those images to its likely file.
 - `import_image` brings an upload into the app's directory as a new image, in a `folder` or at the top. `choose_image_files` asks the user for files in the platform's file dialog and imports each. It returns the images, and the reason for each file it refused.
 - `show_image` records the image the user is looking at, which the app opens on next time.
@@ -485,13 +485,13 @@ The other tools are for the view. They are listed only to hosts that render MCP 
 - `steer_svg_image` leaves a message for the agent drawing an image, with `references` and `marks`. The message holds copies of what it was given, so the uploads it took are cleared.
 - `export_svg_image` asks the user where to save in the platform's save dialog, then renders the drawing, or one of its versions, there at a `scale` of its canvas.
 - `upload_file` takes a file from the view in base64 pieces, under an ID the view makes up: a reference dropped or pasted into the app, an image file dropped on Your images, or the mask painted in it. Uploads wait in `image-design-uploads` in the system's temp folder. One that nothing takes is cleared when the app closes, or by the next app to start a day later.
-- `read_reference_library` returns the references the app offers besides the images in its directory: the pinned files, and what requests sent from the app were given before.
-- `list_reference_folder` returns the images in a folder pinned to show its files.
+- `read_reference_library` returns the references the app offers besides the images in its directory: the pinned files, and what requests sent from the app were given before. A version kept for an image is named after the image and the version.
+- `list_reference_folder` returns a page of the images in a folder pinned to show its files and in the folders inside it, each with the folder it is in. Hidden files and folders, and links to folders, are left out. A page ends at 500 images or after 1,000 folders, so even a whole drive answers quickly. Pass its `after` to get the next page.
 - `choose_reference_files` and `choose_reference_folder` ask the user in the platform's own file dialog, which needs Tk in the Python that runs the app.
 - `keep_reference` copies an upload into `app/pins` in the data directory, so a dropped image can be pinned. The copy is cleared once the state is saved without it among the pins.
 - `read_openai_key`, `enter_openai_key`, and `clear_openai_key` are over `openai_api_key_status`, `save_openai_api_key`, and `clear_openai_api_key`. None takes or returns the key. `enter_openai_key` has the user type it into a window on the machine the server runs on, so the key is in no message between the view, its host, and the server.
 - `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, whether a request's advanced options show, and the pane sizes.
-- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, whether a new image is a still image or an animation, the agent and budgets for a new drawing, and the pinned references and folders. The image the app shows is kept there too, but only `show_image`, `show`, and `open_app` change it.
+- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, whether a new image is a still image or an animation, the agent and budgets for a new drawing, the pinned references and folders, and the images open in tabs, each with whether it is a preview that the next image opened takes.
 
 The view reads images as resources, each as base64. A read is refused unless the listing has that image or version, the version has that frame, or the image's activity has that preview.
 
@@ -501,7 +501,8 @@ The view reads images as resources, each as base64. A read is refused unless the
 - `image-design://frames/{version}/{index}/{+name}` is one frame of a version as a PNG, by its index from 0. Use `file` as the version for the image's file.
 - `image-design://frame-thumbnails/{version}/{index}/{+name}` is a WebP of one frame that fits 256 by 256 pixels.
 - `image-design://previews/{run}/{index}/{+name}` is an in-progress image of a run. `run` is the run's ID, and `index` is the one its `preview` event has.
-- `image-design://references/{+path}` is a WebP that fits 256 by 256 pixels of an image the app offers as a reference, by its path on the machine. It is refused unless the file is an image in the app's directory, pinned, in a folder pinned to show its files, used before, chosen in the file dialog, or kept in the data directory as a version or as a copy of what a run was given. A request's references are held to the same rule.
+- `image-design://references/{+path}` is a WebP that fits 256 by 256 pixels of an image the app offers as a reference, by its path on the machine. It is refused unless the file is an image in the app's directory, pinned, anywhere inside a folder pinned to show its files, used before, chosen in the file dialog, or kept in the data directory as a version or as a copy of what a run was given. A request's references are held to the same rule.
+- `image-design://reference-files/{+path}` is the same reference as a request sends it, so the view can show it large: a PNG, JPEG, or WebP as it is, and any other image as a PNG. It is held to the same rule.
 
 The app keeps what it remembers in these files:
 

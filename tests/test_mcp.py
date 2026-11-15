@@ -71,6 +71,7 @@ IMAGE_RESOURCES = (
     "image-design://frame-thumbnails/{version}/{index}/{+name}",
     "image-design://previews/{run}/{index}/{+name}",
     "image-design://references/{+path}",
+    "image-design://reference-files/{+path}",
 )
 
 

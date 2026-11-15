@@ -14,6 +14,7 @@ import {
   RunResult,
 } from "@/components/activity/RunParts";
 import { StepBlock } from "@/components/activity/StepBlock";
+import { NewImageName } from "@/components/NewImageName";
 import { PromptPicker } from "@/components/PromptPicker";
 import { ReferenceLibrary } from "@/components/ReferenceLibrary";
 import { References } from "@/components/References";
@@ -61,7 +62,7 @@ import {
   useGuides,
   type CanvasMode,
 } from "@/lib/canvas";
-import { NEW_IMAGE, updateDraft, useDraft } from "@/lib/drafts";
+import { dropDraft, updateDraft, useDraft } from "@/lib/drafts";
 import {
   agentOf,
   budgetsOf,
@@ -93,7 +94,9 @@ import {
 } from "@/lib/references";
 import {
   DRAWING,
+  folderIn,
   freeName,
+  freeNewName,
   sourcePicture,
   stem,
   typedName,
@@ -141,6 +144,9 @@ function same(a: [number, number], b: [number, number] | null): boolean {
  */
 function DrawTarget({
   target,
+  newKey,
+  listing,
+  folder,
   typed,
   canRestart,
   onRestart,
@@ -148,6 +154,11 @@ function DrawTarget({
   children,
 }: {
   target: Target;
+  /** What a new drawing's request is kept under. */
+  newKey: string;
+  listing: ImageListing | null;
+  /** The folder a new drawing goes in, "" for the top. */
+  folder: string;
   /** A new drawing's name as it stands in the field. */
   typed: string;
   /** Whether "Start a new conversation" can be picked: the drawing has one, and the next request continues it. */
@@ -214,24 +225,13 @@ function DrawTarget({
             </Menu>
           </>
         ) : (
-          <>
-            <span className="grid size-11 shrink-0 place-items-center rounded-sm border border-dashed border-line-control text-ink-muted">
-              <Icon name="add" size={20} />
-            </span>
-            <label className="flex h-7 min-w-0 flex-1 items-center gap-0.5 rounded-sm border border-line-control bg-field px-2 focus-within:border-ink focus-within:bg-panel focus-within:focus-ring">
-              <input
-                aria-label="Name"
-                spellCheck={false}
-                autoComplete="off"
-                value={typed}
-                onChange={(event) =>
-                  updateDraft(NEW_IMAGE, { name: event.target.value })
-                }
-                className="min-w-0 flex-1 bg-transparent mono-value text-ink outline-none"
-              />
-              <span className="mono-value text-ink-muted">{DRAWING}</span>
-            </label>
-          </>
+          <NewImageName
+            draftKey={newKey}
+            listing={listing}
+            folder={folder}
+            typed={typed}
+            extension={DRAWING}
+          />
         )}
       </div>
       {children}
@@ -858,6 +858,7 @@ export function DrawPane({
   shown,
   runs,
   mode,
+  newKey,
   onUseInNew,
   onCreated,
   onChanged,
@@ -869,6 +870,7 @@ export function DrawPane({
   shown: Shown | null;
   runs: Runs;
   mode: CanvasMode | null;
+  newKey: string;
   onUseInNew: (name: string) => void;
   onCreated: (name: string) => Promise<void>;
   onChanged: () => Promise<void>;
@@ -876,9 +878,9 @@ export function DrawPane({
 }) {
   const { state } = useAppState();
   const options = state.svg;
-  const key = image ? image.name : NEW_IMAGE;
+  const key = image ? image.name : newKey;
   const draft = useDraft(key);
-  const newDraft = useDraft(NEW_IMAGE);
+  const newDraft = useDraft(newKey);
   const references = useReferences(key);
   const guides = useGuides(key, shown?.picture?.key ?? null);
   const drawing = useDrawing(key);
@@ -893,7 +895,10 @@ export function DrawPane({
     budget: true,
   });
 
-  const typed = newDraft.name ?? freeName(listing, DRAWING);
+  const folder = folderIn(listing, newDraft.folder);
+  const typed = newDraft.name ?? freeNewName(listing, DRAWING, folder);
+  // A version the image's file does not hold is what is drawn from, so it is no reference.
+  const edited = shown && !shown.file ? (shown.version?.id ?? null) : null;
   const editing = image !== null && image.name.toLowerCase().endsWith(DRAWING);
   // Of an animation, the frame picked is what the agent is shown.
   const frame = useSourceFrame(image, shown, mode);
@@ -908,7 +913,7 @@ export function DrawPane({
             name: freeName(listing, DRAWING, stem(from.image.name)),
             from,
           }
-        : { image: null, name: typedName(typed, []), from: null };
+        : { image: null, name: typedName(typed, [], folder), from: null };
   const agent = agentOf(options, methods);
   const conversation = editing ? conversationOf(image) : null;
   const providerChanged =
@@ -982,14 +987,16 @@ export function DrawPane({
           onView(null);
           await onChanged();
         } else {
-          if (!target.from) {
-            updateDraft(NEW_IMAGE, { name: null });
-          }
           await onCreated(started.name);
         }
       }
-      // What a message was given goes with it; the next one starts empty.
-      updateDraft(key, { prompt: "" });
+      // What a message was given goes with it; the next one starts empty. A new drawing's request was for the drawing
+      // alone, which is in view from now on.
+      if (target.image || target.from) {
+        updateDraft(key, { prompt: "" });
+      } else {
+        dropDraft(key);
+      }
       clearReferences(key);
     } catch (cause) {
       setFailure(
@@ -1027,6 +1034,9 @@ export function DrawPane({
   const targetBlock = (
     <DrawTarget
       target={target}
+      newKey={newKey}
+      listing={listing}
+      folder={folder}
       typed={typed}
       canRestart={resume}
       onRestart={() => changeDrawing(key, { fresh: true })}
@@ -1092,6 +1102,7 @@ export function DrawPane({
             noun="reference"
             listing={listing}
             source={image?.name ?? null}
+            edited={edited}
             onError={setFailure}
           />
           <Section
@@ -1306,6 +1317,7 @@ export function DrawPane({
         full={null}
         listing={listing}
         source={image.name}
+        edited={edited}
       />
     </div>
   );

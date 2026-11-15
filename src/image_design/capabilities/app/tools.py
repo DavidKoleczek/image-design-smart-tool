@@ -11,6 +11,7 @@ RUN_PREVIEW_PREFIX = "image-design://previews/"
 IMAGE_FRAME_PREFIX = "image-design://frames/"
 FRAME_THUMBNAIL_PREFIX = "image-design://frame-thumbnails/"
 REFERENCE_PREFIX = "image-design://references/"
+REFERENCE_FILE_PREFIX = "image-design://reference-files/"
 # In the URI of a thumbnail or a frame, names the image's file where a version's id would be.
 FILE = "file"
 APP_ONLY = {"ui": {"resourceUri": VIEW_URI, "visibility": ["app"]}}
@@ -456,10 +457,18 @@ READ_LIBRARY = Tool(
 )
 LIST_FOLDER = Tool(
     name="list_reference_folder",
-    description="The images in a folder the person pinned to show its files. Called by the view.",
+    description="A page of the images in a folder the person pinned to show its files and in the folders in it, "
+    "leaving out what is hidden. Returns them, each with the folder it is in, and `after` for the next page, or none "
+    "once every image is listed. Called by the view.",
     input_schema={
         "type": "object",
-        "properties": {"path": {"type": "string", "description": "The pinned folder's path"}},
+        "properties": {
+            "path": {"type": "string", "description": "The pinned folder's path"},
+            "after": {
+                "type": "string",
+                "description": "The `after` an earlier page returned, to list what follows it. Omit it for the first",
+            },
+        },
         "required": ["path"],
     },
     _meta=APP_ONLY,
@@ -594,4 +603,19 @@ REFERENCE = ResourceTemplate(
     "the app's directory, one that is pinned, in a folder pinned to show its files, used before, chosen in the file "
     "dialog, or kept for an image: a version, or a copy of what a run was given. As base64, for the app's view.",
 )
-IMAGE_RESOURCES = [IMAGE_FILE, IMAGE_VERSION, IMAGE_THUMBNAIL, IMAGE_FRAME, FRAME_THUMBNAIL, RUN_PREVIEW, REFERENCE]
+REFERENCE_FILE = ResourceTemplate(
+    name="Reference file",
+    uri_template=f"{REFERENCE_FILE_PREFIX}{{+path}}",
+    description="An image the app offers as a reference, by its path on this machine, as a request sends it: a PNG, "
+    "JPEG, or WebP as it is, and any other image as a PNG. As base64, for the app's view to show it large.",
+)
+IMAGE_RESOURCES = [
+    IMAGE_FILE,
+    IMAGE_VERSION,
+    IMAGE_THUMBNAIL,
+    IMAGE_FRAME,
+    FRAME_THUMBNAIL,
+    RUN_PREVIEW,
+    REFERENCE,
+    REFERENCE_FILE,
+]

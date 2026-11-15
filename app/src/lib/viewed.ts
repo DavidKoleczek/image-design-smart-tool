@@ -1,5 +1,3 @@
-import { useCallback, useState } from "react";
-
 import type { ImageSummary, ImageVersion } from "@/lib/api";
 import { filePicture, versionPicture, type Picture } from "@/lib/pictures";
 
@@ -51,34 +49,14 @@ function beforeOf(image: ImageSummary, shown: Shown): ImageVersion | null {
   return image.versions.at(-1) ?? null;
 }
 
-/**
- * Which version of the image in view shows. It starts on what the image's file holds, and goes back to that when
- * another image comes into view.
- */
-export function useViewed(image: ImageSummary | null): {
-  shown: Shown | null;
-  before: ImageVersion | null;
-  /** Show the version with this id; null for what the image's file holds. */
-  view: (version: string | null) => void;
-} {
-  const [viewing, setViewing] = useState<{
-    image: string;
-    version: string;
-  } | null>(null);
-  // An image that has versions has an id, which it keeps when it is renamed, so the version in view stays in view.
-  const key = image === null ? null : (image.id ?? image.name);
-
-  const view = useCallback(
-    (version: string | null) =>
-      setViewing(
-        key !== null && version !== null ? { image: key, version } : null,
-      ),
-    [key],
-  );
-
+/** What of the image shows, `version` by its id or null for what its file holds, and the version before it. */
+export function viewed(
+  image: ImageSummary | null,
+  version: string | null,
+): { shown: Shown | null; before: ImageVersion | null } {
   if (image === null) {
-    return { shown: null, before: null, view };
+    return { shown: null, before: null };
   }
-  const shown = shownOf(image, viewing?.image === key ? viewing.version : null);
-  return { shown, before: beforeOf(image, shown), view };
+  const shown = shownOf(image, version);
+  return { shown, before: beforeOf(image, shown) };
 }

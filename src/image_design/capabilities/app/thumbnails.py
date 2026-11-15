@@ -3,7 +3,7 @@
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from image_design.schemas import ImageDesignError
 from image_design.shared.images import pictures
@@ -24,7 +24,10 @@ def thumbnail(path: Path, edge: int) -> bytes:
         else:
             source = BytesIO(path.read_bytes())
         with Image.open(source) as image:
-            small = image.convert("RGBA")
+            # A JPEG decodes at a fraction of its size that still covers the edge, so a folder of photos lists fast.
+            image.draft(None, (edge, edge))
+            # Turned as its camera recorded, as a browser shows the file itself.
+            small = ImageOps.exif_transpose(image).convert("RGBA")
     except (UnidentifiedImageError, OSError) as error:
         raise ImageDesignError(f"{path} could not be read as an image: {error}.") from None
     return _webp(small, edge)

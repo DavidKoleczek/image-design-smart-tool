@@ -13,27 +13,27 @@ import { movedPath, within } from "@/lib/paths";
 import { poll } from "@/lib/poll";
 import { gone, onRenamed, rekey, renamed } from "@/lib/renames";
 
-/** What is in view: an image by its name, or the new image being described. */
-type Viewing = { image: string } | "new";
+/** An image the server was asked to bring up, as `open_app` from the host session does, in the directory it is in. */
+export type Brought = { name: string; dataDirectory: string };
 
 type Images = {
   listing: ImageListing | null;
-  /** The image in view; none while a new image is being described, or the directory has none. */
-  image: ImageSummary | null;
   error: string | null;
+  /** The image the server was last asked to bring up from anywhere but here; a new object each time it is asked. */
+  brought: Brought | null;
 };
 
 const listeners = new Set<() => void>();
 // The listing as the server gave it, and what `changes` knows it by.
 let read: { listing: ImageListing; asked: number } | null = null;
-let viewing: Viewing | null = null;
+let brought: Brought | null = null;
 let error: string | null = null;
 // The image the app shows as the server last had it; undefined before the first listing.
 let followed: string | null | undefined = undefined;
 // Counts the picks made here as each starts and as it is recorded. A listing asked for across one may still have the
 // image shown before it, so it does not move the view.
 let picks = 0;
-let state: Images = { listing: null, image: null, error: null };
+let state: Images = { listing: null, error: null, brought: null };
 const NOTHING_ARRIVING: ReadonlyMap<string, string> = new Map();
 // The images that show while their files are still going up, each with the upload it goes up as.
 let arriving = NOTHING_ARRIVING;
@@ -158,14 +158,7 @@ function show(shown: Shown | null) {
   if (shown !== null) {
     arriving = shown.arriving;
   }
-  const images = listing?.images ?? [];
-  const wanted = viewing !== null && viewing !== "new" ? viewing.image : null;
-  const picked = images.find((image) => image.name === wanted);
-  state = {
-    listing,
-    image: viewing === "new" ? null : (picked ?? images[0] ?? null),
-    error,
-  };
+  state = { listing, error, brought };
   for (const listener of listeners) {
     listener();
   }
@@ -181,11 +174,7 @@ changes.subscribe(reshow);
 // Once every change is made, what the server has is what shows, so it is read without waiting for the next poll.
 changes.onDrained(() => void refresh());
 
-// What is in view stays in view under the name it has now.
 onRenamed((from, to) => {
-  if (viewing !== null && viewing !== "new") {
-    viewing = { image: movedPath(viewing.image, from, to) };
-  }
   if (followed) {
     followed = movedPath(followed, from, to);
   }
@@ -247,7 +236,7 @@ async function refresh(): Promise<void> {
     if (across === picks && shown !== followed) {
       followed = shown;
       if (shown !== null) {
-        viewing = { image: shown };
+        brought = { name: shown, dataDirectory: fresh.data_directory };
       }
     }
     read = { listing: fresh, asked };
@@ -260,16 +249,9 @@ async function refresh(): Promise<void> {
   }
 }
 
-function startNew() {
-  viewing = "new";
-  reshow();
-}
-
-/** Bring the image into view, and record it as the one the app shows. */
-function select(name: string) {
-  viewing = { image: name };
+/** Record the image as the one the app shows, which it opens on, once it is in view here. */
+export function recordShown(name: string) {
   picks += 1;
-  reshow();
   showImage(name)
     .then(
       () => {
@@ -285,20 +267,17 @@ function select(name: string) {
 }
 
 /**
- * The images in the app's directory, polled, and which one is in view. Call it in one place, since each call polls.
+ * The images in the app's directory, polled, and the one the server was last asked to bring up. Call it in one place,
+ * since each call polls.
  *
- * The view opens on the image the app showed last, or the first one when it showed none. After that it changes when
- * the person picks an image or starts a new one, and when the server is asked to bring another image up, as `open_app`
- * from the host session does. An image made or changed anywhere else never takes the view.
+ * An image is brought up when the server is asked to from anywhere but here, as `open_app` from the host session
+ * does, and with the first listing of a directory when the app showed one there before. An image made or changed
+ * anywhere else is never brought up.
  */
-export function useImages(): Images & {
-  startNew: () => void;
-  select: (name: string) => void;
-  refresh: () => Promise<void>;
-} {
+export function useImages(): Images & { refresh: () => Promise<void> } {
   useEffect(() => poll(refresh), []);
   const images = useSyncExternalStore(subscribe, () => state);
-  return { ...images, startNew, select, refresh };
+  return { ...images, refresh };
 }
 
 /** The images that show while their files are still going up, each by its name with the upload it goes up as. */

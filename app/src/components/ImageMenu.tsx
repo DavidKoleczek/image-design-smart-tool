@@ -15,6 +15,8 @@ import type { Entry } from "@/lib/tree";
 /** What can be done to an image from its menu, each by its name. */
 export type ImageActions = {
   onDelete: (name: string) => void;
+  /** Bring the image into view in a tab of its own, which the next image opened does not take. */
+  onOpenTab: (name: string) => void;
   /** Start a new image with this one as its first reference. */
   onUseInNew: (name: string) => void;
   /** Add this image to the references of the request being written. */
@@ -29,7 +31,7 @@ export function ReferenceItems({
   onUseInNew,
   onAddReference,
   source,
-}: Omit<ImageActions, "onDelete"> & { name: string }) {
+}: Omit<ImageActions, "onDelete" | "onOpenTab"> & { name: string }) {
   return (
     <>
       <MenuItem onClick={() => onUseInNew(name)}>
@@ -53,7 +55,10 @@ export function ImageMenuItems({
   onRename,
   onDelete,
   ...references
-}: ImageActions & { name: string; onRename: (name: string) => void }) {
+}: Omit<ImageActions, "onOpenTab"> & {
+  name: string;
+  onRename: (name: string) => void;
+}) {
   return (
     <>
       <ReferenceItems name={name} {...references} />

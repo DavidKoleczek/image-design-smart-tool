@@ -93,6 +93,7 @@ from image_design.capabilities.app.tools import (
     READ_SETTINGS,
     READ_STATE,
     REFERENCE,
+    REFERENCE_FILE,
     RELINK_IMAGE,
     RESTORE_VERSION,
     RUN_PREVIEW,
@@ -120,6 +121,7 @@ from image_design.schemas import (
     Mark,
     OpenAIKeyStatus,
     ReferenceEntry,
+    ReferenceFolderPage,
     UsedReference,
 )
 from image_design.shared.images import pictures
@@ -312,7 +314,8 @@ class AppServer:
             f"{IMAGE_FILE.uri_template}, its versions at {IMAGE_VERSION.uri_template}, small copies of them at "
             f"{IMAGE_THUMBNAIL.uri_template}, their frames at {IMAGE_FRAME.uri_template} and small copies of those at "
             f"{FRAME_THUMBNAIL.uri_template}, the in-progress images of its runs at {RUN_PREVIEW.uri_template}, and "
-            f"small copies of the references it offers at {REFERENCE.uri_template}.",
+            f"the references it offers at {REFERENCE_FILE.uri_template} and small copies of them at "
+            f"{REFERENCE.uri_template}.",
         )
 
     def _image_resource(self, uri: str) -> BlobResourceContents:
@@ -345,7 +348,11 @@ class AppServer:
         if (
             path in state.pins
             or path in self._chosen
-            or any(folder.shows == "files" and folder.path == path.parent for folder in state.folders)
+            # A path that climbs out with `..` would still start with the folder's.
+            or (
+                ".." not in path.parts
+                and any(folder.shows == "files" and path.is_relative_to(folder.path) for folder in state.folders)
+            )
             or library.is_kept(self.data_directory, path)
             or library.is_used(self.data_directory, path)
             or self._kept_for_images(path)
@@ -401,7 +408,16 @@ class AppServer:
             )
         self._uploads.add(upload)
         # Named by the frame's place counting from 1, as the app shows it.
-        return uploads.stage(upload, f"{path.stem}-frame-{frame + 1}.png", reel.png(frame))
+        stem = Path(self._reference_name(path)).stem
+        return uploads.stage(upload, f"{stem}-frame-{frame + 1}.png", reel.png(frame))
+
+    def _reference_name(self, path: Path) -> str:
+        """What the app calls the reference at `path`: its file's name, or for a version kept for an image, the image's
+        name and the version, so it says which image it is of."""
+        if not self._kept_for_images(path):
+            return path.name
+        # The listing kept may be older than the version.
+        return _version_name(self._listing, path) or _version_name(self._list(), path) or path.name
 
     def _took(self, arguments: dict[str, Any], run: ImageRun) -> list[Path]:
         """Remember the references a started run was given as used here, and clear the uploads it took, which the
@@ -410,7 +426,8 @@ class AppServer:
         for number, reference in enumerate(arguments.get("references") or [], 1):
             upload = _upload_of(reference)
             if upload is None:
-                given.append(UsedReference(name=Path(reference["path"]).name, path=Path(reference["path"])))
+                path = Path(reference["path"])
+                given.append(UsedReference(name=self._reference_name(path), path=path))
                 continue
             name = uploads.staged(upload).name
             copies = sorted((run.folder / "runs" / run.run_id / "inputs").glob(f"reference-{number}.*"))
@@ -431,7 +448,7 @@ class AppServer:
         entries = (library.entry(path) for path in paths)
         return [found.model_dump(mode="json") for found in entries if found is not None]
 
-    def _pinned_folder(self, path: Path) -> list[ReferenceEntry]:
+    def _pinned_folder(self, path: Path, after: str | None) -> ReferenceFolderPage:
         pinned = [folder.path for folder in read_app_state(self.data_directory).folders if folder.shows == "files"]
         if path not in pinned:
             raise ImageDesignError(
@@ -439,7 +456,7 @@ class AppServer:
                 f"{', '.join(str(folder) for folder in pinned) or 'none'}.",
                 "missing-folder",
             )
-        return library.list_folder(path)
+        return library.list_folder(path, after)
 
     def _keep(self, upload: str) -> ReferenceEntry:
         kept = library.entry(library.keep(uploads.staged(upload), self.data_directory))
@@ -673,8 +690,8 @@ class AppServer:
             found = await asyncio.to_thread(library.read_library, self.data_directory, state)
             return _structured(found.model_dump(mode="json"))
         if params.name == LIST_FOLDER.name:
-            entries = await asyncio.to_thread(self._pinned_folder, Path(arguments["path"]))
-            return _structured({"entries": [each.model_dump(mode="json") for each in entries]})
+            page = await asyncio.to_thread(self._pinned_folder, Path(arguments["path"]), arguments.get("after"))
+            return _structured(page.model_dump(mode="json"))
         if params.name == CHOOSE_FILES.name:
             folder = arguments.get("folder")
             opened = Path(folder) if folder else self._dialog_folder()
@@ -789,6 +806,16 @@ def _unlinked(listing: ImageListing) -> tuple[tuple[str, ...], tuple[tuple[str, 
 def _in_folder(folder: str | None) -> str | None:
     """A folder as `import_image` takes it for a name: ending in a slash, so the image keeps its file's name."""
     return f"{folder.rstrip('/')}/" if folder else None
+
+
+def _version_name(listing: ImageListing | None, path: Path) -> str | None:
+    """The name a version kept for an image goes by as a reference, after the image and the version; None when
+    `listing` has no version kept at `path`."""
+    for image in listing.images if listing is not None else []:
+        for version in image.versions:
+            if version.file == path:
+                return f"{PurePosixPath(image.name).stem}-{version.id}{path.suffix}"
+    return None
 
 
 def _upload_of(reference: dict[str, Any]) -> str | None:

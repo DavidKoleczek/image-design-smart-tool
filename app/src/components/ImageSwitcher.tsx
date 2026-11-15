@@ -24,7 +24,7 @@ export function ImageSwitcher({
   onSelect,
   onNew,
   ...actions
-}: ImageActions & {
+}: Omit<ImageActions, "onOpenTab"> & {
   listing: ImageListing | null;
   /** The image in view; none for a new image, not generated yet. */
   image: ImageSummary | null;

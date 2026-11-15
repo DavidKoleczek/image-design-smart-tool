@@ -19,7 +19,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/menu";
 import { readDrop } from "@/lib/drops";
-import { baseName, folderOf, splitName } from "@/lib/paths";
+import { baseName, folderOf, splitName, within } from "@/lib/paths";
 import { boxed, only, stepped } from "@/lib/selection";
 import type { Entry, Row } from "@/lib/tree";
 import { cn } from "@/lib/utils";
@@ -42,6 +42,32 @@ export type Drawing = {
    */
   menu: (entry: Entry | null) => ReactNode;
 };
+
+type Pending = {
+  folder: string;
+  label: string;
+  icon: ReactNode;
+  tile: ReactNode;
+};
+
+/** Where a file not there yet goes among the lines: after everything in its folder, while that folder is open. */
+function pendingAt(
+  rows: Row[],
+  folder: string,
+): { at: number; depth: number } | null {
+  if (folder === "") {
+    return { at: rows.length, depth: 0 };
+  }
+  const index = rows.findIndex((row) => row.folder && row.path === folder);
+  if (index < 0 || !rows[index].open) {
+    return null;
+  }
+  let at = index + 1;
+  while (at < rows.length && within(rows[at].path, folder)) {
+    at += 1;
+  }
+  return { at, depth: rows[index].depth + 1 };
+}
 
 function itemOf(list: HTMLElement, path: string): HTMLElement | null {
   return list.querySelector(`[data-path="${CSS.escape(path)}"]`);
@@ -93,7 +119,7 @@ export function Explorer({
   current,
   draw,
   header,
-  before,
+  pending,
   children,
 }: {
   explorer: Model;
@@ -104,8 +130,11 @@ export function Explorer({
   draw: Drawing;
   /** Stays at the top of the details view, over the lines, such as the names of what `detail` shows. */
   header?: ReactNode;
-  /** Shows over the entries, and scrolls with them. */
-  before?: ReactNode;
+  /**
+   * A file that is not there yet, such as a new one being described. It shows last in its folder, "" for the top,
+   * while that folder shows: `icon` and `label` as a file's are in a line, and `tile` and `label` in the grid.
+   */
+  pending?: Pending;
   /** Shows under the entries. */
   children?: ReactNode;
 }) {
@@ -182,14 +211,24 @@ export function Explorer({
     }
   };
 
+  // A double click on a name renames it, as in a file manager. Anywhere else on a file it opens it to stay.
   const doubleClicked = (event: MouseEvent) => {
     const path = entryOf(event);
-    if (
-      path !== null &&
-      inTree(event) &&
-      (event.target as HTMLElement).closest("[data-name]")
-    ) {
+    if (path === null || !inTree(event)) {
+      return;
+    }
+    if ((event.target as HTMLElement).closest("[data-name]")) {
       explorer.rename(path);
+    } else {
+      explorer.openTab(path);
+    }
+  };
+
+  // The middle button opens a file in a tab of its own, as a link opens in a browser, rather than scrolling.
+  const middleClicked = (event: MouseEvent) => {
+    const path = entryOf(event);
+    if (event.button === 1 && path !== null && inTree(event)) {
+      explorer.openTab(path);
     }
   };
 
@@ -465,6 +504,30 @@ export function Explorer({
     );
   };
 
+  const waiting = pending && pendingAt(explorer.rows, pending.folder);
+  const waitingLine = pending && waiting && (
+    <div
+      key=":pending"
+      role="none"
+      style={{ paddingLeft: 26 + waiting.depth * INDENT }}
+      className="flex h-6.5 items-center gap-2 rounded-sm bg-accent-soft pr-2 whitespace-nowrap"
+    >
+      {pending.icon}
+      <span className="min-w-10 flex-1 truncate font-medium">
+        {pending.label}
+      </span>
+    </div>
+  );
+  const waitingTile = pending && (
+    <div
+      role="none"
+      className="flex min-w-0 flex-col gap-1 rounded-md bg-accent-soft p-1"
+    >
+      {pending.tile}
+      <span className="truncate text-caption font-medium">{pending.label}</span>
+    </div>
+  );
+
   const carried = dragging?.paths ?? [];
   const one = carried.length === 1 ? explorer.row(carried[0]) : undefined;
 
@@ -478,6 +541,8 @@ export function Explorer({
         tabIndex={-1}
         onClick={clicked}
         onDoubleClick={doubleClicked}
+        onMouseDown={(event) => event.button === 1 && event.preventDefault()}
+        onAuxClick={middleClicked}
         onContextMenuCapture={menuOpened}
         onKeyDown={keys}
         onPointerDown={(event) => {
@@ -493,28 +558,35 @@ export function Explorer({
         )}
       >
         {view === "details" && header}
-        {before}
-        {view === "details"
-          ? explorer.rows.map(line)
-          : explorer.folders.map((folder) => {
-              const row = explorer.row(folder.path);
-              return (
-                <div key={folder.path} role="none" data-folder={folder.path}>
-                  {row && heading(row)}
-                  {folder.files.length > 0 && (
-                    <div
-                      role="none"
-                      className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-1.5 p-0.5"
-                    >
-                      {folder.files.map((path) => {
-                        const file = explorer.row(path);
-                        return file ? tile(file) : null;
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+        {view === "details" ? (
+          <>
+            {explorer.rows.slice(0, waiting?.at).map(line)}
+            {waitingLine}
+            {waiting && explorer.rows.slice(waiting.at).map(line)}
+          </>
+        ) : (
+          explorer.folders.map((folder) => {
+            const row = explorer.row(folder.path);
+            const here = pending?.folder === folder.path;
+            return (
+              <div key={folder.path} role="none" data-folder={folder.path}>
+                {row && heading(row)}
+                {(folder.files.length > 0 || here) && (
+                  <div
+                    role="none"
+                    className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-1.5 p-0.5"
+                  >
+                    {folder.files.map((path) => {
+                      const file = explorer.row(path);
+                      return file ? tile(file) : null;
+                    })}
+                    {here && waitingTile}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
         {children}
         {box && (
           <div

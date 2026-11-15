@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { DrawPane } from "@/components/DrawPane";
+import { NewImageName } from "@/components/NewImageName";
 import { PromptPicker } from "@/components/PromptPicker";
 import { References } from "@/components/References";
 import { RequestPreview } from "@/components/RequestPreview";
@@ -34,7 +35,7 @@ import {
   useGuides,
   type CanvasMode,
 } from "@/lib/canvas";
-import { moveDraft, NEW_IMAGE, updateDraft, useDraft } from "@/lib/drafts";
+import { moveDraft, updateDraft, useDraft } from "@/lib/drafts";
 import { describe, describeEnding } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
 import { openKeyDialog, useKey } from "@/lib/key";
@@ -53,8 +54,10 @@ import {
 import {
   CHATGPT,
   CHATGPT_LABEL,
+  folderIn,
   FRAME_SIZES,
   freeName,
+  freeNewName,
   kindOf,
   makesNew,
   modelLabel,
@@ -144,12 +147,20 @@ function Row({
 /** What the request is for, the image in view or a new image and its name, and the model it goes to. */
 function TargetBlock({
   target,
+  newKey,
+  listing,
+  folder,
   typed,
   resolved,
   methods,
   onUseInNew,
 }: {
   target: Target;
+  /** What a new image's request is kept under. */
+  newKey: string;
+  listing: ImageListing | null;
+  /** The folder a new image goes in, "" for the top. */
+  folder: string;
   /** A new image's name as it stands in the field. */
   typed: string;
   resolved: Resolved;
@@ -209,26 +220,13 @@ function TargetBlock({
             </Menu>
           </>
         ) : (
-          <>
-            <span className="grid size-11 shrink-0 place-items-center rounded-sm border border-dashed border-line-control text-ink-muted">
-              <Icon name="add" size={20} />
-            </span>
-            <label className="flex h-7 min-w-0 flex-1 items-center gap-0.5 rounded-sm border border-line-control bg-field px-2 focus-within:border-ink focus-within:bg-panel focus-within:focus-ring">
-              <input
-                aria-label="Name"
-                spellCheck={false}
-                autoComplete="off"
-                value={typed}
-                onChange={(event) =>
-                  updateDraft(NEW_IMAGE, { name: event.target.value })
-                }
-                className="min-w-0 flex-1 bg-transparent mono-value text-ink outline-none"
-              />
-              <span className="mono-value text-ink-muted">
-                {resolved.format}
-              </span>
-            </label>
-          </>
+          <NewImageName
+            draftKey={newKey}
+            listing={listing}
+            folder={folder}
+            typed={typed}
+            extension={resolved.format}
+          />
         )}
       </div>
       <Row label="Model">
@@ -649,6 +647,7 @@ function RequestForm({
   shown,
   runs,
   mode,
+  newKey,
   onUseInNew,
   onCreated,
   onChanged,
@@ -660,6 +659,7 @@ function RequestForm({
   shown: Shown | null;
   runs: Runs;
   mode: CanvasMode | null;
+  newKey: string;
   onUseInNew: (name: string) => void;
   onCreated: (name: string) => Promise<void>;
   onChanged: () => Promise<void>;
@@ -667,7 +667,7 @@ function RequestForm({
 }) {
   const { state } = useAppState();
   const options = state.request;
-  const key = image ? image.name : NEW_IMAGE;
+  const key = image ? image.name : newKey;
   const draft = useDraft(key);
   const references = useReferences(key);
   const guides = useGuides(key, shown?.picture?.key ?? null);
@@ -700,7 +700,8 @@ function RequestForm({
     frames: draft.frames ?? (long ? null : options.frames),
     frameMs: draft.frameMs ?? (long ? null : options.frame_ms),
   });
-  const typed = draft.name ?? freeName(listing, resolved.format);
+  const folder = folderIn(listing, draft.folder);
+  const typed = draft.name ?? freeNewName(listing, resolved.format, folder);
   const source: Source | null = image && shown ? { image, shown, frame } : null;
   const target: Target = source
     ? crossing
@@ -716,7 +717,7 @@ function RequestForm({
       : source
     : {
         image: null,
-        name: typedName(typed, methods.openai.formats),
+        name: typedName(typed, methods.openai.formats, folder),
         from: null,
       };
   // Only the guide of the mode the canvas is in goes out, since a request takes marks or a mask and not both.
@@ -858,6 +859,9 @@ function RequestForm({
       <div className="min-h-0 flex-1 overflow-y-auto">
         <TargetBlock
           target={target}
+          newKey={newKey}
+          listing={listing}
+          folder={folder}
           typed={typed}
           resolved={resolved}
           methods={methods}
@@ -909,6 +913,7 @@ function RequestForm({
           }
           listing={listing}
           source={image?.name ?? null}
+          edited={shown && !shown.file ? (shown.version?.id ?? null) : null}
           onError={setFailure}
         />
         <Section
@@ -1043,6 +1048,9 @@ export function RequestPane({
   shown,
   runs,
   mode,
+  newKey,
+  method,
+  onMethod,
   onUseInNew,
   onCreated,
   onChanged,
@@ -1055,6 +1063,11 @@ export function RequestPane({
   runs: Runs;
   /** What on the canvas guides the request: its marks, or its mask; null when the image takes neither. */
   mode: CanvasMode | null;
+  /** What the request for a new image is kept under. */
+  newKey: string;
+  /** The way the image is made, an image model or drawing an SVG. */
+  method: AppMethod;
+  onMethod: (method: AppMethod) => void;
   /** Start a new image with the image named as its first reference. */
   onUseInNew: (name: string) => void;
   /** Called with a new image's name once the request that creates it has started. */
@@ -1064,9 +1077,9 @@ export function RequestPane({
   /** Show the version with this id; null for what the image's file holds. */
   onView: (version: string | null) => void;
 }) {
-  const { state, error } = useAppState();
+  const { error } = useAppState();
   const { methods, error: unread } = useMethods();
-  const drawing = state.method === "svg";
+  const drawing = method === "svg";
   return (
     <aside
       aria-label={drawing ? "Conversation" : "Request"}
@@ -1076,10 +1089,8 @@ export function RequestPane({
         <span className="text-label text-ink-muted">Method</span>
         <Segmented<AppMethod>
           label="Method"
-          value={state.method}
-          onChange={(method) =>
-            updateAppState((current) => ({ ...current, method }))
-          }
+          value={method}
+          onChange={onMethod}
           options={[
             { value: "model", label: "Image model" },
             { value: "svg", label: "SVG" },
@@ -1097,6 +1108,7 @@ export function RequestPane({
           shown={shown}
           runs={runs}
           mode={mode}
+          newKey={newKey}
           onUseInNew={onUseInNew}
           onCreated={onCreated}
           onChanged={onChanged}
@@ -1110,6 +1122,7 @@ export function RequestPane({
           shown={shown}
           runs={runs}
           mode={mode}
+          newKey={newKey}
           onUseInNew={onUseInNew}
           onCreated={onCreated}
           onChanged={onChanged}

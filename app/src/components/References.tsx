@@ -35,6 +35,7 @@ export function References({
   noun = "image",
   listing,
   source,
+  edited,
   onError,
 }: {
   open: boolean;
@@ -53,6 +54,8 @@ export function References({
   listing: ImageListing | null;
   /** The image the request edits, which is not offered as a reference to itself. */
   source: string | null;
+  /** The version of it the request edits, by its id, which is not offered either; null for the image's file. */
+  edited: string | null;
   onError: (error: string) => void;
 }) {
   const { state } = useAppState();
@@ -232,6 +235,7 @@ export function References({
         full={full}
         listing={listing}
         source={source}
+        edited={edited}
       />
     </Section>
   );
