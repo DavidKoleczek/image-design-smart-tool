@@ -1,6 +1,6 @@
 [project]
 name = "image-design"
-version = "0.3.0"
+version = "0.3.1"
 description = "Image creation and editing workspace"
 readme = "README.md"
 license = "MIT"
@@ -14,7 +14,7 @@ dependencies = [
     "pydantic>=2.14,<3.0",
     "pyyaml>=6.0.3,<7.0.0",
     "resvg-py>=0.5.0,<0.6.0",
-    "typer>=0.27.3,<0.28.0",
+    "typer>=0.29.0,<0.30.0",
     "uvicorn>=0.54.0,<0.55.0",
 ]
 
@@ -25,13 +25,13 @@ Repository = "https://github.com/DavidKoleczek/image-design-smart-tool"
 image-design = "image_design.cli:main"
 
 [project.optional-dependencies]
-codex = ["openai-codex>=0.163.0,<1.0.0"]
+codex = ["openai-codex>=0.169.1,<1.0.0"]
 claude = ["claude-agent-sdk>=0.2.177,<0.3.0"]
 openai = ["keyring>=25.7.0,<26.0.0", "openai>=3.46.0,<4.0.0"]
 all = ["image-design[codex,claude,openai]"]
 
 [build-system]
-requires = ["uv_build>=0.13.1,<0.14.0"]
+requires = ["uv_build>=0.13.8,<0.14.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -41,6 +41,8 @@ module-name = "image_design"
 add-bounds = "major"
 default-groups = "all"
 exclude-newer = "5 days"
+# OpenAI ships support for its new models in these on the day the models come out.
+exclude-newer-package = { openai = false, openai-codex = false, openai-codex-cli-bin = false }
 
 [dependency-groups]
 # Every agent provider, so `uv run` type checks and tests each implementation without asking for extras.

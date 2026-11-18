@@ -100,6 +100,8 @@ def _model(agent_provider: AgentProvider, id: str, label: str) -> IntelligenceMo
 
 # The models agentic capabilities support, in the order they are listed.
 INTELLIGENCE_MODELS: tuple[IntelligenceModel, ...] = (
+    _model("codex", "gpt-6.2-sol", "GPT-6.2 Sol"),
+    _model("codex", "gpt-6.2-astra", "GPT-6.2 Astra"),
     _model("codex", "gpt-6.1-sol", "GPT-6.1 Sol"),
     _model("codex", "gpt-6.1-terra", "GPT-6.1 Terra"),
     _model("codex", "gpt-6-astra", "GPT-6 Astra"),

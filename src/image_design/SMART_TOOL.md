@@ -1,7 +1,7 @@
 ---
 smart_tool_format: 1
 name: image-design
-version: 0.3.0
+version: 0.3.1
 description: >-
   Image creation and editing workspace
 use_cases:
