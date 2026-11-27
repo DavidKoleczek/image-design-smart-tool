@@ -100,6 +100,7 @@ async def generate_openai_image(
     origin: str | None = None,
     detach: bool = False,
     parent: str | None = None,
+    draft: bool = False,
 ) -> ImageRun
 ```
 
@@ -127,6 +128,8 @@ run = await generate_openai_image(
 ```
 
 An edit overwrites the image's file. The previous version is kept in `data_directory`, and `restore_image_version` brings it back.
+
+With `draft`, an edit is tried without changing the image. It starts from `version`, or the version in the image's file, and its result is kept apart in the run's folder rather than as a version, in the result's `draft`. The image's file and versions stay as they are. Drafts on an image can run at the same time as each other and as a call that is not a draft, which lets several edits start from one version. `add_image_version` keeps a draft as the next version, or a file merged from several drafts. A draft is only for an image the tool keeps a version of.
 
 The other parameters:
 
@@ -172,12 +175,12 @@ class ImageRun(Protocol):
     async def result(self) -> ImageResult: ...
 ```
 
-`events()` yields each step of the run as it happens. A `preview` event has the path of an in-progress image, so a viewer can show the image as it forms. Previews are kept with the run's data and do not become versions.
+`events()` yields each step of the run as it happens. A `preview` event has the path of an in-progress image, so a viewer can show the image as it forms. Previews are kept with the run's data and do not become versions. A draft ends with a `draft` event, which has the path of its image.
 
-`result()` returns an `ImageResult` with the run's `status`, the `versions` it made, and its `usage`: the tokens the API reported and what they cost in dollars at the model's published prices.
+`result()` returns an `ImageResult` with the run's `status`, the `versions` it made or for a draft its `draft` file, and its `usage`: the tokens the API reported and what they cost in dollars at the model's published prices.
 Each `ImageVersion` records its file, its size, and the request that made it.
 
-Only one run can work on an image at a time. A request for an image that already has a run raises `ImageDesignError`.
+Only one run that makes versions can work on an image at a time. A request for an image that already has one raises `ImageDesignError`. Drafts do not count.
 A request that fails or times out is not retried, because it may still have been billed.
 
 A process that waits on a run it started can make sure the run does not outlive it:
@@ -248,6 +251,8 @@ async def generate_chatgpt_image(
     origin: str | None = None,
     detach: bool = False,
     intelligence: Intelligence | None = None,
+    parent: str | None = None,
+    draft: bool = False,
 ) -> ImageRun
 ```
 
@@ -440,10 +445,11 @@ def import_image(
 ) -> ImageSummary
 def add_image_version(
     name: str,
-    path: Path,
+    path: Path | None = None,
     directory: Path | None = None,
     data_directory: Path | None = None,
     parent: str | None = None,
+    drafts: list[str] | None = None,
 ) -> ImageSummary
 def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None
 def create_folder(name: str, directory: Path | None = None, data_directory: Path | None = None, numbered: bool = False) -> str
@@ -470,20 +476,20 @@ def read_image_activity(
 def list_image_methods() -> ImageMethods
 ```
 
-- `list_images` returns every image in the directory with its versions and the status of its last run, and every folder in `folders`, including empty ones. An image's `id` names what the tool keeps for it and stays the same when the image moves. It is None for a file the tool keeps nothing for.
+- `list_images` returns every image in the directory with its versions, the status of its last run that was not a draft, and the drafts going on it in `drafting`, and every folder in `folders`, including empty ones. An image's `id` names what the tool keeps for it and stays the same when the image moves. It is None for a file the tool keeps nothing for.
 - `view_image` returns one image with its versions, and in `viewed` the image's file, or the `version` you pass, frame by frame with how long each frame is shown. A still image has one frame. Pass a folder as `frames_output` to also write each frame there as a PNG named `frame-<index>.png`. Nothing else is written.
 - `restore_image_version` replaces the image's file with an earlier version. For an SVG image, it also restores that version's `image.py`.
 - `move_image` renames an image or moves it to another folder. The image keeps its versions. The new name must keep the extension.
 - `copy_image` makes another image with a copy of the image's file and of everything kept for it: its versions, its runs, and for an SVG image its script and sessions. It is refused while a run is working on the image.
 - `import_image` copies an image file from anywhere on the machine into the directory as a new image, with the file as its first version. A PNG, JPEG, WebP, GIF, or SVG is kept as it is. Any other still image, such as a BMP or TIFF, is kept as a PNG. Without `name` the image has the file's name. A `name` that ends in a slash is the folder to put it in.
-- `add_image_version` keeps a file, such as a crop or a composite a script made, as the image's next version and puts it in the image's file. The file must be in the image's format, except that any still image is kept as a PNG for a `.png`. `parent` is as for `generate_openai_image`.
-- `delete_image` deletes an image and everything kept for it. If a run is working on the image, it's stopped first.
+- `add_image_version` keeps a file, such as a crop or a merge a script made, as the image's next version and puts it in the image's file. The file must be in the image's format, except that any still image is kept as a PNG for a `.png`. `parent` is as for `generate_openai_image`. `drafts` names the drafts the file was made from, by their run ids, and the version keeps them in its `drafts`. Without `path`, the one draft in `drafts` is kept as it is, as a version its call made.
+- `delete_image` deletes an image and everything kept for it. If a run or a draft is working on the image, it's stopped first.
 - `create_folder` makes a folder and returns its name. A folder stays until `delete_folder` removes it, even when a move or a delete leaves it empty.
 - `move_folder` renames a folder or moves it into another, with everything in it, and returns its name. Its images keep their versions. It is refused while a run is working on an image in the folder.
 - `delete_folder` deletes every image in a folder, then the folder. It never deletes a file that is not an image. It returns the paths of those files, and the folder stays to hold them.
 - `relink_images` finds the images whose files were moved or renamed outside the tool, and keeps each under the name its file has. An image is relinked when a file the tool keeps nothing for has exactly the content of the image's current version. A file that only has the image's file name is returned in `likely`. Pass the image's name in `likely` to relink it as well.
 - With `numbered`, a name that is taken becomes the first free one of `name (2)`, `name (3)`, and so on, as in `cactus (2).png`. Without it, a name that is taken is refused.
-- `cancel_image` stops the run that is working on an image. It can be called from any process.
+- `cancel_image` stops the run, the drafts, and the agent working on an image. It can be called from any process.
 - `read_image_activity` returns the history of an image: each request, what the agent did, and how each run ended. Pass the `cursor` from an earlier call as `after` to get only what is new. Each run's `started` event has its request, which names the files the run was given relative to the event's `run_folder`.
 - `list_image_methods` returns the three ways of making an image and, as `design`, the agent that directs the first two: whether each is set up on this machine, and the models and options each supports. Set up means installed, and for the OpenAI API that the key is set. The agent is set up when an agent provider is installed and one of the first two methods is set up.
 

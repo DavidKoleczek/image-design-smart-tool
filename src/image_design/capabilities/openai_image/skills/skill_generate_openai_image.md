@@ -25,6 +25,14 @@ A sketch drawn in several strokes has the first in `points` and the others, each
 [{"shape": "circle", "points": [[0.4, 0.5], [0.6, 0.9]], "color": "red", "note": "this pot"}]
 ```
 
+`--draft` tries an edit without changing the image. The result is saved as a draft, apart from the image's versions,
+and the image's file stays as it is. Several drafts of one image can run at the same time, so different edits can start
+from the same version. Keep the one you want as the next version with `add-image-version --draft <run id>`.
+
+```bash
+image-design generate-openai-image "Make the pot green." --name concepts/cactus.png --version v1 --draft
+```
+
 ## Arguments
 
 - `PROMPT`: What to make, or what to change.
@@ -54,17 +62,21 @@ A sketch drawn in several strokes has the first in `points` and the others, each
 - `--timeout-seconds`: How long the request may take. Defaults to 600.
 - `--origin`: Who asked, such as `app`.
 - `--detach`: Leave the run going in a process of its own once it is sent. Stop it with `image-design cancel-image`.
+- `--draft`: Edit `--version`, or the version in the image's file, and save the result as a draft instead of a version.
+  Only for an image the tool keeps a version of.
 - `--json`: Print each event of the run as a line of JSON instead of text.
 
 ## Result
 
-The path of the image's file. Progress goes to stderr. The command exits 0 when the run is done and 1 when it failed,
-timed out, or was cancelled. Ctrl+C cancels it.
+The path of the image's file, or with `--draft` the path of the draft, whose folder is named by the draft's run id.
+Progress goes to stderr. The command exits 0 when the run is done and 1 when it failed, timed out, or was cancelled.
+Ctrl+C cancels it.
 
 ```
 .image-design/concepts/cactus.png
 ```
 
 With `--json`, each event is a line of JSON: `started`, a `preview` for each in-progress image, a `version` for the
-image kept, and last `finished` or `failed`, whose `data` is the result. The result has the run's `status`, the
-`versions` it made, and its `usage`: tokens, and their cost in US dollars at the model's published prices.
+image kept or a `draft` for a draft, and last `finished` or `failed`, whose `data` is the result. The result has the
+run's `status`, the `versions` it made or the `draft`, and its `usage`: tokens, and their cost in US dollars at the
+model's published prices.

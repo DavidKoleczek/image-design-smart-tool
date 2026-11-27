@@ -44,6 +44,10 @@ DATA_DIRECTORY_HELP = "Where the tool keeps versions and runs; .agents in the di
 APP_DIRECTORY_HELP = "Where the images to show are kept; .image-design here when omitted."
 JSON_HELP = "Print JSON instead of text."
 NUMBERED_HELP = "Take the next free name like it, such as 'cactus (2).png', when the name is taken."
+DRAFT_HELP = (
+    "Try the edit without changing the image: keep the result apart, as a draft add-image-version can keep later. "
+    "Drafts can go at the same time."
+)
 
 
 class CapabilityCommand(TyperCommand):
@@ -191,11 +195,12 @@ def generate_openai_image(
     detach: Annotated[
         bool, typer.Option("--detach", help="Leave the run going in a process of its own once it is sent.")
     ] = False,
+    draft: Annotated[bool, typer.Option("--draft", help=DRAFT_HELP)] = False,
     json: Annotated[bool, typer.Option("--json", help="Print each event as a line of JSON instead.")] = False,
 ) -> None:
     """Create or edit an image with an OpenAI image model. Model-backed, and needs an OpenAI API key.
 
-    Prints the path of each image made, with progress on stderr. Exits 0 when the run is done.
+    Prints the path of each image made, or of the draft, with progress on stderr. Exits 0 when the run is done.
     """
     code = asyncio.run(
         _follow(
@@ -221,6 +226,7 @@ def generate_openai_image(
                 timeout_seconds=timeout_seconds,
                 origin=origin,
                 detach=detach,
+                draft=draft,
             ),
             detach,
             json,
@@ -262,11 +268,12 @@ def generate_chatgpt_image(
     detach: Annotated[
         bool, typer.Option("--detach", help="Leave the run going in a process of its own once it is sent.")
     ] = False,
+    draft: Annotated[bool, typer.Option("--draft", help=DRAFT_HELP)] = False,
     json: Annotated[bool, typer.Option("--json", help="Print each event as a line of JSON instead.")] = False,
 ) -> None:
     """Create or edit an image with the image generation built into Codex. Agentic, on Codex's ChatGPT plan.
 
-    Prints the path of the image made, with progress on stderr. Exits 0 when the run is done.
+    Prints the path of the image made, or of the draft, with progress on stderr. Exits 0 when the run is done.
     """
     code = asyncio.run(
         _follow(
@@ -284,6 +291,7 @@ def generate_chatgpt_image(
                 timeout_seconds=timeout_seconds,
                 origin=origin,
                 detach=detach,
+                draft=draft,
             ),
             detach,
             json,
@@ -654,13 +662,26 @@ def import_image(
 @app.command()
 def add_image_version(
     name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
-    path: Annotated[Path, typer.Option("--path", help="The file to keep as its next version, in the image's format.")],
+    path: Annotated[
+        Path | None, typer.Option("--path", help="The file to keep as its next version, in the image's format.")
+    ] = None,
+    drafts: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--draft",
+            help="A draft on the image, by its run id: alone, the one to keep; with --path, one the file was made "
+            "from. Repeatable.",
+        ),
+    ] = None,
     directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
     data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
-    """Keep a file, such as a crop a script made, as the next version of an image. Deterministic."""
-    summary = lib.add_image_version(name=name, path=path, directory=directory, data_directory=data_directory)
+    """Keep a file, such as a crop or a merge a script made, or a draft, as the next version of an image.
+    Deterministic."""
+    summary = lib.add_image_version(
+        name=name, path=path, directory=directory, data_directory=data_directory, drafts=drafts
+    )
     typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
 
 
@@ -912,7 +933,10 @@ def _print_event(event: ImageEvent, as_json: bool) -> None:
 
 
 def _made(result: ImageResult) -> list[Path]:
-    """The image's file for the first image a run made, and the version's own file for each after it."""
+    """The image's file for the first image a run made, and the version's own file for each after it, or a draft's
+    file."""
+    if result.draft is not None:
+        return [result.draft]
     if not result.versions:
         return []
     return [result.path, *(version.file for version in result.versions[1:])]

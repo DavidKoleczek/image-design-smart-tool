@@ -115,11 +115,14 @@ export function useRuns(image: ImageSummary | null): Runs {
   const kept =
     image !== null &&
     (image.versions.length > 0 || image.last_run !== null || !!image.design);
+  const drafting = image?.drafting ?? [];
   const changed = image
-    ? `${image.last_run?.id}:${image.status}:${image.versions.length}:${image.design?.run_id}:${image.design?.status}:${again}`
+    ? `${image.last_run?.id}:${image.status}:${image.versions.length}:${image.design?.run_id}:${image.design?.status}:${drafting.join(",")}:${again}`
     : "";
   const running =
-    image?.status === "running" || image?.design?.status === "running";
+    image?.status === "running" ||
+    image?.design?.status === "running" ||
+    drafting.length > 0;
 
   useEffect(() => {
     if (name === null || key === null || !kept) {

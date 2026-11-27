@@ -7,6 +7,7 @@ from pathlib import Path
 import secrets
 import shutil
 import time
+from typing import NamedTuple
 import uuid
 
 from image_design.capabilities.manage_images.names import find, name_of, settled, summary_of, with_same_extension
@@ -26,6 +27,7 @@ from image_design.shared.images.runs import CANCEL
 from image_design.shared.images.store import (
     EVENTS,
     IMAGES,
+    RUNS,
     StoredImage,
     directories,
     found,
@@ -201,9 +203,9 @@ def delete_image(name: str, directory: Path | None = None, data_directory: Path 
     designing = deleting.designing()
     if designing is not None:
         _stop(deleting, designing, load_designs)
-    run = deleting.running()
-    if run is not None:
-        _stop(deleting, run, load_runs)
+    for run in (deleting.running(), *deleting.drafting()):
+        if run is not None:
+            _stop(deleting, run, load_runs)
     holder = f"delete-{secrets.token_hex(3)}"
     lock = take_lock(data, deleting.name, holder)
     try:
@@ -230,7 +232,8 @@ def delete_image(name: str, directory: Path | None = None, data_directory: Path 
 
 def refuse_run_here(image: StoredImage) -> None:
     """Raise when a run in this process is working on the image, which deleting it cannot stop."""
-    here = [run for run in (image.running(), image.designing()) if run is not None and run.pid == os.getpid()]
+    going = [image.running(), image.designing(), *image.drafting()]
+    here = [run for run in going if run is not None and run.pid == os.getpid()]
     run = here[0] if here else None
     if run is not None:
         # Its handle is here, and waiting for it to end could hold up the very loop that ends it.
@@ -260,11 +263,11 @@ def restore_image_version(
 
 
 def cancel_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
-    """Ask the processes running the image's run and its agent, which may be others, to stop them. An agent that
-    stops asks every call it made that is still going, on any image, to stop."""
+    """Ask the processes running the image's run, its drafts, and its agent, which may be others, to stop them. An
+    agent that stops asks every call it made that is still going, on any image, to stop."""
     root, data = directories(directory, data_directory)
     image = require_image(root, data, name)
-    going = [run for run in (image.designing(), image.running()) if run is not None]
+    going = [run for run in (image.designing(), image.running(), *image.drafting()) if run is not None]
     if not going:
         raise ImageDesignError(f"Image {image.name} has no run going, so there is nothing to cancel.", "not-running")
     for run in going:
@@ -278,53 +281,93 @@ def read_image_activity(
     a cursor an earlier call gave. The conversation is the image's calls, its agent's runs, and the calls that agent
     made on other images.
 
-    Each of the three is a list runs are only added to, and the cursor has the id of the last run read in each and how
-    far into its events the reader got, so it stays good as more runs are added.
+    Each of the three is a list runs are only added to, and several runs in one can be going at once, as drafts are.
+    So the cursor has, for each list, how many of its runs were read, and each of those that may still add events with
+    how far into its events the reader got. It stays good as more runs are added.
     """
     root, data = directories(directory, data_directory)
     image = require_image(root, data, name)
     streams = [
-        [(run.id, image.run_folder(run.id)) for run in image.runs],
-        [(run.id, image.run_folder(run.id)) for run in image.designs],
-        [(run_id, data / IMAGES / image_id / "runs" / run_id) for image_id, run_id in image.linked()],
+        [_Read(run.id, image.run_folder(run.id), run.pid) for run in image.runs],
+        [_Read(run.id, image.run_folder(run.id), run.pid) for run in image.designs],
+        _linked(image),
     ]
     events: list[ImageEvent] = []
     cursors: list[str] = []
-    for stream, (first, offset) in zip(streams, _positions(after, streams, image.name), strict=True):
-        cursor = ""
-        for index in range(first, len(stream)):
-            run_id, folder = stream[index]
-            read, end = read_events(folder / EVENTS, offset if index == first else 0)
+    for stream, (seen, going) in zip(streams, _positions(after, streams, image.name), strict=True):
+        still: list[str] = []
+        for index, run in enumerate(stream):
+            if index < seen and run.id not in going:
+                continue
+            # Looked at before reading, so every event of a run whose process is seen to have ended is read here.
+            gone = run.pid is None or not process_alive(run.pid)
+            read, end = read_events(run.folder / EVENTS, going.get(run.id, 0))
             for event in read:
                 if event.kind == "started":
                     # Where the run's folder is now, which is not where it started for a copy or a project that moved.
-                    event.data["run_folder"] = str(folder)
+                    event.data["run_folder"] = str(run.folder)
             events.extend(read)
-            cursor = f"{run_id}:{end}"
-        cursors.append(cursor)
+            if not gone and not any(event.kind in ("finished", "failed") for event in read):
+                still.append(f"{run.id}:{end}")
+        cursors.append(",".join([str(len(stream)), *still]) if stream else "")
     # Sorted stably, so each run's events stay in the order it wrote them.
     events.sort(key=lambda event: event.time)
     cursor = "|".join(cursors).rstrip("|") or None
     return ImageActivity(name=image.name, events=events, status=image.summary().status, cursor=cursor)
 
 
-def _positions(after: str | None, streams: list[list[tuple[str, Path]]], name: str) -> list[tuple[int, int]]:
-    """Where to read each of an image's lists of runs from: the run a cursor names in it and the offset into that
-    run's events, or the start of the list when the cursor names none of it."""
+class _Read(NamedTuple):
+    """A run of an image's conversation, as its activity is read: its id, its folder, and the process running it, which
+    is None when its record is gone."""
+
+    id: str
+    folder: Path
+    pid: int | None
+
+
+def _linked(image: StoredImage) -> list[_Read]:
+    """The calls the image's agent made on other images, in the order made."""
+    records: dict[str, dict[str, ImageRunRecord]] = {}
+    found: list[_Read] = []
+    for image_id, run_id in image.linked():
+        folder = image.data / IMAGES / image_id
+        if image_id not in records:
+            records[image_id] = {run.id: run for run in load_runs(folder)} if (folder / RUNS).is_file() else {}
+        run = records[image_id].get(run_id)
+        found.append(_Read(run_id, folder / "runs" / run_id, run.pid if run is not None else None))
+    return found
+
+
+def _positions(after: str | None, streams: list[list[_Read]], name: str) -> list[tuple[int, dict[str, int]]]:
+    """Where to read each of an image's lists of runs from: how many of its runs a cursor says were read, and how far
+    into the events of each of those that may still add events; nothing read when the cursor names none of the list.
+
+    A part of a cursor an earlier version of the tool gave names only the last run it read, which is all a cursor
+    then had, and runs before it are read.
+    """
     parts = (after or "").split("|")
     parts += [""] * (len(streams) - len(parts))
     if len(parts) > len(streams):
         raise _not_a_cursor(after, name)
-    positions: list[tuple[int, int]] = []
+    positions: list[tuple[int, dict[str, int]]] = []
     for part, stream in zip(parts, streams, strict=True):
         if not part:
-            positions.append((0, 0))
+            positions.append((0, {}))
             continue
-        run_id, _, read_to = part.rpartition(":")
-        ids = [each for each, _ in stream]
-        if run_id not in ids or not read_to.isdigit():
+        first, *entries = part.split(",")
+        ids = [run.id for run in stream]
+        if not first.isdigit():
+            entries = [first]
+        going: dict[str, int] = {}
+        for entry in entries:
+            run_id, _, read_to = entry.rpartition(":")
+            if run_id not in ids or not read_to.isdigit():
+                raise _not_a_cursor(after, name)
+            going[run_id] = int(read_to)
+        seen = int(first) if first.isdigit() else ids.index(next(iter(going))) + 1
+        if seen > len(stream):
             raise _not_a_cursor(after, name)
-        positions.append((ids.index(run_id), int(read_to)))
+        positions.append((seen, going))
     return positions
 
 

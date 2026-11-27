@@ -65,8 +65,8 @@ class ImageRun(Protocol):
 
 
 class KeepImage(Protocol):
-    def __call__(self, content: bytes, script: Script | None = None) -> ImageVersion:
-        """Keep an image the work made, and the script that built it, as a version."""
+    def __call__(self, content: bytes, script: Script | None = None) -> None:
+        """Keep an image the work made, and the script that built it, as a version, or as a draft's image."""
         ...
 
 
@@ -88,7 +88,8 @@ class InProcessRun:
 
     `stop` ends what was started for the work, such as an agent, once the work has ended however it ended. A cancel
     can come before the work's first step, when nothing in the work itself would run. Previews are kept with
-    `preview_suffix`, which is `suffix` unless they come in another format, as a drawing's renders do.
+    `preview_suffix`, which is `suffix` unless they come in another format, as a drawing's renders do. A draft, whose
+    record names its `draft` file, keeps its image there rather than as a version, and holds no `lock`.
     """
 
     # Whether work that ends without keeping an image has failed. An agent that directs image calls makes none itself.
@@ -100,7 +101,7 @@ class InProcessRun:
         run: ImageRunRecord,
         work: Work,
         timeout_seconds: int | None,
-        lock: Path,
+        lock: Path | None,
         suffix: str,
         stop: Callable[[], Awaitable[None]] | None = None,
         preview_suffix: str | None = None,
@@ -119,6 +120,7 @@ class InProcessRun:
         self._preview_suffix = preview_suffix or suffix
         self._stop = stop
         self._made: list[ImageVersion] = []
+        self._drafted: Path | None = None
         self._events: list[ImageEvent] = []
         # Replaced on every append, so a reader waits on the one current when it ran out of events.
         self._appended = asyncio.Event()
@@ -135,9 +137,10 @@ class InProcessRun:
                 "run_folder": str(image.run_folder(run.id)),
                 **run.request,
                 **linked(run),
+                **({"draft": str(image.folder / run.draft)} if run.draft is not None else {}),
             },
         )
-        output = RunOutput(self._preview, self._version, self._used, self._emit)
+        output = RunOutput(self._preview, self._keep, self._used, self._emit)
         self._working = asyncio.create_task(work(output))
         self._task = asyncio.create_task(self._drive())
 
@@ -207,7 +210,7 @@ class InProcessRun:
         elif (failure := self._working.exception()) is not None:
             status = "failed"
             error = str(failure) if isinstance(failure, ImageDesignError) else f"{type(failure).__name__}: {failure}"
-        elif not self._made and self.needs_image:
+        elif not self._made and self._drafted is None and self.needs_image:
             status = "failed"
             error = "The request ended without an image. Try it again, or change the prompt."
         else:
@@ -221,6 +224,7 @@ class InProcessRun:
             run_id=self.run_id,
             status=status,
             versions=[self._image.located(version) for version in self._made],
+            draft=self._drafted,
             usage=self._run.usage,
             error=error,
         )
@@ -244,7 +248,12 @@ class InProcessRun:
         path.write_bytes(content)
         self._emit("preview", f"Preview {index + 1} of {self.name}: {path}", {"path": str(path), "index": index})
 
-    def _version(self, content: bytes, script: Script | None = None) -> ImageVersion:
+    def _keep(self, content: bytes, script: Script | None = None) -> None:
+        if self._run.draft is not None:
+            # A request makes one image, so a draft keeps the first it makes.
+            if self._drafted is None:
+                self._draft(self._image.folder / self._run.draft, content)
+            return
         version = self._image.add_version(content, self._suffix, self._run.method, self.run_id, script)
         first = not self._made
         if first:
@@ -254,7 +263,12 @@ class InProcessRun:
         located = self._image.located(version)
         shown = self._image.path if first else located.file
         self._emit("version", f"Saved {version.id} of {self.name}: {shown}", located.model_dump(mode="json"))
-        return version
+
+    def _draft(self, path: Path, content: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        self._drafted = path
+        self._emit("draft", f"Saved draft {self.run_id} of {self.name}: {path}", {"path": str(path)})
 
     def _used(self, usage: ImageUsage) -> None:
         self._run.usage = usage
@@ -262,14 +276,15 @@ class InProcessRun:
 
     def _save(self) -> None:
         """Keep the run's record as it is now, where the image's runs are kept."""
-        self._image.save_runs()
+        self._image.save_run(self._run)
 
     def _end(self, status: ImageRunStatus, error: str | None) -> None:
         self._run.status = status
         self._run.error = error
         self._run.finished = datetime.now(UTC)
         self._save()
-        release_lock(self._lock, self.run_id)
+        if self._lock is not None:
+            release_lock(self._lock, self.run_id)
 
     def _emit(self, kind: ImageEventKind, text: str = "", data: dict[str, Any] | None = None) -> None:
         event = ImageEvent(run_id=self.run_id, kind=kind, text=text, data=data or {})
@@ -394,4 +409,4 @@ def _ending(result: ImageResult) -> str:
     if result.usage is not None:
         used = f" Used {result.usage.output_tokens:,} output tokens"
         used += f", about ${result.usage.cost:.3f}." if result.usage.cost is not None else "."
-    return f"Done: {result.path}.{used}"
+    return f"Done: {result.draft or result.path}.{used}"

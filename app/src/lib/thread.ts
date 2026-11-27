@@ -122,10 +122,12 @@ export type ImageCall = {
   finished: string | null;
   usage: ImageUsage | null;
   error: string | null;
-  /** The versions it made. */
+  /** The versions it made, and for a draft the one it was kept as. */
   versions: string[];
   /** The in-progress image it sent last, by its index, while it is still sending. */
   preview: number | null;
+  /** For a draft, which leaves the image as it is: the file it keeps its image in, and whether it has made it. */
+  draft: { path: string; made: boolean } | null;
 };
 
 /** What one part of a run shows as, in order. */
@@ -620,12 +622,21 @@ function isDesign(facts: RunFacts): boolean {
   return facts.request.method === DESIGN;
 }
 
-/** The versions a run made, by their ids, in the order it made them. */
-function versionsOf(facts: RunFacts): string[] {
-  return facts.events.flatMap((event) => {
+/** The versions a run made, by their ids, in the order it made them, and for a draft on `image` the one it was kept as. */
+function versionsOf(facts: RunFacts, image: ImageSummary): string[] {
+  const made = facts.events.flatMap((event) => {
     const id = event.kind === "version" ? text(event.data.id) : null;
     return id === null ? [] : [id];
   });
+  // A draft is kept after its run has ended, so the version, which names the draft's run, tells it.
+  const kept =
+    text(facts.request.draft) !== null &&
+    (text(facts.request.name) ?? image.name) === image.name
+      ? image.versions
+          .filter((version) => version.run_id === facts.id)
+          .map((version) => version.id)
+      : [];
+  return [...made, ...kept];
 }
 
 /** A run as the image call it is. */
@@ -653,6 +664,7 @@ function callOf(
     }
   }
   const chatgpt = typeof request.codex_model === "string";
+  const draft = text(request.draft);
   const status = facts.status as string | null;
   const state =
     status === "done" ? "sent" : status === null && live ? "sending" : "failed";
@@ -687,8 +699,15 @@ function callOf(
             : status === "timed-out"
               ? "It ran out of time."
               : "It stopped before it finished.")),
-    versions: versionsOf(facts),
+    versions: versionsOf(facts, image),
     preview: state === "sending" ? (facts.previews.at(-1) ?? null) : null,
+    draft:
+      draft === null
+        ? null
+        : {
+            path: draft,
+            made: facts.events.some((event) => event.kind === "draft"),
+          },
   };
 }
 

@@ -132,6 +132,7 @@ export type ImageSummary = {
   /** The version in the image's file; null when the file was changed by hand since, or has no versions. */
   current: string | null;
   versions: ImageVersion[];
+  /** Of its last run, leaving out drafts, which leave its file as it is. */
   status: ImageRunStatus | null;
   last_run: ImageRun | null;
   /** The agent's last run on the image's conversation; left out by a server that has no agent for images. */
@@ -141,6 +142,8 @@ export type ImageSummary = {
     /** ISO 8601. */
     started: string;
   } | null;
+  /** The drafts going on it now, by their run ids; left out by a server that makes no drafts. */
+  drafting?: string[];
 };
 
 /** `ImageEvent` in schemas.py. */
@@ -154,6 +157,7 @@ export type ImageEvent = {
     | "agent"
     | "steered"
     | "version"
+    | "draft"
     | "finished"
     | "failed";
   text: string;

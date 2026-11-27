@@ -28,7 +28,7 @@ from image_design.schemas import (
     OpenAIKeyStatus,
 )
 from image_design.shared.images import pictures
-from image_design.shared.images.store import GITIGNORE, LOCKS
+from image_design.shared.images.store import GITIGNORE, LOCKS, load_runs
 
 runner = CliRunner()
 CACTUS = Mark(shape="circle", points=[(0.4, 0.5), (0.6, 0.9)], note="this pot")
@@ -36,6 +36,11 @@ CACTUS = Mark(shape="circle", points=[(0.4, 0.5), (0.6, 0.9)], note="this pot")
 
 async def made(**arguments: Any) -> ImageResult:
     run = await lib.generate_openai_image(**arguments)
+    return await run.result()
+
+
+async def drafted(**arguments: Any) -> ImageResult:
+    run = await lib.generate_openai_image(draft=True, **arguments)
     return await run.result()
 
 
@@ -194,6 +199,111 @@ async def test_a_numbered_mark_has_its_number_on_a_badge_of_its_color_above_it_a
     # Where an unnumbered circle's badge would be, off its upper left, nothing is drawn.
     assert markup.getpixel((412, 544)) == (0, 0, 0, 0)
     assert "- Mark 1 is a red circle: this pot\n- Mark 2 is a red box with a 2 beside it." in editing.fields["prompt"]
+
+
+async def test_drafts_from_one_version_go_at_once_beside_an_edit_leave_the_image_as_it_is_and_are_kept_later(
+    images_api: FakeImagesAPI,
+) -> None:
+    await made(prompt="A paper-cut cactus.", name="cactus.png")
+    await made(prompt="Make the pot blue.", name="cactus.png")
+    first, second = (version.file.read_bytes() for version in lib.view_image("cactus.png").versions)
+    going = [
+        await lib.generate_openai_image(prompt="Make the pot green.", name="cactus.png", version="v1", draft=True),
+        await lib.generate_openai_image(prompt="Make the pot red.", name="cactus.png", version="v1", draft=True),
+        await lib.generate_openai_image(prompt="Add a flower.", name="cactus.png"),
+    ]
+    green, red, flower = [await run.result() for run in going]
+    image = lib.view_image("cactus.png")
+    started = {event.run_id for event in lib.read_image_activity("cactus.png").events if event.kind == "started"}
+    kept = lib.add_image_version("cactus.png", drafts=[green.run_id])
+    kept_file = Path(kept.path).read_bytes()
+    Path("merged.png").write_bytes(picture(1024, 1024, "#000000"))
+    merged = lib.add_image_version("cactus.png", path=Path("merged.png"), drafts=[green.run_id, red.run_id])
+
+    sent_green = next(request for request in images_api.requests if request.fields["prompt"] == "Make the pot green.")
+    assert color_of(sent_green.files["image[]"][0]) == color_of(first) != color_of(second)
+    assert [(result.status, result.versions) for result in (green, red)] == [("done", []), ("done", [])]
+    assert green.draft is not None
+    assert red.draft is not None
+    assert (green.draft.name, green.draft.parent.name) == ("draft.png", green.run_id)
+    assert [version.id for version in flower.versions] == ["v3"]
+    assert [version.id for version in image.versions] == ["v1", "v2", "v3"]
+    assert image.current == "v3"
+    assert image.last_run is not None
+    assert (image.last_run.id, image.drafting) == (flower.run_id, [])
+    # Each run saved its own record while the others saved theirs, and none was lost.
+    assert {green.run_id, red.run_id, flower.run_id} <= started
+    assert len(started) == 5
+    assert kept.versions[-1].model_dump(include={"id", "method", "run_id", "drafts"}) == {
+        "id": "v4",
+        "method": "openai",
+        "run_id": green.run_id,
+        "drafts": [],
+    }
+    assert kept_file == green.draft.read_bytes()
+    records = {run.id: run for run in load_runs(kept.versions[0].file.parents[1])}
+    assert (records[green.run_id].versions, records[red.run_id].versions) == (["v4"], [])
+    assert merged.versions[-1].model_dump(include={"id", "method", "drafts"}) == {
+        "id": "v5",
+        "method": "imported",
+        "drafts": [green.run_id, red.run_id],
+    }
+
+
+async def test_a_draft_starts_from_a_kept_version_and_only_a_draft_that_made_its_image_is_kept(
+    images_api: FakeImagesAPI,
+) -> None:
+    with pytest.raises(ImageDesignError, match="A draft starts from a version") as unkept:
+        await lib.generate_openai_image(prompt="A cactus.", name="cactus.png", draft=True)
+    kept_for_it = Path(".image-design").exists()
+    await made(prompt="A cactus.", name="cactus.png")
+    Path(".image-design/cactus.png").write_bytes(picture(1024, 1024, "#ffffff"))
+    with pytest.raises(ImageDesignError, match="changed outside the tool") as changed:
+        await lib.generate_openai_image(prompt="A blue pot.", name="cactus.png", draft=True)
+    from_v1 = await drafted(prompt="A blue pot.", name="cactus.png", version="v1")
+    images_api.status = 400
+    failed = await drafted(prompt="A red pot.", name="cactus.png", version="v1")
+    with pytest.raises(ImageDesignError) as unknown:
+        lib.add_image_version("cactus.png", drafts=["20260101-000000-abcdef"])
+    with pytest.raises(ImageDesignError, match="made no image, since it failed"):
+        lib.add_image_version("cactus.png", drafts=[failed.run_id])
+    with pytest.raises(ImageDesignError, match="merge them into a file first"):
+        lib.add_image_version("cactus.png", drafts=[from_v1.run_id, failed.run_id])
+    with pytest.raises(ImageDesignError, match="Pass the file to keep"):
+        lib.add_image_version("cactus.png")
+
+    assert (unkept.value.reason, changed.value.reason, kept_for_it) == ("invalid-request", "invalid-request", False)
+    assert (from_v1.status, failed.status) == ("done", "failed")
+    assert color_of(Path(".image-design/cactus.png").read_bytes()) == (255, 255, 255)
+    assert unknown.value.reason == "no-such-draft"
+    assert f"Its drafts: {from_v1.run_id}, {failed.run_id}." in str(unknown.value)
+
+
+async def test_activity_read_on_from_a_cursor_has_every_draft_that_was_going_and_cancel_image_stops_them(
+    images_api: FakeImagesAPI,
+) -> None:
+    created = await made(prompt="A cactus.", name="cactus.png")
+    images_api.hang = True
+    first = await lib.generate_openai_image(prompt="A blue pot.", name="cactus.png", draft=True)
+    second = await lib.generate_openai_image(prompt="A red pot.", name="cactus.png", draft=True)
+    await sent(images_api, 3)
+    going = lib.view_image("cactus.png")
+    read = lib.read_image_activity("cactus.png")
+    lib.cancel_image("cactus.png")
+    ended = [await asyncio.wait_for(run.result(), 5) for run in (first, second)]
+    later = lib.read_image_activity("cactus.png", after=read.cursor)
+    # A cursor from before drafts names only the last run read, and every run after it is read again.
+    older = lib.read_image_activity("cactus.png", after=f"{first.run_id}:0")
+
+    assert going.drafting == [first.run_id, second.run_id]
+    assert going.last_run is not None
+    assert (going.status, going.last_run.id) == ("done", created.run_id)
+    assert [result.status for result in ended] == ["cancelled", "cancelled"]
+    assert {(event.run_id, event.kind) for event in later.events} == {
+        (first.run_id, "finished"),
+        (second.run_id, "finished"),
+    }
+    assert {event.run_id for event in older.events} == {first.run_id, second.run_id}
 
 
 @pytest.mark.parametrize(
@@ -413,3 +523,18 @@ def test_the_cli_prints_each_image_made_and_exits_with_the_run_s_status(images_a
     assert refused.exit_code == 1
     assert "Invalid size." in refused.stderr
     assert refused.stdout == ""
+
+
+def test_the_cli_prints_a_draft_s_file_and_keeps_a_draft_as_the_next_version(images_api: FakeImagesAPI) -> None:
+    runner.invoke(app, ["generate-openai-image", "A cactus.", "--name", "cactus.png"])
+
+    drafted = runner.invoke(app, ["generate-openai-image", "A blue pot.", "--name", "cactus.png", "--draft"])
+    path = Path(drafted.stdout.strip())
+    kept = runner.invoke(app, ["add-image-version", "--name", "cactus.png", "--draft", path.parent.name])
+
+    assert drafted.exit_code == 0, drafted.output
+    assert path.name == "draft.png"
+    assert path.is_file()
+    assert f"Saved draft {path.parent.name} of cactus.png" in drafted.stderr
+    assert kept.exit_code == 0, kept.output
+    assert "v2 (in the file): 1024x1024, openai" in kept.stdout

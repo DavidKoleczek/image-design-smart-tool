@@ -49,6 +49,8 @@ COMMAND_LINE = "Someone, from the command line,"
 MADE = "It made {versions}.{current}"
 NO_VERSION = "no version"
 NOW_THE_FILE = " It is now the image's file."
+DRAFTED = "It made a draft, kept apart from the image's versions: {path}.{kept}"
+KEPT_AS = " It was then kept as {versions}."
 RUNNING = "It is still running."
 STOPPED = "It was stopped before it ended, and made {versions}."
 NOTHING = "nothing"
@@ -157,6 +159,8 @@ def command(call: Call) -> str:
     parts = [f"image-design generate-{run.method}-image", "--name", argument(image.name)]
     if isinstance(version := request.get("version"), str):
         parts += ["--version", version]
+    if run.draft is not None:
+        parts.append("--draft")
     for sent in request.get("images") or []:
         if PurePosixPath(sent).name.startswith(REFERENCE_PREFIX):
             parts += ["--reference", argument(str(folder / sent))]
@@ -202,6 +206,9 @@ def _who(origin: str | None) -> str:
 def _outcome(call: Call) -> str:
     image, run = call
     match run.status:
+        case "done" if run.draft is not None:
+            kept = KEPT_AS.format(versions=", ".join(run.versions)) if run.versions else ""
+            return DRAFTED.format(path=image.folder / run.draft, kept=kept)
         case "done":
             current = NOW_THE_FILE if run.versions[:1] == [image.versions.current] else ""
             return MADE.format(versions=", ".join(run.versions) or NO_VERSION, current=current)

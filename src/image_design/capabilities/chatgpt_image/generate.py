@@ -29,6 +29,8 @@ from image_design.shared.images import marks as marking
 from image_design.shared.images.requests import (
     Reference,
     claimed,
+    draft_from,
+    drafted,
     edited_version,
     invalid,
     previewed_source,
@@ -75,6 +77,7 @@ class ChatGPTImageRequest(BaseModel):
     timeout_seconds: int = 600
     origin: str | None = None
     parent: str | None = None
+    draft: bool = False
 
 
 async def generate_chatgpt_image(
@@ -93,6 +96,7 @@ async def generate_chatgpt_image(
     detach: bool = False,
     intelligence: Intelligence | None = None,
     parent: str | None = None,
+    draft: bool = False,
 ) -> ImageRun:
     """Start creating the image named `name`, or editing it when it exists, and return its run once it is sent."""
     request = validated(
@@ -110,6 +114,7 @@ async def generate_chatgpt_image(
         timeout_seconds=timeout_seconds,
         origin=origin,
         parent=parent,
+        draft=draft,
     )
     if not detach:
         return await start(request, intelligence)
@@ -196,7 +201,10 @@ async def start(request: ChatGPTImageRequest, intelligence: Intelligence | None 
     sent = sent_references(request.references)
     intelligence, model = select_intelligence(intelligence, "codex", request.model, DEFAULT_INTELLIGENCE_MODELS)
     run_id = new_run_id()
-    with claimed(root, data, name, run_id) as (image, lock):
+    holding = drafted(root, data, name, run_id) if request.draft else claimed(root, data, name, run_id)
+    with holding as (image, lock):
+        if request.draft:
+            request = request.model_copy(update={"version": draft_from(image, request.version)})
         folder = image.run_folder(run_id)
         images, prompt = _prepare(request, sent, image, folder / "inputs")
         version = edited_version(image, request.version)
@@ -228,10 +236,10 @@ async def start(request: ChatGPTImageRequest, intelligence: Intelligence | None 
                 origin=request.origin,
                 pid=os.getpid(),
                 started=datetime.now(UTC),
+                draft=image.draft_file(run_id, ".png") if request.draft else None,
             )
             calls.record(run, parent, image)
-            image.runs.append(run)
-            image.save_runs()
+            image.save_run(run)
             work = partial(_follow, agent, run)
             return InProcessRun(image, run, work, request.timeout_seconds, lock, ".png", stop=agent.cancel)
         except BaseException:

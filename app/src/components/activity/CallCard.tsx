@@ -72,6 +72,7 @@ export function CallCard({
   const images = numbered(call.images);
   const used = call.state === "sent" ? usageLabel(call.usage) : null;
   const [shown, setShown] = useState<string | null>(null);
+  const draft = call.draft?.made ? call.draft : null;
   return (
     <div className="relative flex flex-col gap-1.5 rounded-md border border-line bg-panel p-2 hover:bg-hover">
       {/* Under the card's content, so the whole card opens the call. */}
@@ -87,6 +88,11 @@ export function CallCard({
         <span className="shrink-0 mono-annotation text-ink-muted">
           {call.edits ? "edit" : "create"}
         </span>
+        {call.draft && (
+          <span className="shrink-0 rounded-sm bg-accent-soft px-1 mono-annotation text-accent-ink">
+            draft
+          </span>
+        )}
         <span className="min-w-0 truncate mono-annotation text-ink-muted">
           {label(call.model)}
         </span>
@@ -133,8 +139,9 @@ export function CallCard({
           })}
         </div>
       )}
-      {/* The canvas shows what a call for this image has made so far, so only one for another image shows it here. */}
-      {!here && call.preview !== null && (
+      {/* The canvas shows what a call for this image has made so far, so only one for another image, or a draft,
+          which the canvas leaves out, shows it here. */}
+      {(!here || call.draft) && call.preview !== null && (
         <div className="pointer-events-none relative flex items-end gap-2">
           <Thumb
             picture={previewPicture({ name: call.name }, call.id, call.preview)}
@@ -143,10 +150,28 @@ export function CallCard({
           <span className="mono-annotation text-ink-muted">So far</span>
         </div>
       )}
+      {draft && (
+        <div className="pointer-events-none relative flex items-end gap-2">
+          <ExpandableThumb
+            path={draft.path}
+            label="Draft"
+            onExpand={() => setShown(draft.path)}
+            className="size-24"
+          />
+          <span className="mono-annotation text-ink-muted">
+            {call.versions.length > 0
+              ? `Draft, kept as ${call.versions.join(", ")}`
+              : "Draft"}
+          </span>
+        </div>
+      )}
       <ImageViewer
-        items={images
-          .filter((image) => !BESIDE.includes(image.role))
-          .map((image) => ({ path: image.path, name: fileName(image.path) }))}
+        items={[
+          ...images
+            .filter((image) => !BESIDE.includes(image.role))
+            .map((image) => ({ path: image.path, name: fileName(image.path) })),
+          ...(draft ? [{ path: draft.path, name: "Draft" }] : []),
+        ]}
         path={shown}
         onShow={setShown}
       />

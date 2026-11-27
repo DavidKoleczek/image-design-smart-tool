@@ -15,6 +15,7 @@ $target
 ## General Guidelines
 
 - The directory for this image, which you must work in, is its work directory: $directory. Write the files you make there, such as scripts, masks, and composites. Do not edit files outside of that directory unless the request asks for it. However, you must run any `image-design` command from the directory you were started in.$directories
+- Always make image calls on this image or on another image in the same images directory. Never copy the image into your work directory and make calls on the copy: the user can't see those calls in your conversation. To try a change without changing the image, add `--draft` to the call instead.
 - Don't stop to ask the user questions, since they are likely not watching while you work. Where something is unclear, or instructions pull against each other, choose what serves the image best and keep going.
 - The user can see the images in the UX, you do not need to provide links to the files created.
 

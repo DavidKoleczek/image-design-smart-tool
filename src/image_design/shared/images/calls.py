@@ -27,8 +27,11 @@ def parent_of(root: Path, data: Path, parent: str | None, name: str) -> Parent |
     found = find_design(root, data, parent)
     if found is None:
         raise ImageDesignError(
-            f"There is no agent's run {parent!r} in {data} to make the call on {name} for. Pass the --directory and "
-            f"--data-directory that run is kept in, or unset {PARENT} to make the call on its own.",
+            f"There is no agent's run {parent!r} in {data}, so this call on {name} can't be linked to it. An agent's "
+            "calls show in its conversation only when they are on images in the same directory as its run. Make the "
+            "call on the agent's own image or on another image in that directory, not on a copy somewhere else. If "
+            f"the image really has to be somewhere else, unset {PARENT}: the call then runs on its own and won't show "
+            "in the agent's conversation.",
             "no-such-run",
             name,
         )

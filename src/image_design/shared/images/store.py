@@ -9,13 +9,13 @@ The data directory holds a folder per image, named by the image's id so it stays
     images/<id>/runs.json       every request on the image
     images/<id>/designs.json    every run of the image's agent
     images/<id>/links.jsonl     the image calls its agent made on other images
-    images/<id>/runs/<run id>/  a run's events, the files it sent, and its previews
+    images/<id>/runs/<run id>/  a run's events, the files it sent, its previews, and a draft's image
     images/<id>/work/           where an agent draws an SVG
     images/<id>/sessions/       the agents' sessions, which a later run can resume
-    locks/                      which process is working on which image
+    locks/                      which process is working on which image, and which is writing its runs.json
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -64,12 +64,17 @@ DESIGNS = "designs.json"
 LINKS = "links.jsonl"
 EVENTS = "events.jsonl"
 PROCESS_LOG = "process.log"
+# The file in a draft's run folder that keeps its image, under the image's extension.
+DRAFT = "draft"
 SESSIONS = "sessions"
 # Every extension an image's name can end in.
 KEPT_SUFFIXES = (*IMAGE_FORMATS, SVG_SUFFIX)
 GITIGNORE = Path(__file__).with_name("data.gitignore")
 # A lock file is written just after it is made, so one still empty this soon after is being written, not abandoned.
 LOCK_WRITE_SECONDS = 10
+# A process holds an image's runs.json lock only while it reads and rewrites the file, which takes far less than this,
+# so a lock older than this was left by a process that ended while it held it.
+RUNS_HELD_SECONDS = 10
 # Windows refuses to replace a file another process has open, such as a viewer reading runs.json, and to open one being
 # replaced; both are brief.
 REPLACE_ATTEMPTS = 20
@@ -199,11 +204,28 @@ class StoredImage:
     def run_folder(self, run_id: str) -> Path:
         return self.runs_folder / run_id
 
+    def draft_file(self, run_id: str, suffix: str) -> Path:
+        """Where a draft keeps its image, relative to the image's folder, as its record names it."""
+        return self.run_folder(run_id).relative_to(self.folder) / f"{DRAFT}{suffix}"
+
     def save_versions(self) -> None:
         write_atomically(self.folder / VERSIONS, self.versions.model_dump_json(indent=2))
 
-    def save_runs(self) -> None:
-        write_atomically(self.folder / RUNS, ImageRuns(runs=self.runs).model_dump_json(indent=2))
+    def save_run(self, run: ImageRunRecord) -> None:
+        """Keep `run`'s record as it is now in runs.json, leaving the records of every other run as they are there.
+
+        Drafts on an image go on at the same time as each other and as the run that holds the image, each process
+        saving its own run, so the file is read again and written under a lock held only for that.
+        """
+        with _holding(self.data / LOCKS / f"{self.record.id}-runs.lock"):
+            kept = load_runs(self.folder) if (self.folder / RUNS).is_file() else []
+            at = next((index for index, each in enumerate(kept) if each.id == run.id), None)
+            if at is None:
+                kept.append(run)
+            else:
+                kept[at] = run
+            write_atomically(self.folder / RUNS, ImageRuns(runs=kept).model_dump_json(indent=2))
+        self.runs = kept
 
     def save_designs(self) -> None:
         write_atomically(self.folder / DESIGNS, ImageRuns(runs=self.designs).model_dump_json(indent=2))
@@ -221,9 +243,18 @@ class StoredImage:
         )
 
     def add_version(
-        self, content: bytes, suffix: str, method: ImageMethod, run_id: str | None, script: Script | None = None
+        self,
+        content: bytes,
+        suffix: str,
+        method: ImageMethod,
+        run_id: str | None,
+        script: Script | None = None,
+        drafts: list[str] | None = None,
     ) -> ImageVersion:
-        """Keep `content` as the image's next version, and the script that built it, without touching the image's file."""
+        """Keep `content` as the image's next version, and the script that built it, without touching the image's file.
+
+        `drafts` are the drafts it was made from, by their run ids, for a file made of drafts.
+        """
         picture = pictures.describe(content)
         if picture is None:
             raise ImageDesignError(
@@ -250,6 +281,7 @@ class StoredImage:
             run_id=run_id,
             created=datetime.now(UTC),
             script=kept_script,
+            drafts=drafts or [],
         )
         self.versions.versions.append(version)
         self.save_versions()
@@ -288,10 +320,19 @@ class StoredImage:
         script = self.folder / version.script if version.script is not None else None
         return version.model_copy(update={"file": self.folder / version.file, "script": script})
 
+    def last_run(self) -> ImageRunRecord | None:
+        """The image's last run, leaving out drafts, which leave its file and versions as they are."""
+        return next((run for run in reversed(self.runs) if run.draft is None), None)
+
     def running(self) -> ImageRunRecord | None:
-        """The run working on the image, when its process is alive. The image's agent is not one; see `designing`."""
-        run = self.runs[-1] if self.runs else None
+        """The run working on the image, when its process is alive. Neither a draft nor the image's agent is one; see
+        `drafting` and `designing`."""
+        run = self.last_run()
         return run if run is not None and run.status == "running" and alive(run.pid) else None
+
+    def drafting(self) -> list[ImageRunRecord]:
+        """The drafts going on the image, whose processes are alive."""
+        return [run for run in self.runs if run.draft is not None and run.status == "running" and alive(run.pid)]
 
     def designing(self) -> ImageRunRecord | None:
         """The run of the image's agent, when one is working and its process is alive."""
@@ -333,7 +374,7 @@ class StoredImage:
         return found
 
     def summary(self) -> ImageSummary:
-        last = self.runs[-1] if self.runs else None
+        last = self.last_run()
         if last is not None and last.status == "running" and not alive(last.pid):
             last = last.model_copy(update={"status": "failed", "error": CRASHED})
         facts = file_facts(self.path)
@@ -348,6 +389,7 @@ class StoredImage:
             versions=[self.located(version) for version in self.versions.versions],
             last_run=last,
             design=self.design_status(),
+            drafting=[run.id for run in self.drafting()],
         )
 
 
@@ -399,7 +441,7 @@ def new_image(root: Path, data: Path, name: str) -> StoredImage:
     folder.mkdir(parents=True)
     image = StoredImage(root=root, data=data, folder=folder, record=record, versions=ImageVersions(), runs=[])
     image.save_versions()
-    image.save_runs()
+    write_atomically(folder / RUNS, ImageRuns().model_dump_json(indent=2))
     image.save_record()
     return image
 
@@ -516,6 +558,7 @@ def _summary(
     versions: list[ImageVersion],
     last_run: ImageRunRecord | None,
     design: ImageDesignStatus | None = None,
+    drafting: list[str] | None = None,
 ) -> ImageSummary:
     picture = facts.picture if facts is not None else None
     return ImageSummary(
@@ -532,6 +575,7 @@ def _summary(
         status=last_run.status if last_run is not None else None,
         last_run=last_run,
         design=design,
+        drafting=drafting or [],
     )
 
 
@@ -586,6 +630,32 @@ def release_lock(path: Path, holder: str) -> None:
     except (OSError, ValueError):
         return
     if claimed.get("holder") == holder and claimed.get("pid") == os.getpid():
+        path.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def _holding(path: Path) -> Generator[None]:
+    """Hold the lock at `path` while the block runs, waiting for a process that holds it to let it go."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    refused = 0
+    while True:
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            if _age(path) > RUNS_HELD_SECONDS:
+                path.unlink(missing_ok=True)
+            else:
+                time.sleep(REPLACE_WAIT_SECONDS)
+        except PermissionError:
+            # Windows refuses to make a file in the moment another process removes one by that name.
+            refused += 1
+            if refused == REPLACE_ATTEMPTS:
+                raise
+            time.sleep(REPLACE_WAIT_SECONDS)
+    try:
+        yield
+    finally:
         path.unlink(missing_ok=True)
 
 

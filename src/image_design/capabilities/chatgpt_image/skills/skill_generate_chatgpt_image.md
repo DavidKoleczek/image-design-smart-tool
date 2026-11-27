@@ -22,6 +22,8 @@ result = await run.result()
 `marks.json` holds a list of marks, as for `generate-openai-image`. They are drawn on a copy of the image, which is
 sent second, so with marks the references start at image 3.
 
+`--draft` tries an edit without changing the image, as for `generate-openai-image`.
+
 ## Arguments
 
 - `PROMPT`: What to make, or what to change. It is passed to the image tool as written.
@@ -40,12 +42,13 @@ sent second, so with marks the references start at image 3.
 - `--timeout-seconds`: How long the request may take. Defaults to 600.
 - `--origin`: Who asked, such as `app`.
 - `--detach`: Leave the run going in a process of its own once it is sent. Stop it with `image-design cancel-image`.
+- `--draft`: Edit `--version`, or the version in the image's file, and save the result as a draft instead of a version.
 - `--json`: Print each event of the run as a line of JSON instead of text.
 
 ## Result
 
-The path of the image's file. Progress goes to stderr. The command exits 0 when the run is done and 1 when it failed,
-timed out, or was cancelled. Ctrl+C cancels it.
+The path of the image's file, or with `--draft` the path of the draft. Progress goes to stderr. The command exits 0
+when the run is done and 1 when it failed, timed out, or was cancelled. Ctrl+C cancels it.
 
 ```
 .image-design/concepts/cactus.png

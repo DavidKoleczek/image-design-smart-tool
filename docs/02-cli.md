@@ -27,6 +27,7 @@ image-design generate-openai-image "A paper-cut cactus in a terracotta pot." --n
 A few arguments are written differently on the command line:
 
 - `references`: Repeat `--reference <path>` for each file.
+- `drafts` for `add-image-version`: Repeat `--draft <run id>` for each draft.
 - `marks`: Pass `--marks <path>`, a JSON file that holds a list of marks.
 - `size` and `canvas`: The width and height joined by `x`, such as `--size 1024x1024`.
 - `max_bytes`, and `timeout_seconds` for `draw-svg-image` and `design-image`: A number, or `none` for no limit.
@@ -43,7 +44,7 @@ $ image-design draw-svg-image "A flat vector sailboat on calm water at sunset. N
 .image-design/sailboat.svg
 ```
 
-Progress is printed to stderr while the run works. With `--json`, each event of the run is printed to stdout as one line of JSON instead, and the last event has the result.
+With `--draft`, the path printed is the draft's file, in a folder named by the draft's run id. Progress is printed to stderr while the run works. With `--json`, each event of the run is printed to stdout as one line of JSON instead, and the last event has the result.
 
 The command exits with 0 if the run finished, and with 1 if it failed, timed out, or was cancelled. Ctrl+C cancels the run.
 

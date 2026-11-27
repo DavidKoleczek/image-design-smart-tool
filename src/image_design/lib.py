@@ -82,12 +82,13 @@ async def generate_openai_image(
     origin: str | None = None,
     detach: bool = False,
     parent: str | None = None,
+    draft: bool = False,
 ) -> ImageRun:
     """Create or edit an image with an OpenAI image model through the Images API. Model-backed.
 
     A `name` new to `directory` creates the image, and the name of one that exists edits it, overwriting its file. Every
-    image made is kept as a version in `data_directory`, which `restore_image_version` puts back. Needs the openai
-    extra and an `OPENAI_API_KEY`. A request is never retried.
+    image made is kept as a version in `data_directory`, which `restore_image_version` puts back. A draft instead tries
+    an edit without changing the image. Needs the openai extra and an `OPENAI_API_KEY`. A request is never retried.
 
     Args:
         prompt: What to make, or what to change.
@@ -114,10 +115,13 @@ async def generate_openai_image(
         detach: Run the request in a process of its own, which goes on when the caller exits.
         parent: The run of the image's agent that makes the call, from `design_image`; the one the
             IMAGE_DESIGN_PARENT environment variable names when None, which that agent's processes have.
+        draft: Edit `version`, or the version in the image's file, and keep the result apart, in the run's folder,
+            rather than as a version, leaving the image as it is. Drafts on an image can go at the same time as each
+            other and as a call that is not one. `add_image_version` keeps a draft as the next version.
 
     Returns:
         The run, once the request is sent. Its `events()` yields each step, including `preview` events with the path of
-        an in-progress image, and `result()` waits for the `ImageResult`.
+        an in-progress image, and `result()` waits for the `ImageResult`, whose `draft` is a draft's file.
     """
     return await generate.generate_openai_image(
         prompt=prompt,
@@ -142,6 +146,7 @@ async def generate_openai_image(
         origin=origin,
         detach=detach,
         parent=parent,
+        draft=draft,
     )
 
 
@@ -161,6 +166,7 @@ async def generate_chatgpt_image(
     detach: bool = False,
     intelligence: Intelligence | None = None,
     parent: str | None = None,
+    draft: bool = False,
 ) -> ImageRun:
     """Create or edit an image with the image generation built into Codex. Agentic.
 
@@ -187,6 +193,7 @@ async def generate_chatgpt_image(
         detach: Run the request in a process of its own, which goes on when the caller exits.
         intelligence: An agent to use in place of Codex, such as a fake in tests. Not with `detach`.
         parent: The run of the image's agent that makes the call, as for `generate_openai_image`.
+        draft: Try the edit without changing the image, as for `generate_openai_image`.
 
     Returns:
         The run, once the agent has started. Its `result()` waits for the `ImageResult`, whose `usage` is None since
@@ -208,6 +215,7 @@ async def generate_chatgpt_image(
         detach=detach,
         intelligence=intelligence,
         parent=parent,
+        draft=draft,
     )
 
 
@@ -602,16 +610,22 @@ def import_image(
 
 
 def add_image_version(
-    name: str, path: Path, directory: Path | None = None, data_directory: Path | None = None, parent: str | None = None
+    name: str,
+    path: Path | None = None,
+    directory: Path | None = None,
+    data_directory: Path | None = None,
+    parent: str | None = None,
+    drafts: list[str] | None = None,
 ) -> ImageSummary:
-    """Keep a file as the next version of an image, such as a crop or a composite a script made, and put it in the
-    image's file. The file is copied and left as it is.
+    """Keep a file as the next version of an image, such as a crop or a merge a script made, or keep a draft, and put
+    it in the image's file. The file is copied and left as it is.
 
     It has to be in the image's format, except that any still image becomes a PNG for a .png. `parent` is the run of
     the image's agent that made it, which the version names; the one the IMAGE_DESIGN_PARENT environment variable names
-    when None.
+    when None. `drafts` are the drafts on the image the file was made from, by their run ids, which the version names.
+    With no `path`, the one draft in `drafts` is kept as it is, as a version its run made.
     """
-    return image_versions.add_image_version(name, path, directory, data_directory, parent)
+    return image_versions.add_image_version(name, path, directory, data_directory, parent, drafts)
 
 
 def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:

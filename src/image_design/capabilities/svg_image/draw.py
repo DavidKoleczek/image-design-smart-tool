@@ -201,8 +201,7 @@ async def start(request: SvgImageRequest, intelligence: Intelligence | None = No
                 pid=os.getpid(),
                 started=datetime.now(UTC),
             )
-            image.runs.append(run)
-            image.save_runs()
+            image.save_run(run)
             work_done = partial(_follow, agent, intelligence.steering, image, run, budgets)
             return SvgInProcessRun(
                 image,

@@ -278,6 +278,19 @@ async def test_a_new_session_is_told_the_image_s_history(agent: FakeDesignAgent)
     assert "It made v1. It is now the image's file." in prompt
 
 
+async def test_a_new_session_is_told_of_a_draft_and_the_version_it_was_kept_as(agent: FakeDesignAgent) -> None:
+    await made()
+    run = await lib.generate_openai_image(prompt="Make the pot blue.", name="cactus.png", origin="app", draft=True)
+    draft = await run.result()
+    lib.add_image_version("cactus.png", drafts=[draft.run_id])
+
+    await designed(agent)
+
+    prompt = agent.runs[0].request.prompt
+    assert "image-design generate-openai-image --name cactus.png --version v1 --draft" in prompt
+    assert f"It made a draft, kept apart from the image's versions: {draft.draft}. It was then kept as v2." in prompt
+
+
 async def test_a_new_session_is_told_only_the_last_calls_and_where_the_rest_are(agent: FakeDesignAgent) -> None:
     for said in ("Call one.", "Call two.", "Call three.", "Call four."):
         await made(prompt=said)

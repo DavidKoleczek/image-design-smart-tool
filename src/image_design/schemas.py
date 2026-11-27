@@ -139,7 +139,7 @@ IMAGE_FORMATS: dict[str, ImageFormat] = {".png": "png", ".jpg": "jpeg", ".webp":
 SVG_SUFFIX = ".svg"
 ImageMethod = Literal["openai", "chatgpt", "svg", "imported", "design"]
 ImageRunStatus = Literal["running", "done", "failed", "cancelled", "timed-out"]
-ImageEventKind = Literal["started", "preview", "agent", "steered", "version", "finished", "failed"]
+ImageEventKind = Literal["started", "preview", "agent", "steered", "version", "draft", "finished", "failed"]
 MarkShape = Literal["circle", "box", "arrow", "sketch"]
 Fraction = Annotated[float, Field(ge=0, le=1)]
 
@@ -193,6 +193,11 @@ class ImageVersion(BaseModel):
         default=None,
         description="For an SVG the tool drew, the image.py that builds it, kept as `file` is, with its lock beside it "
         "under the same name and .lock added",
+    )
+    drafts: list[str] = Field(
+        default_factory=list,
+        description="For a file kept with `add_image_version` that was made from drafts, such as a merge of them, the "
+        "drafts by their run ids",
     )
 
 
@@ -251,7 +256,14 @@ class ImageRunRecord(BaseModel):
     started: datetime
     last_event: datetime | None = None
     finished: datetime | None = None
-    versions: list[str] = Field(default_factory=list, description="The versions it made")
+    versions: list[str] = Field(
+        default_factory=list, description="The versions it made, and for a draft the one it was kept as"
+    )
+    draft: Path | None = Field(
+        default=None,
+        description="For a draft, which keeps its image apart rather than as a version, the file it keeps it in, "
+        "relative to the image's folder in the data directory; None for a call that makes versions",
+    )
     image_prompt: str | None = Field(
         default=None, description="The prompt the image model received, when the method words it rather than the caller"
     )
@@ -296,6 +308,7 @@ class ImageResult(BaseModel):
     versions: list[ImageVersion] = Field(
         default_factory=list, description="The versions it made; the first went into the image's file"
     )
+    draft: Path | None = Field(default=None, description="For a draft, the file its image is in, once it made one")
     usage: ImageUsage | None = None
     error: str | None = None
 
@@ -328,11 +341,16 @@ class ImageSummary(BaseModel):
         description="The version in the image's file; None when the file has been changed by hand since"
     )
     versions: list[ImageVersion] = Field(description="Empty for a file the tool has made no change to yet")
-    status: ImageRunStatus | None = Field(description="Its last run's status; None when it has had no run")
-    last_run: ImageRunRecord | None = Field(description="Its last run, with the request it was given")
+    status: ImageRunStatus | None = Field(
+        description="Its last run's status, leaving out drafts; None when it has had no run"
+    )
+    last_run: ImageRunRecord | None = Field(
+        description="Its last run, with the request it was given, leaving out drafts, which leave its file as it is"
+    )
     design: ImageDesignStatus | None = Field(
         default=None, description="Its agent's last run, from `design_image`; None when it has had none"
     )
+    drafting: list[str] = Field(default_factory=list, description="The drafts going on it now, by their run ids")
 
 
 class ImageListing(BaseModel):

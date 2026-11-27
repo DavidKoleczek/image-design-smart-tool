@@ -31,6 +31,8 @@ from image_design.shared.images import marks as marking
 from image_design.shared.images.requests import (
     Reference,
     claimed,
+    draft_from,
+    drafted,
     edited_version,
     invalid,
     previewed_source,
@@ -82,6 +84,7 @@ class OpenAIImageRequest(BaseModel):
     timeout_seconds: int = 600
     origin: str | None = None
     parent: str | None = None
+    draft: bool = False
 
 
 async def generate_openai_image(
@@ -107,6 +110,7 @@ async def generate_openai_image(
     origin: str | None = None,
     detach: bool = False,
     parent: str | None = None,
+    draft: bool = False,
 ) -> ImageRun:
     """Start creating the image named `name`, or editing it when it exists, and return its run once it is sent."""
     request = validated(
@@ -132,6 +136,7 @@ async def generate_openai_image(
         timeout_seconds=timeout_seconds,
         origin=origin,
         parent=parent,
+        draft=draft,
     )
     if not detach:
         return await start(request)
@@ -232,7 +237,10 @@ async def start(request: OpenAIImageRequest) -> InProcessRun:
     images_api.preflight()
     sent = sent_references(request.references)
     run_id = new_run_id()
-    with claimed(root, data, name, run_id) as (image, lock):
+    holding = drafted(root, data, name, run_id) if request.draft else claimed(root, data, name, run_id)
+    with holding as (image, lock):
+        if request.draft:
+            request = request.model_copy(update={"version": draft_from(image, request.version)})
         folder = image.run_folder(run_id)
         api_request = _prepare(request, sent, image, suffix, model, folder / "inputs")
         version = edited_version(image, request.version)
@@ -244,10 +252,10 @@ async def start(request: OpenAIImageRequest) -> InProcessRun:
             origin=request.origin,
             pid=os.getpid(),
             started=datetime.now(UTC),
+            draft=image.draft_file(run_id, suffix) if request.draft else None,
         )
         calls.record(run, parent, image)
-        image.runs.append(run)
-        image.save_runs()
+        image.save_run(run)
         work = partial(images_api.send, api_request, model, request.timeout_seconds)
         return InProcessRun(image, run, work, request.timeout_seconds, lock, suffix)
 
