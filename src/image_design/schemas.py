@@ -159,6 +159,11 @@ class Mark(BaseModel):
     )
     color: str = Field(default="red", description="A CSS color name or a hex code")
     note: str = ""
+    numbered: bool = Field(
+        default=False,
+        description="Whether its number, its place among the marks from 1, is drawn beside it, so a prompt can name "
+        "it by number",
+    )
 
 
 class ImageUsage(BaseModel):

@@ -19,6 +19,7 @@ result = await run.result()
 `marks.json` holds a list of marks. Points are fractions of the image's width and height from its top left: two
 opposite corners for a `circle` or `box`, the tail then the head for an `arrow`, and each point along a `sketch`.
 A sketch drawn in several strokes has the first in `points` and the others, each a list of points, in `strokes`.
+`"numbered": true` draws the mark's number, its place in the list from 1, beside it, so the prompt can name it.
 
 ```json
 [{"shape": "circle", "points": [[0.4, 0.5], [0.6, 0.9]], "color": "red", "note": "this pot"}]

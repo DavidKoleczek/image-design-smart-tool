@@ -302,7 +302,8 @@ MARKS = {
     "type": "array",
     "items": {"type": "object"},
     "description": "Shapes drawn over the image being edited, each with a `shape`, its `points` as fractions of the "
-    "image, a `color`, and for a sketch of several strokes its further `strokes`",
+    "image, a `color`, for a sketch of several strokes its further `strokes`, and `numbered` true to draw its number "
+    "beside it",
 }
 OPENAI_REQUEST = {
     "type": "object",

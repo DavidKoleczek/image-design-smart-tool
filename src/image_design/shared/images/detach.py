@@ -1,7 +1,8 @@
 """Detached runs: a request run in a process of its own, apart from the caller's, so the run outlives the caller.
 
-The caller starts the process with the request on its stdin. That process starts a second one apart from the caller's
-console, session, and job, which starts the run and reports one line on stdout once the run is going or cannot be.
+The caller starts the launcher with the request on its stdin. The launcher starts the run's process apart from the
+caller's console, session, and job, and exits. That process starts the run and reports one line on stdout once the run
+is going or cannot be.
 """
 
 import asyncio
@@ -12,17 +13,16 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
-from typing import IO, Any, TextIO
+from typing import Any, TextIO
 
 from pydantic import BaseModel
 
 from image_design.schemas import ImageDesignError
+from image_design.shared.images import launch
 from image_design.shared.images.runs import DetachedRun, ImageRun, stopped_by_signals
 from image_design.shared.images.store import PROCESS_LOG
 
-# Set in the process that runs the request. The process the caller starts only starts that one, with the same pipes,
-# and exits, so the run descends from nothing a caller's process tree takes down with it when it is ended.
-RUNNING = "IMAGE_DESIGN_DETACHED_RUN"
+LAUNCHER = [sys.executable, "-m", launch.__name__]
 
 
 async def detach[Run: DetachedRun](
@@ -37,15 +37,6 @@ async def detach[Run: DetachedRun](
 
 def serve(start: Callable[[str], Awaitable[ImageRun]]) -> int:
     """Run the request on stdin to its end with `start`, as the process a detached run runs in."""
-    if RUNNING not in os.environ:
-        try:
-            command = [sys.executable, *sys.orig_argv[1:]]
-            detached_process(command, sys.stdin, sys.stdout, {**os.environ, RUNNING: "1"})
-        except OSError as error:
-            failure = {"error": f"The process that runs the request did not start: {error}", "reason": "start-failed"}
-            print(json.dumps(failure), flush=True)
-            return 1
-        return 0
     # The report goes out on a copy of stdout, and stdout itself goes nowhere until the run starts, so nothing else
     # printed can garble the report.
     report = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8")
@@ -73,26 +64,10 @@ async def _serve(start: Callable[[str], Awaitable[ImageRun]], request: str, repo
     return 0 if result.status == "done" else 1
 
 
-def detached_process(
-    command: list[str], stdin: int | IO[Any], stdout: int | IO[Any], environment: dict[str, str] | None = None
-) -> subprocess.Popen[bytes]:
-    """Start `command` apart from this process's console, session, and job, so ending them leaves it running."""
-    if sys.platform != "win32":
-        return _popen(command, stdin, stdout, environment, start_new_session=True)
-    # A console of its own without a window, so it opens none.
-    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-    try:
-        # Out of the caller's job as well, since a host may end everything in its job when it exits.
-        return _popen(command, stdin, stdout, environment, creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
-    except PermissionError:
-        # The job allows no breaking away. Hosts built on Node let the children of their children leave it anyway.
-        return _popen(command, stdin, stdout, environment, creationflags=flags)
-
-
 def _start_process(command: list[str], request: BaseModel) -> dict[str, Any]:
     """Start the process a detached run runs in, and return what it reports once the run is going or cannot be."""
-    process = detached_process(command, subprocess.PIPE, subprocess.PIPE)
-    # It only starts the run's own process and exits; waited on here so it leaves no zombie.
+    process = launch.detached_process([*LAUNCHER, *command], subprocess.PIPE, subprocess.PIPE)
+    # The launcher only starts the run's own process and exits; waited on here so it leaves no zombie.
     threading.Thread(target=process.wait, daemon=True).start()
     assert process.stdin is not None
     assert process.stdout is not None
@@ -107,25 +82,6 @@ def _start_process(command: list[str], request: BaseModel) -> dict[str, Any]:
             "reason": "start-failed",
         }
     return json.loads(line)
-
-
-def _popen(
-    command: list[str],
-    stdin: int | IO[Any],
-    stdout: int | IO[Any],
-    environment: dict[str, str] | None,
-    start_new_session: bool = False,
-    creationflags: int = 0,
-) -> subprocess.Popen[bytes]:
-    return subprocess.Popen(
-        command,
-        stdin=stdin,
-        stdout=stdout,
-        stderr=subprocess.DEVNULL,
-        env=environment,
-        start_new_session=start_new_session,
-        creationflags=creationflags,
-    )
 
 
 def _report(report: TextIO, message: dict[str, str | None]) -> None:

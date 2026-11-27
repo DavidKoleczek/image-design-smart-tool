@@ -109,13 +109,64 @@ export function markPath(
     .join("");
 }
 
+/** A mark's number is on a badge this many of its lines tall, in a font this share of it, as the library draws it. */
+export const BADGE = { lines: 6, font: 0.62 };
+
+/**
+ * The top left of a mark's number badge, `across` by `side`, on an image drawn `width` by `height` whose lines reach
+ * `edge` out from their paths. It goes above a box or a sketch, flush with its left edge, or just inside its top where
+ * the image leaves no room above; off a circle's upper left; and beyond an arrow's tail, away from what the arrow
+ * points at. It stays on the image. The library's `_badge_corner` places it the same way.
+ */
+export function badgeCorner(
+  mark: Shape,
+  width: number,
+  height: number,
+  { across, side, edge }: { across: number; side: number; edge: number },
+): Point {
+  let x: number;
+  let y: number;
+  if (mark.shape === "arrow") {
+    const [tailX, tailY] = [mark.tail[0] * width, mark.tail[1] * height];
+    const back = Math.atan2(
+      tailY - mark.head[1] * height,
+      tailX - mark.head[0] * width,
+    );
+    const reach = Math.hypot(across, side) / 2 + edge;
+    x = tailX + reach * Math.cos(back) - across / 2;
+    y = tailY + reach * Math.sin(back) - side / 2;
+  } else if (mark.shape === "circle") {
+    // Its bottom right corner on the outline, halfway round from the circle's top to its left.
+    x = (mark.x + (mark.w / 2) * (1 - Math.SQRT1_2)) * width - across;
+    y = (mark.y + (mark.h / 2) * (1 - Math.SQRT1_2)) * height - side;
+  } else {
+    const box = markBox(mark);
+    const top = box.y * height - edge;
+    x = box.x * width - edge;
+    y = top >= side ? top - side : box.y * height;
+  }
+  return [
+    Math.max(0, Math.min(x, width - across)),
+    Math.max(0, Math.min(y, height - side)),
+  ];
+}
+
 /** What a mark is called, for a person. */
 export function markName(mark: Mark): string {
   return `Mark ${mark.id}, ${mark.color} ${mark.shape}`;
 }
 
-/** The mark as a request sends it. */
-export function sentMark(mark: Shape & { color: MarkColor }): SentMark {
+/** The mark as a request sends it, with its number drawn beside it when `numbered`. */
+export function sentMark(
+  mark: Shape & { color: MarkColor },
+  numbered: boolean,
+): SentMark {
+  return { ...sentShape(mark), color: mark.color, numbered };
+}
+
+function sentShape(
+  mark: Shape,
+): Pick<SentMark, "shape" | "points" | "strokes"> {
   if (mark.shape === "circle" || mark.shape === "box") {
     return {
       shape: mark.shape,
@@ -123,15 +174,10 @@ export function sentMark(mark: Shape & { color: MarkColor }): SentMark {
         [mark.x, mark.y],
         clampPoint([mark.x + mark.w, mark.y + mark.h]),
       ],
-      color: mark.color,
     };
   }
   if (mark.shape === "arrow") {
-    return {
-      shape: "arrow",
-      points: [mark.tail, mark.head],
-      color: mark.color,
-    };
+    return { shape: "arrow", points: [mark.tail, mark.head] };
   }
   // A line takes two points, so a dot is sent as a line of no length.
   const [first, ...rest] = mark.strokes.map((stroke) =>
@@ -141,6 +187,5 @@ export function sentMark(mark: Shape & { color: MarkColor }): SentMark {
     shape: "sketch",
     points: first,
     ...(rest.length > 0 ? { strokes: rest } : {}),
-    color: mark.color,
   };
 }

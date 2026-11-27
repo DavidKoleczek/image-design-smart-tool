@@ -152,7 +152,10 @@ class Mark(BaseModel):
     strokes: list[list[tuple[float, float]]] = []  # for a sketch, each stroke after the first
     color: str = "red"
     note: str = ""
+    numbered: bool = False  # draw its number, its place among the marks from 1, beside it
 ```
+
+A numbered mark's number is drawn on a badge of its color, so a prompt can name it, as in "make 2 blue". The app numbers its marks unless its Numbers box is cleared.
 
 The function returns as soon as the request is sent. Use the returned `ImageRun` to follow it:
 

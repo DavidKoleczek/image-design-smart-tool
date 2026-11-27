@@ -176,6 +176,26 @@ async def test_a_sketch_of_several_strokes_is_drawn_as_one_mark_with_a_stroke_th
     assert "Mark 1 is a box with strokes, which only a sketch has" in str(refused.value)
 
 
+async def test_a_numbered_mark_has_its_number_on_a_badge_of_its_color_above_it_and_the_prompt_says_so(
+    images_api: FakeImagesAPI,
+) -> None:
+    await made(prompt="A paper-cut cactus.", name="cactus.png")
+    pot = Mark(shape="box", points=[(0.25, 0.5), (0.75, 0.9)], numbered=True)
+    await made(prompt="Make 2 blue.", name="cactus.png", marks=[CACTUS, pot])
+
+    editing = images_api.requests[1]
+    markup = Image.open(BytesIO(editing.files["markup"][0]))
+    assert markup.size == (1024, 1024)
+    # The box's lines are 9 pixels wide and its badge 6 lines tall, flush with its left edge, so it starts at
+    # (256, 457), with a white 2 on red.
+    badge = markup.crop((258, 459, 308, 509))
+    colors = {color for _, color in badge.getcolors(badge.width * badge.height) or []}
+    assert {(255, 0, 0, 255), (255, 255, 255, 255)} <= colors
+    # Where an unnumbered circle's badge would be, off its upper left, nothing is drawn.
+    assert markup.getpixel((412, 544)) == (0, 0, 0, 0)
+    assert "- Mark 1 is a red circle: this pot\n- Mark 2 is a red box with a 2 beside it." in editing.fields["prompt"]
+
+
 @pytest.mark.parametrize(
     ("arguments", "refusal"),
     [

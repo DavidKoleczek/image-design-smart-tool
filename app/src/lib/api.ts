@@ -361,6 +361,8 @@ export type SentMark = {
   /** For a sketch of several strokes, each stroke after the first. */
   strokes?: [number, number][][];
   color: string;
+  /** Whether its number is drawn beside it; not by default. */
+  numbered?: boolean;
 };
 
 /**

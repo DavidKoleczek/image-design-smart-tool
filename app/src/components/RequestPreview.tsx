@@ -66,6 +66,8 @@ type Guides = {
   /** The request's references, in the order it sends them. */
   references: Reference[];
   marks: Mark[];
+  /** Whether the marks are sent with their numbers. */
+  marksNumbered: boolean;
   /** The mask as it is sent, as a data URL; null for none. */
   mask: string | null;
 };
@@ -75,10 +77,12 @@ const TILE = "size-10 shrink-0 rounded-sm border border-line";
 /** The marks as the request sends them: alone on a layer of their own, or drawn on a copy of the source. */
 function MarksTile({
   marks,
+  numbered,
   source,
   copy,
 }: {
   marks: Mark[];
+  numbered: boolean;
   source: Source;
   /** Whether they are drawn on a copy of the source rather than sent beside it. */
   copy: boolean;
@@ -87,6 +91,7 @@ function MarksTile({
   return (
     <MarksPicture
       marks={marks}
+      numbered={numbered}
       width={source.shown.width ?? 1}
       height={source.shown.height ?? 1}
       url={copy ? url : null}
@@ -113,6 +118,7 @@ function Preview({
   from,
   references,
   marks,
+  marksNumbered,
   mask,
 }: Guides & {
   preview: ImageRequestPreview;
@@ -169,6 +175,7 @@ function Preview({
               ) : marked ? (
                 <MarksTile
                   marks={marks}
+                  numbered={marksNumbered}
                   source={source}
                   copy={image.role === "marked-copy"}
                 />
@@ -226,6 +233,7 @@ export function RequestPreview({
   from,
   references,
   marks,
+  marksNumbered,
   mask,
   onClose,
   onGenerate,
@@ -287,6 +295,7 @@ export function RequestPreview({
             from={from}
             references={references}
             marks={marks}
+            marksNumbered={marksNumbered}
             mask={mask}
           />
         ) : (

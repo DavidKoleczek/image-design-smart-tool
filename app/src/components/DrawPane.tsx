@@ -38,10 +38,11 @@ import {
   clearGuides,
   clearMarks,
   removeMark,
+  useCanvas,
   useGuides,
   type CanvasMode,
 } from "@/lib/canvas";
-import { dropDraft, updateDraft, useDraft } from "@/lib/drafts";
+import { draftOf, dropDraft, updateDraft, useDraft } from "@/lib/drafts";
 import {
   agentOf,
   budgetsOf,
@@ -83,7 +84,7 @@ import {
 import type { Runs } from "@/lib/runs";
 import { sessionOf, setResume, useResume } from "@/lib/sessions";
 import { flushAppState, updateAppState, useAppState } from "@/lib/state";
-import { currentCall, runsOf } from "@/lib/thread";
+import { currentCall, runsOf, sentTurn, useSentTurn } from "@/lib/thread";
 import type { Shown } from "@/lib/viewed";
 
 const MATCH = "match";
@@ -501,6 +502,7 @@ export function DrawPane({
   const newDraft = useDraft(newKey);
   const references = useReferences(key);
   const guides = useGuides(key, shown?.picture?.key ?? null);
+  const { numbered } = useCanvas();
   const drawing = useDrawing(key);
   const resume = useResume(key);
   const [picking, setPicking] = useState(false);
@@ -547,6 +549,7 @@ export function DrawPane({
   const running = editing && image.status === "running" && run !== null;
   const marks = editing && mode === "markup" ? guides.marks : [];
   const activity = editing ? runsOf(image, runs) : [];
+  const turn = useSentTurn(key, activity);
   const problem = problemOf(
     target,
     draft.prompt,
@@ -574,7 +577,19 @@ export function DrawPane({
     setFailure(null);
     const message = draft.prompt;
     const sent = sentReferences(references);
-    const sentMarks = marks.map(sentMark);
+    const sentMarks = marks.map((mark) => sentMark(mark, numbered));
+    // A turn on the drawing shows in the thread at once, and the message leaves the box, while its run starts.
+    const starts = target.image !== null && !running;
+    if (starts) {
+      turn.send(
+        sentTurn(activity, message, sentMarks, {
+          model: agent.model,
+          reasoning_effort: agent.effort,
+          resumed: session.continuing,
+        }),
+      );
+      updateDraft(key, { prompt: "" });
+    }
     try {
       // The server sends only references it knows the app offers, a pin among them once the pin is saved.
       await flushAppState();
@@ -602,6 +617,7 @@ export function DrawPane({
         );
         sentDrawing(key);
         if (target.image) {
+          turn.started(started.run_id);
           clearGuides(target.image.name);
           // What the run makes lands in the drawing's file, so that is what shows while it works.
           onView(null);
@@ -610,15 +626,22 @@ export function DrawPane({
           await onCreated(started.name);
         }
       }
-      // What a message was given goes with it; the next one starts empty. A new drawing's request was for the drawing
-      // alone, which is in view from now on.
-      if (target.image || target.from) {
-        updateDraft(key, { prompt: "" });
-      } else {
+      // What a message was given goes with it; the next one starts empty. A turn's left the box as it was sent, and
+      // the next may be in it by now. A new drawing's request was for the drawing alone, which is in view from now on.
+      if (!target.image && !target.from) {
         dropDraft(key);
+      } else if (!starts) {
+        updateDraft(key, { prompt: "" });
       }
       clearReferences(key);
     } catch (cause) {
+      if (starts) {
+        turn.failed();
+        // The message goes back in the box, unless another was written there meanwhile.
+        if (draftOf(key).prompt === "") {
+          updateDraft(key, { prompt: message });
+        }
+      }
       setFailure(
         `${running ? "The message did not reach the agent." : "The drawing did not start."} ${describe(cause)}`,
       );
@@ -770,7 +793,7 @@ export function DrawPane({
       {targetBlock}
       <Thread
         image={image}
-        runs={activity}
+        runs={turn.runs}
         label={label}
         viewing={shown?.version?.id ?? null}
         onView={onView}

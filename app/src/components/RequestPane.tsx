@@ -606,6 +606,7 @@ function RequestForm({
   const draft = useDraft(key);
   const references = useReferences(key);
   const guides = useGuides(key, shown?.picture?.key ?? null);
+  const { numbered } = useCanvas();
   const frame = useSourceFrame(image, shown, mode);
   const [open, setOpen] = useState({
     prompt: true,
@@ -705,7 +706,7 @@ function RequestForm({
 
   const guide = (mask: string | null): SentGuide => ({
     references: sentReferences(references),
-    marks: marks.map(sentMark),
+    marks: marks.map((mark) => sentMark(mark, numbered)),
     mask,
   });
 
@@ -992,6 +993,7 @@ function RequestForm({
         from={target.from ?? null}
         references={references}
         marks={marks}
+        marksNumbered={numbered}
         mask={previewing?.mask?.url ?? null}
         onClose={() => setPreviewing(null)}
         onGenerate={() => {

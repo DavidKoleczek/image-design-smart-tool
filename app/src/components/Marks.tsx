@@ -3,6 +3,8 @@ import type { PointerEvent } from "react";
 import { Icon } from "@/components/ui/icon";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
+  BADGE,
+  badgeCorner,
   markBox,
   markColor,
   markName,
@@ -16,6 +18,12 @@ import { cn } from "@/lib/utils";
 const TILE = { width: 64, height: 48 };
 // A mark's line on the canvas, the white under it that keeps it readable on any image, and how near counts as on it.
 const LINE = { width: 3, halo: 6, reach: 18 };
+const NUMBER = {
+  side: LINE.width * BADGE.lines,
+  font: LINE.width * BADGE.lines * BADGE.font,
+};
+// How wide a digit of the mono font is, as a share of its size.
+const DIGIT = 0.6;
 
 /** A mark drawn over the image, in an SVG `width` by `height`. With `onPress`, it can be picked up. */
 export function MarkLine({
@@ -27,7 +35,7 @@ export function MarkLine({
   mark: Shape & { color: MarkColor };
   width: number;
   height: number;
-  onPress?: (event: PointerEvent<SVGPathElement>) => void;
+  onPress?: (event: PointerEvent<SVGElement>) => void;
 }) {
   const round = mark.shape === "sketch";
   const closed = mark.shape === "circle" || mark.shape === "box";
@@ -59,15 +67,77 @@ export function MarkLine({
   );
 }
 
-/** The marks alone, as a request sends them beside the image, or drawn over `url` as on its marked copy. */
+/**
+ * A mark's number on a badge of its color, in an SVG `width` by `height`, where a request draws it. With `onPress`, it
+ * picks the mark up.
+ */
+export function MarkNumber({
+  mark,
+  width,
+  height,
+  onPress,
+}: {
+  mark: Mark;
+  width: number;
+  height: number;
+  onPress?: (event: PointerEvent<SVGElement>) => void;
+}) {
+  const color = markColor(mark.color);
+  const number = String(mark.id);
+  const across = Math.max(
+    NUMBER.side,
+    number.length * NUMBER.font * DIGIT + NUMBER.side / 2,
+  );
+  const [x, y] = badgeCorner(mark, width, height, {
+    across,
+    side: NUMBER.side,
+    edge: LINE.halo / 2,
+  });
+  return (
+    <g
+      onPointerDown={onPress}
+      className={onPress ? "pointer-events-auto cursor-move" : undefined}
+    >
+      <rect
+        x={x}
+        y={y}
+        width={across}
+        height={NUMBER.side}
+        rx={NUMBER.side / 9}
+        fill={color.hex}
+        stroke="#ffffff"
+        strokeOpacity={0.9}
+        strokeWidth={1.5}
+      />
+      <text
+        x={x + across / 2}
+        y={y + NUMBER.side / 2}
+        fill={color.on}
+        fontSize={NUMBER.font}
+        textAnchor="middle"
+        dominantBaseline="central"
+        className="font-mono font-semibold"
+      >
+        {number}
+      </text>
+    </g>
+  );
+}
+
+/**
+ * The marks alone, as a request sends them beside the image, or drawn over `url` as on its marked copy, with their
+ * numbers when `numbered`.
+ */
 export function MarksPicture({
   marks,
+  numbered,
   width,
   height,
   url,
   className,
 }: {
   marks: Mark[];
+  numbered: boolean;
   width: number;
   height: number;
   url?: string | null;
@@ -86,6 +156,8 @@ export function MarksPicture({
       {marks.map((mark) => (
         <MarkLine key={mark.id} mark={mark} {...size} />
       ))}
+      {numbered &&
+        marks.map((mark) => <MarkNumber key={mark.id} mark={mark} {...size} />)}
     </svg>
   );
 }

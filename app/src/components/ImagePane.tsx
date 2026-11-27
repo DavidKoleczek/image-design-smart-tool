@@ -35,11 +35,12 @@ import {
   clearGuides,
   clearMarks,
   removeMark,
+  useCanvas,
   useGuides,
   type CanvasMode,
 } from "@/lib/canvas";
 import { fillEditor } from "@/lib/design";
-import { dropDraft, updateDraft, useDraft } from "@/lib/drafts";
+import { draftOf, dropDraft, updateDraft, useDraft } from "@/lib/drafts";
 import { agentOf } from "@/lib/drawing";
 import { describe } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
@@ -74,7 +75,13 @@ import { sessionOf, setResume, useResume } from "@/lib/sessions";
 import type { Sheet } from "@/lib/sheets";
 import { flushAppState, updateAppState, useAppState } from "@/lib/state";
 import { openImage } from "@/lib/tabs";
-import { conversationOf, currentCall, type ImageCall } from "@/lib/thread";
+import {
+  conversationOf,
+  currentCall,
+  sentTurn,
+  useSentTurn,
+  type ImageCall,
+} from "@/lib/thread";
 import type { Shown } from "@/lib/viewed";
 
 // In the size and quality lists, what leaves the choice to the agent.
@@ -290,6 +297,7 @@ export function ImagePane({
   const draft = useDraft(key);
   const references = useReferences(key);
   const guides = useGuides(key, shown?.picture?.key ?? null);
+  const { numbered } = useCanvas();
   const frame = useSourceFrame(image, shown, mode);
   const resume = useResume(key);
   const [opened, setOpened] = useState<string | null>(null);
@@ -314,6 +322,7 @@ export function ImagePane({
     () => (image ? conversationOf(image, runs) : []),
     [image, runs],
   );
+  const turn = useSentTurn(key, conversation);
   const calls = conversation.flatMap((run) =>
     run.blocks.flatMap((block) => (block.kind === "call" ? [block.call] : [])),
   );
@@ -359,7 +368,25 @@ export function ImagePane({
     const message = draft.message;
     const output = outputOf(state.design, methods, imageModel);
     const sent = sentReferences(references);
-    const sentMarks = marks.map(sentMark);
+    const sentMarks = marks.map((mark) => sentMark(mark, numbered));
+    // A turn on the image shows in the thread at once, and the message leaves the box, while its run starts.
+    const starts = image !== null && !designing;
+    if (starts) {
+      turn.send(
+        sentTurn(
+          conversation,
+          message,
+          sentMarks,
+          {
+            model: agent.model,
+            reasoning_effort: agent.effort,
+            resumed: session.continuing,
+          },
+          "agent",
+        ),
+      );
+      updateDraft(key, { message: "" });
+    }
     try {
       // The server sends only references it knows the app offers, a pin among them once the pin is saved.
       await flushAppState();
@@ -400,8 +427,8 @@ export function ImagePane({
           reasoning_effort: agent.effort,
         });
         if (image) {
+          turn.started(started.run_id);
           clearGuides(image.name);
-          updateDraft(key, { message: "" });
           // What the agent makes lands in the image's file, so that is what shows while it works.
           onView(null);
           await onChanged();
@@ -412,6 +439,13 @@ export function ImagePane({
       }
       clearReferences(key);
     } catch (cause) {
+      if (starts) {
+        turn.failed();
+        // The message goes back in the box, unless another was written there meanwhile.
+        if (draftOf(key).message === "") {
+          updateDraft(key, { message });
+        }
+      }
       setFailure(
         `${designing ? "The message did not reach the agent." : "The agent did not start."} ${describe(cause)}`,
       );
@@ -567,7 +601,7 @@ export function ImagePane({
     <div className="flex min-h-0 flex-1 flex-col" onPaste={pasted}>
       <Thread
         image={image}
-        runs={conversation}
+        runs={turn.runs}
         label={agentLabel}
         viewing={shown?.version?.id ?? null}
         onView={onView}

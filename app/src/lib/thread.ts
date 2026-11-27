@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import type { IconName } from "@/components/ui/icon";
 import type {
@@ -6,6 +6,7 @@ import type {
   ImageRunStatus,
   ImageSummary,
   ImageUsage,
+  SentMark,
 } from "@/lib/api";
 import { MARK_COLORS, type MarkColor } from "@/lib/marks";
 import type { RunFacts, Runs } from "@/lib/runs";
@@ -780,6 +781,76 @@ export function conversationOf(image: ImageSummary, runs: Runs): Run[] {
     run.number = index + 1;
   });
   return conversation;
+}
+
+/**
+ * The turn a message the person sends starts, as the thread shows it before the run is going: the message, and the
+ * agent it goes to. An image's agent's turn is `kind` agent.
+ */
+export function sentTurn(
+  conversation: Run[],
+  message: string,
+  marks: SentMark[],
+  request: { model: string; reasoning_effort: string; resumed: boolean },
+  kind?: "agent",
+): Run {
+  const started = new Date().toISOString();
+  const id = `sent:${started}`;
+  return {
+    id,
+    number: conversation.length + 1,
+    started,
+    request,
+    blocks: [
+      {
+        kind: "message",
+        key: `${id}:asked`,
+        sender: sender(APP),
+        text: message,
+        chips: markChips(marks),
+        steering: false,
+        failed: null,
+      },
+    ],
+    calls: [],
+    live: true,
+    kind,
+    fresh:
+      kind === "agent" &&
+      !request.resumed &&
+      conversation.some((run) => run.kind === "agent"),
+  };
+}
+
+/**
+ * The thread as it shows under `key`: `conversation`, and after it the turn a message just sent starts, until the run
+ * it starts is among the conversation. Starting a run takes a moment, and the message shows meanwhile.
+ */
+export function useSentTurn(key: string, conversation: Run[]) {
+  const [sent, setSent] = useState<{
+    key: string;
+    turn: Run;
+    runId: string | null;
+  } | null>(null);
+  // The run is kept a moment before the request that starts it answers with its id, and may be listed by then.
+  const shown =
+    sent !== null &&
+    sent.key === key &&
+    !conversation.some(
+      (run) =>
+        run.id === sent.runId ||
+        Date.parse(run.started) >= Date.parse(sent.turn.started),
+    );
+  return {
+    runs: shown ? [...conversation, sent.turn] : conversation,
+    /** The message was sent, and starts `turn`. */
+    send: (turn: Run) => setSent({ key, turn, runId: null }),
+    /** The run it started is `runId`, which shows in its place once listed. */
+    started: (runId: string) =>
+      setSent((before) => before && { ...before, runId }),
+    /** It did not start a run. */
+    failed: () => setSent(null),
+  };
 }
 
 /** The call a working run is on now, and which of its calls that is, counting from 1. */

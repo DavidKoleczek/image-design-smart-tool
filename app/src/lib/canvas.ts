@@ -27,6 +27,8 @@ const SAMPLE = 4;
 type CanvasState = {
   tool: Tool;
   color: MarkColor;
+  /** Whether each mark's number is drawn beside it, on the canvas and on what a request sends. */
+  numbered: boolean;
   /** The brush's width, in the image's pixels. */
   brush: number;
 };
@@ -52,6 +54,7 @@ const listeners = new Set<() => void>();
 let state: CanvasState = {
   tool: "circle",
   color: "red",
+  numbered: true,
   brush: 64,
 };
 const guides = new Map<string, Guides>();
@@ -102,6 +105,10 @@ export function setTool(tool: Tool) {
 
 export function setColor(color: MarkColor) {
   change({ color });
+}
+
+export function setNumbered(numbered: boolean) {
+  change({ numbered });
 }
 
 export function setBrush(brush: number) {

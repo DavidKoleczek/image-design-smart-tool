@@ -6,7 +6,7 @@ import {
   type PointerEvent,
 } from "react";
 
-import { MarkLine, MarkList } from "@/components/Marks";
+import { MarkLine, MarkList, MarkNumber } from "@/components/Marks";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { LoadingMark } from "@/components/ui/loading-mark";
@@ -27,6 +27,7 @@ import {
   selectMark,
   setBrush,
   setColor,
+  setNumbered,
   setTool,
   updateMark,
   useCanvas,
@@ -277,7 +278,7 @@ export function Viewport({
     null,
   );
   const pause = useRef<number | undefined>(undefined);
-  const { tool, color, brush } = useCanvas();
+  const { tool, color, numbered, brush } = useCanvas();
   const guides = useGuides(image.name, shown.picture?.key ?? null);
 
   const compared = compare ? before : null;
@@ -616,7 +617,7 @@ export function Viewport({
     pause.current = window.setTimeout(closeSketch, SKETCH_PAUSE_MS);
   };
 
-  const startMove = (mark: Mark) => (event: PointerEvent<SVGPathElement>) => {
+  const startMove = (mark: Mark) => (event: PointerEvent<SVGElement>) => {
     if (event.button !== 0) {
       return;
     }
@@ -817,6 +818,18 @@ export function Viewport({
                     onPress={active === "select" ? startMove(mark) : undefined}
                   />
                 ))}
+                {numbered &&
+                  marks.map((mark) => (
+                    <MarkNumber
+                      key={mark.id}
+                      mark={mark}
+                      width={width * zoom}
+                      height={height * zoom}
+                      onPress={
+                        active === "select" ? startMove(mark) : undefined
+                      }
+                    />
+                  ))}
                 {draft && (
                   <MarkLine
                     mark={draft}
@@ -919,6 +932,23 @@ export function Viewport({
               />
             </Tooltip>
           ))}
+          <span aria-hidden className="h-4 w-px bg-line" />
+          <Tooltip content="Draw each mark's number beside it, here and on what the model gets">
+            <label
+              className={cn(
+                "flex items-center gap-1.5 text-label",
+                numbered ? "text-ink" : "text-ink-muted",
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={numbered}
+                onChange={(event) => setNumbered(event.target.checked)}
+                className="m-0 size-3.5 accent-(--accent)"
+              />
+              Numbers
+            </label>
+          </Tooltip>
           {selected && (
             <Tooltip content="Delete mark" keys="Del">
               <Button
