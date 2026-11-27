@@ -41,7 +41,7 @@ from image_design.shared.images.requests import (
 )
 from image_design.shared.images.requests import references as sent_references
 from image_design.shared.images.runs import DetachedRun, ImageRun, InProcessRun, RunOutput
-from image_design.shared.images.store import StoredImage, directories, image_name, new_run_id
+from image_design.shared.images.store import StoredImage, directories, image_name, new_run_id, resolve_workspace
 
 # What starts a detached run, given its request on stdin.
 BACKGROUND_COMMAND = [sys.executable, "-m", "image_design.capabilities.chatgpt_image.background"]
@@ -66,8 +66,7 @@ class ChatGPTImageRequest(BaseModel):
 
     prompt: str
     name: str
-    directory: Path | None = None
-    data_directory: Path | None = None
+    workspace: Path | None = None
     references: list[Path] = []
     marks: list[Mark] = []
     version: str | None = None
@@ -83,8 +82,7 @@ class ChatGPTImageRequest(BaseModel):
 async def generate_chatgpt_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     version: str | None = None,
@@ -103,8 +101,7 @@ async def generate_chatgpt_image(
         ChatGPTImageRequest,
         prompt=prompt,
         name=name,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references or [],
         marks=marks or [],
         version=version,
@@ -125,23 +122,19 @@ async def generate_chatgpt_image(
             name,
         )
     _require_arguments(request)
-    root, data = directories(request.directory, request.data_directory)
-    # Made absolute here, since the run's process need not resolve them from the same place.
+    # Made absolute here, so the run's process works in the same workspace whatever directory it starts in.
+    workspace = resolve_workspace(request.workspace)
     absolute = request.model_copy(
-        update={
-            "directory": root,
-            "data_directory": data,
-            "references": [path.resolve() for path in request.references],
-        }
+        update={"workspace": workspace, "references": [path.resolve() for path in request.references]}
     )
+    root, data = directories(workspace)
     return await detaching.detach(BACKGROUND_COMMAND, absolute, root, data, DetachedRun)
 
 
 def preview_chatgpt_image_request(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     version: str | None = None,
@@ -157,8 +150,7 @@ def preview_chatgpt_image_request(
         ChatGPTImageRequest,
         prompt=prompt,
         name=name,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references or [],
         marks=marks or [],
         version=version,
@@ -167,7 +159,7 @@ def preview_chatgpt_image_request(
         reasoning_effort=reasoning_effort,
     )
     _require_arguments(request)
-    root, data = directories(request.directory, request.data_directory)
+    root, data = directories(request.workspace)
     image = image_name(request.name, root, data)
     sent_references(request.references)
     edited = previewed_source(root, data, image, request.version)
@@ -194,7 +186,7 @@ def preview_chatgpt_image_request(
 async def start(request: ChatGPTImageRequest, intelligence: Intelligence | None = None) -> InProcessRun:
     """Check the request, keep what it sends, and start the agent that sends it."""
     _require_arguments(request)
-    root, data = directories(request.directory, request.data_directory)
+    root, data = directories(request.workspace)
     name = image_name(request.name, root, data)
     parent = calls.parent_of(root, data, request.parent, name)
     calls.require_given(parent, CHATGPT_IMAGE_MODEL, name)

@@ -6,6 +6,7 @@ from image_design.capabilities.app import folders as app_folders
 from image_design.capabilities.app import mcp_server as app_server_module
 from image_design.capabilities.app import server as app_module
 from image_design.capabilities.app import settings as app_settings
+from image_design.capabilities.app import workspaces as app_workspaces
 from image_design.capabilities.app.mcp_server import AppServer
 from image_design.capabilities.chatgpt_image import generate as chatgpt_image
 from image_design.capabilities.chatgpt_image import method as chatgpt_method
@@ -38,6 +39,7 @@ from image_design.schemas import (
     AgentProvider,
     ImageActivity,
     ImageDesignConfig,
+    ImageImports,
     ImageListing,
     ImageMethods,
     ImageRelinking,
@@ -62,8 +64,7 @@ from image_design.shared.images.runs import ImageRun
 async def generate_openai_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     mask: Path | None = None,
@@ -86,15 +87,15 @@ async def generate_openai_image(
 ) -> ImageRun:
     """Create or edit an image with an OpenAI image model through the Images API. Model-backed.
 
-    A `name` new to `directory` creates the image, and the name of one that exists edits it, overwriting its file. Every
-    image made is kept as a version in `data_directory`, which `restore_image_version` puts back. A draft instead tries
-    an edit without changing the image. Needs the openai extra and an `OPENAI_API_KEY`. A request is never retried.
+    A `name` new to the workspace creates the image, and the name of one that exists edits it, overwriting its file.
+    Every image made is kept as a version, which `restore_image_version` puts back. A draft instead tries an edit
+    without changing the image. Needs the openai extra and an `OPENAI_API_KEY`. A request is never retried.
 
     Args:
         prompt: What to make, or what to change.
-        name: The image's path in `directory`. Its extension sets the format: .png, .jpg, .webp, or .gif.
-        directory: Where images are kept; `.image-design` in the working directory when None.
-        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        name: The image's path in the workspace's images. Its extension sets the format: .png, .jpg, .webp, or .gif.
+        workspace: The top-level directory of the user's project, whose `.image-design` holds the images; the working
+            directory when None.
         references: Other images to send with the prompt, such as for a style or a subject. A PNG, JPEG, or WebP is
             sent as it is, and any other image, such as an SVG, as a PNG at its own size.
         marks: Shapes drawn over the image being edited, sent as a separate layer, to show what the prompt refers to.
@@ -126,8 +127,7 @@ async def generate_openai_image(
     return await generate.generate_openai_image(
         prompt=prompt,
         name=name,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references,
         marks=marks,
         mask=mask,
@@ -153,8 +153,7 @@ async def generate_openai_image(
 async def generate_chatgpt_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     version: str | None = None,
@@ -176,10 +175,10 @@ async def generate_chatgpt_image(
 
     Args:
         prompt: What to make, or what to change. It is passed to the image tool as written.
-        name: The image's path in `directory`, ending in .png. A new name creates the image, and one that exists edits
-            it, overwriting its file.
-        directory: Where images are kept; `.image-design` in the working directory when None.
-        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        name: The image's path in the workspace's images, ending in .png. A new name creates the image, and one that
+            exists edits it, overwriting its file.
+        workspace: The top-level directory of the user's project, whose `.image-design` holds the images; the working
+            directory when None.
         references: Other images to send with the prompt. A request sends at most five images, counting the image
             being edited and its marked copy.
         marks: Shapes drawn on a copy of the image being edited, to show what the prompt refers to. The copy is sent
@@ -202,8 +201,7 @@ async def generate_chatgpt_image(
     return await chatgpt_image.generate_chatgpt_image(
         prompt=prompt,
         name=name,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references,
         marks=marks,
         version=version,
@@ -222,8 +220,7 @@ async def generate_chatgpt_image(
 async def design_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     mask: Path | None = None,
@@ -243,17 +240,17 @@ async def design_image(
 ) -> DesignRun:
     """Create or edit an image with an agent that writes the image calls and makes them. Agentic.
 
-    The agent has a shell in the working directory and drives this tool's own commands, with skills for the craft: it
-    looks at the image and its history, and writes each call to the image model it is given and makes it, with
+    The agent has a shell in the workspace and drives this tool's own commands, with skills for the craft: it looks at
+    the image and its history, and writes each call to the image model it is given and makes it, with
     `generate_openai_image` or `generate_chatgpt_image`, choosing every other argument of the call itself. It may make
     several images, write scripts for exact work, and read the project. Needs the codex or claude extra, and the method
     of the image model set up.
 
     Args:
         prompt: What the person wants, for the agent; not what an image model receives.
-        name: The image's path in `directory`, not an SVG. A new name creates the image.
-        directory: Where images are kept; `.image-design` in the working directory when None.
-        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        name: The image's path in the workspace's images, not an SVG. A new name creates the image.
+        workspace: The top-level directory of the user's project, where the agent runs and whose `.image-design` holds
+            the images; the working directory when None.
         references: Images that go with the request, which the agent decides how to use.
         marks: Shapes the person drew on the image, which the agent is shown and may pass on.
         mask: An image the image's size, transparent where changes may go, which the agent may pass on.
@@ -289,8 +286,7 @@ async def design_image(
         image_model=image_model,
         size=size,
         quality=quality,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references,
         marks=marks,
         mask=mask,
@@ -310,8 +306,7 @@ async def design_image(
 def steer_image(
     name: str,
     message: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     origin: str | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
@@ -321,14 +316,13 @@ def steer_image(
     The process running the agent delivers it within a second or so. `references` are shown to the agent with it, and
     `marks` are drawn on the image's file.
     """
-    design_steering.steer_image(name, message, directory, data_directory, origin, references, marks)
+    design_steering.steer_image(name, message, workspace, origin, references, marks)
 
 
 def preview_openai_image_request(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     mask: Path | None = None,
@@ -356,8 +350,7 @@ def preview_openai_image_request(
     return generate.preview_openai_image_request(
         prompt=prompt,
         name=name,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references,
         marks=marks,
         mask=mask,
@@ -378,8 +371,7 @@ def preview_openai_image_request(
 def preview_chatgpt_image_request(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     version: str | None = None,
@@ -399,8 +391,7 @@ def preview_chatgpt_image_request(
     return chatgpt_image.preview_chatgpt_image_request(
         prompt=prompt,
         name=name,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references,
         marks=marks,
         version=version,
@@ -413,8 +404,7 @@ def preview_chatgpt_image_request(
 async def draw_svg_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     canvas: tuple[int, int] | NotGiven = NOT_GIVEN,
@@ -436,10 +426,11 @@ async def draw_svg_image(
 
     Args:
         prompt: What to draw, or what to change.
-        name: The image's path in `directory`, ending in .svg. A new name creates the image, and one that exists edits
-            it, overwriting its file. To redraw another image as an SVG, pass it in `references` under a new name.
-        directory: Where images are kept; `.image-design` in the working directory when None.
-        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        name: The image's path in the workspace's images, ending in .svg. A new name creates the image, and one that
+            exists edits it, overwriting its file. To redraw another image as an SVG, pass it in `references` under a
+            new name.
+        workspace: The top-level directory of the user's project, whose `.image-design` holds the images; the working
+            directory when None.
         references: Images shown to the agent with the prompt, in any format.
         marks: Shapes drawn on the render the agent is shown, to show what the prompt refers to. The agent is also
             told which named parts of the drawing are under each.
@@ -464,8 +455,7 @@ async def draw_svg_image(
     return await svg_draw.draw_svg_image(
         prompt=prompt,
         name=name,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references,
         marks=marks,
         canvas=canvas,
@@ -484,8 +474,7 @@ async def draw_svg_image(
 def steer_svg_image(
     name: str,
     message: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     origin: str | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
@@ -495,125 +484,122 @@ def steer_svg_image(
     The process running the drawing delivers it within a second or so. `references` are shown to the agent with it,
     and `marks` are drawn on the agent's latest render.
     """
-    svg_steering.steer_svg_image(name, message, directory, data_directory, origin, references, marks)
+    svg_steering.steer_svg_image(name, message, workspace, origin, references, marks)
 
 
-def check_svg_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> SvgCheck:
+def check_svg_image(name: str, workspace: Path | None = None) -> SvgCheck:
     """Measure an SVG image against its budgets: its shapes, colors, bytes, named parts, and what resvg skips.
 
     It only reports; nothing passes or fails. An SVG the tool did not draw is measured against its own size.
     """
-    return svg_check.check_svg_image(name, directory, data_directory)
+    return svg_check.check_svg_image(name, workspace)
 
 
 def export_svg_image(
-    name: str,
-    output: Path,
-    scale: float = 1,
-    version: str | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    name: str, output: Path, scale: float = 1, version: str | None = None, workspace: Path | None = None
 ) -> Path:
     """Render an SVG image, or one of its versions, to a .png, .jpg, or .webp at `scale` times its size.
 
     A .jpg has no transparency, so what is see-through shows white. Returns the file written.
     """
-    return svg_check.export_svg_image(name, output, scale, version, directory, data_directory)
+    return svg_check.export_svg_image(name, output, scale, version, workspace)
 
 
-def list_images(directory: Path | None = None, data_directory: Path | None = None) -> ImageListing:
-    """Every image in the directory, in name order, with its versions and how its last run went, and every folder.
+def list_images(workspace: Path | None = None) -> ImageListing:
+    """Every image in the workspace, in name order, with its versions and how its last run went, and every folder.
 
-    An image file put in the directory by hand is listed too, with no versions until the tool changes it.
+    The workspace is the top-level directory of the user's project, the working directory when None, and its images
+    are in its `.image-design`. An image file put there by hand is listed too, with no versions until the tool changes
+    it. A workspace with no `.image-design` yet lists as empty.
     """
-    return manage_images.list_images(directory, data_directory)
+    return manage_images.list_images(workspace)
 
 
 def view_image(
-    name: str,
-    version: str | None = None,
-    frames_output: Path | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    name: str, version: str | None = None, frames_output: Path | None = None, workspace: Path | None = None
 ) -> ImageView:
     """One image and its versions, with its file or one of its versions frame by frame. A still image has one frame.
 
     Args:
-        name: The image's path in `directory`.
+        name: The image's path in the workspace's images.
         version: The version to view frame by frame, such as v2; the image's file when None.
         frames_output: A folder to write each frame of what is viewed to as a PNG, named `frame-<index>.png`. It is
             made if need be.
-        directory: Where images are kept; `.image-design` in the working directory when None.
-        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        workspace: The top-level directory of the user's project, whose `.image-design` holds the images; the working
+            directory when None.
 
     Returns:
         The image's summary, and in `viewed` the size of what is viewed and its frames in order, each with how long it
         shows. A frame's `index` is what `frame` names in `generate_openai_image`.
     """
-    return manage_images.view_image(name, version, frames_output, directory, data_directory)
+    return manage_images.view_image(name, version, frames_output, workspace)
 
 
-def move_image(
-    name: str,
-    new_name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
-    numbered: bool = False,
-) -> ImageSummary:
-    """Rename an image, or move it to another folder of the directory. It keeps its versions and its history.
+def move_image(name: str, new_name: str, workspace: Path | None = None, numbered: bool = False) -> ImageSummary:
+    """Rename an image, or move it to another folder of the workspace's images. It keeps its versions and its history.
 
     The new name keeps the extension, since moving an image does not convert it. A name that is taken is refused, or
     with `numbered` becomes the first free one of `name (2)`, `name (3)`, and so on, which the summary returned has.
     """
-    return manage_images.move_image(name, new_name, directory, data_directory, numbered)
+    return manage_images.move_image(name, new_name, workspace, numbered)
 
 
-def copy_image(
-    name: str,
-    new_name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
-    numbered: bool = False,
-) -> ImageSummary:
+def copy_image(name: str, new_name: str, workspace: Path | None = None, numbered: bool = False) -> ImageSummary:
     """Make another image under `new_name`, with a copy of the image's file and of everything kept for it: its
     versions, its runs, and for a drawn SVG its script and sessions. The two are separate images from then on.
 
     The new name keeps the extension. A name that is taken is refused, or with `numbered` becomes the first free one
     of `name (2)`, `name (3)`, and so on. An image a run is working on is refused until the run ends.
     """
-    return manage_images.copy_image(name, new_name, directory, data_directory, numbered)
+    return manage_images.copy_image(name, new_name, workspace, numbered)
 
 
 def import_image(
-    path: Path,
-    name: str | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
-    numbered: bool = False,
+    path: Path, name: str | None = None, workspace: Path | None = None, numbered: bool = False
 ) -> ImageSummary:
-    """Bring an image file from anywhere on this machine into the directory as a new image.
+    """Bring an image file from anywhere on this machine into the workspace as a new image, under a name of its own.
 
     The file is copied and left as it is, and the copy is the image's first version, so a later edit can go back to
     it. A PNG, JPEG, WebP, GIF, or SVG is kept as it is, and any other still image, such as a BMP or TIFF, as a PNG.
+    `import_images` brings in many files, or folders of them.
 
     Args:
         path: The image file to bring in.
-        name: The image's path in `directory`. It takes the file's own name at the top of the directory when None,
-            and the file's name in a folder when it ends in a slash, such as `photos/`. A file already in the
-            directory under that name stays where it is and is kept from then on.
-        directory: Where images are kept; `.image-design` in the working directory when None.
-        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        name: The image's path in the workspace's images. It takes the file's own name at their top when None, and
+            the file's name in a folder when it ends in a slash, such as `photos/`. A file already in the images under
+            that name stays where it is and is kept from then on.
+        workspace: The top-level directory of the user's project, whose `.image-design` holds the images; the working
+            directory when None.
         numbered: Take the first free one of `name (2)`, `name (3)`, and so on when the name is taken, rather than
             refuse.
     """
-    return image_imports.import_image(path, name, directory, data_directory, numbered)
+    return image_imports.import_image(path, name, workspace, numbered)
+
+
+def import_images(paths: list[Path], folder: str | None = None, workspace: Path | None = None) -> ImageImports:
+    """Bring image files, and folders of them, from anywhere on this machine into the workspace as new images.
+
+    Each is copied and left as it is, and kept as `import_image` keeps it, under its own name, or a numbered one such
+    as `cactus (2).png` when that is taken. A folder comes in under its own name with the folders in it. Of its files
+    only images come in, and hidden files and folders are left out. A file or folder that cannot come in is refused
+    with why, and the rest still come in.
+
+    Args:
+        paths: The image files and folders to bring in.
+        folder: The folder of the workspace's images to bring them into, made if need be; their top when None.
+        workspace: The top-level directory of the user's project, whose `.image-design` holds the images; the working
+            directory when None.
+
+    Returns:
+        The new images, the folders made, and what was refused, each by its name, with why.
+    """
+    return image_imports.import_images(paths, folder, workspace)
 
 
 def add_image_version(
     name: str,
     path: Path | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     parent: str | None = None,
     drafts: list[str] | None = None,
 ) -> ImageSummary:
@@ -625,53 +611,44 @@ def add_image_version(
     when None. `drafts` are the drafts on the image the file was made from, by their run ids, which the version names.
     With no `path`, the one draft in `drafts` is kept as it is, as a version its run made.
     """
-    return image_versions.add_image_version(name, path, directory, data_directory, parent, drafts)
+    return image_versions.add_image_version(name, path, workspace, parent, drafts)
 
 
-def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
+def delete_image(name: str, workspace: Path | None = None) -> None:
     """Delete an image's file and everything kept for it. A run working on it is stopped first."""
-    manage_images.delete_image(name, directory, data_directory)
+    manage_images.delete_image(name, workspace)
 
 
-def create_folder(
-    name: str, directory: Path | None = None, data_directory: Path | None = None, numbered: bool = False
-) -> str:
-    """Make a folder in the directory, and any above it, and return its name. A folder stays until it is deleted.
+def create_folder(name: str, workspace: Path | None = None, numbered: bool = False) -> str:
+    """Make a folder in the workspace's images, and any above it, and return its name. A folder stays until it is
+    deleted.
 
     A name that is taken is refused, or with `numbered` becomes the first free one of `name (2)`, `name (3)`, and so
     on.
     """
-    return image_folders.create_folder(name, directory, data_directory, numbered)
+    return image_folders.create_folder(name, workspace, numbered)
 
 
-def move_folder(
-    name: str,
-    new_name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
-    numbered: bool = False,
-) -> str:
+def move_folder(name: str, new_name: str, workspace: Path | None = None, numbered: bool = False) -> str:
     """Rename a folder, or move it into another, with everything in it, and return its name.
     Its images keep their versions and their history.
 
     It is refused while a run works on an image in it. A name that is taken is refused, or with `numbered` becomes
     the first free one of `name (2)`, `name (3)`, and so on.
     """
-    return image_folders.move_folder(name, new_name, directory, data_directory, numbered)
+    return image_folders.move_folder(name, new_name, workspace, numbered)
 
 
-def delete_folder(name: str, directory: Path | None = None, data_directory: Path | None = None) -> list[str]:
+def delete_folder(name: str, workspace: Path | None = None) -> list[str]:
     """Delete every image in a folder as `delete_image` does, then the folder and the folders in it.
 
-    Returns what is left, by paths in the directory: the files in it that are not images, which the tool never
+    Returns what is left, by paths in the workspace's images: the files in it that are not images, which the tool never
     deletes, so the folder stays to hold them. Empty when the folder is gone.
     """
-    return image_folders.delete_folder(name, directory, data_directory)
+    return image_folders.delete_folder(name, workspace)
 
 
-def relink_images(
-    likely: list[str] | None = None, directory: Path | None = None, data_directory: Path | None = None
-) -> ImageRelinking:
+def relink_images(likely: list[str] | None = None, workspace: Path | None = None) -> ImageRelinking:
     """Find the images whose files were moved or renamed outside the tool, and keep each under the name its file has.
 
     An image is relinked when a file the tool keeps nothing for holds exactly what the image's current version does.
@@ -680,13 +657,13 @@ def relink_images(
 
     Args:
         likely: The images to relink to their likely file as well, by the names they are kept under.
-        directory: Where images are kept; `.image-design` in the working directory when None.
-        data_directory: Where the tool keeps versions and runs; `.agents` in `directory` when None.
+        workspace: The top-level directory of the user's project, whose `.image-design` holds the images; the working
+            directory when None.
 
     Returns:
         What was relinked, what is likely, and the images that still have no file.
     """
-    return image_relink.relink_images(likely, directory, data_directory)
+    return image_relink.relink_images(likely, workspace)
 
 
 def list_image_methods() -> ImageMethods:
@@ -702,7 +679,7 @@ def list_image_methods() -> ImageMethods:
 
 
 def read_config() -> ImageDesignConfig:
-    """The person's defaults for the tool, the same in every directory: what `config_path` keeps, and the tool's own
+    """The person's defaults for the tool, the same in every workspace: what `config_path` keeps, and the tool's own
     defaults for anything it does not.
 
     Raises `ImageDesignError` when the file is there but cannot be read or is not valid, rather than going by defaults
@@ -750,29 +727,25 @@ def clear_openai_api_key() -> None:
     openai_key.clear()
 
 
-def restore_image_version(
-    name: str, version: str, directory: Path | None = None, data_directory: Path | None = None
-) -> ImageSummary:
+def restore_image_version(name: str, version: str, workspace: Path | None = None) -> ImageSummary:
     """Put an earlier version of an image back in its file, keeping the file first if it was changed by hand.
 
     For an SVG the tool drew, the version's image.py goes back in place too.
     """
-    return manage_images.restore_image_version(name, version, directory, data_directory)
+    return manage_images.restore_image_version(name, version, workspace)
 
 
-def read_image_activity(
-    name: str, directory: Path | None = None, data_directory: Path | None = None, after: str | None = None
-) -> ImageActivity:
+def read_image_activity(name: str, workspace: Path | None = None, after: str | None = None) -> ImageActivity:
     """The history of an image: each run's request, what its agent did, and how it ended, as the run's events.
 
     Pass the `cursor` of an earlier call as `after` to get only what happened since.
     """
-    return manage_images.read_image_activity(name, directory, data_directory, after)
+    return manage_images.read_image_activity(name, workspace, after)
 
 
-def cancel_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
+def cancel_image(name: str, workspace: Path | None = None) -> None:
     """Stop the run working on an image, from any process."""
-    manage_images.cancel_image(name, directory, data_directory)
+    manage_images.cancel_image(name, workspace)
 
 
 def stopped_by_signals(run: ImageRun) -> AbstractContextManager[None]:
@@ -799,31 +772,32 @@ def version() -> str:
     return skill_module.version()
 
 
-def app_server(directory: Path | None = None, data_directory: Path | None = None) -> AppServer:
+def app_server(workspace: Path | None = None) -> AppServer:
     """The app's MCP server: the tool that opens the app, the tools its view calls, and the view as an MCP App.
 
     Serve `AppServer.server` over any MCP transport. `AppServer.open` serves the browser host page, which renders the
     view for agents that cannot embed it and reaches the same server at its own `/mcp`. `AppServer.close` stops it.
 
-    The app shows the images in `AppServer.directory`, which `open_app` can switch, and `AppServer.show` or
-    `open_app` brings an image up in it. How the person set up the app, such as its theme and pane sizes, is theirs
-    in every directory, kept in `app-settings.json` in their config directory. What they last picked for a
-    directory's images is kept in `app/app.json` in its data directory.
+    The app shows the images in `AppServer.workspace`, which the person switches in the app and `open_app` can switch,
+    and `AppServer.show` or `open_app` brings an image up in it. How the person set up the app, such as its theme and
+    pane sizes, is theirs in every workspace, kept in `app-settings.json` in their config directory, with the
+    workspaces opened in the app, newest first, in `app-workspaces.json` beside it. What they last picked for a
+    workspace's images is kept in `app/app.json` in its data directory.
 
     Args:
-        directory: Where the images the app shows are kept; `.image-design` in the working directory when omitted.
-        data_directory: Where the tool keeps their versions and runs; `.agents` in the directory when omitted.
+        workspace: The top-level directory of the user's project, whose `.image-design` holds the images the app
+            shows. When omitted, the one opened last that is still a folder, or none until one is picked in the app.
     """
     return app_server_module.AppServer(
         skill_module.DISTRIBUTION,
         version(),
-        directory,
-        data_directory,
+        workspace,
         list_images,
         view_image,
         move_image,
         copy_image,
         import_image,
+        import_images,
         delete_image,
         create_folder,
         move_folder,
@@ -853,6 +827,7 @@ def app_server(directory: Path | None = None, data_directory: Path | None = None
         read_config,
         update_config,
         app_settings.settings_path(),
+        app_workspaces.workspaces_path(),
     )
 
 

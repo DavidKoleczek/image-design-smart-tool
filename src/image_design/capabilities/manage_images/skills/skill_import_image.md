@@ -1,8 +1,9 @@
-`import-image` brings an image file from anywhere on this machine into the directory as a new image. The file is
-copied and left as it is. The copy is the image's first version, so a later edit can go back to it. A PNG, JPEG, WebP,
-GIF, or SVG is kept as it is, and any other still image, such as a BMP or TIFF, is kept as a PNG.
+`import-image` brings an image file from anywhere on this machine into the workspace as a new image, under a name of
+its own. The file is copied and left as it is. The copy is the image's first version, so a later edit can go back to
+it. A PNG, JPEG, WebP, GIF, or SVG is kept as it is, and any other still image, such as a BMP or TIFF, is kept as a
+PNG. To bring in many files, or folders of them, use `import-images`.
 
-An image file already in the directory needs no import to be listed or edited. Importing it where it is keeps it as
+An image file already in `.image-design` needs no import to be listed or edited. Importing it where it is keeps it as
 the image's first version right away.
 
 ```bash
@@ -22,11 +23,11 @@ summary = import_image(path=Path.home() / "Pictures" / "desk.jpeg", name="photos
 ## Arguments
 
 - `--path`: The image file to bring in.
-- `--name`: The image's path in the directory. Leave it out for the file's own name at the top of the directory, or end
-  it in a slash, such as `photos/`, for the file's name in that folder. A full name ends in the extension the file
-  comes in as: `.jpg` for a JPEG, and `.png` for a format that is converted.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--name`: The image's path in `.image-design`. Leave it out for the file's own name at its top, or end it in a
+  slash, such as `photos/`, for the file's name in that folder. A full name ends in the extension the file comes in
+  as: `.jpg` for a JPEG, and `.png` for a format that is converted.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--numbered`: When the name is taken, take the next free name like it, such as `desk (2).jpg`, instead of failing.
 - `--json` (library: the `ImageSummary` returned): the image as JSON instead of text.
 

@@ -33,6 +33,7 @@ VIEW_TOOLS = (
     "copy_image",
     "import_image",
     "choose_image_files",
+    "choose_image_folder",
     "delete_image",
     "create_folder",
     "move_folder",
@@ -67,6 +68,11 @@ VIEW_TOOLS = (
     "update_config",
     "read_app_state",
     "save_app_state",
+    "read_app_workspaces",
+    "open_app_workspace",
+    "choose_app_workspace",
+    "create_app_workspace",
+    "forget_app_workspace",
 )
 IMAGE_RESOURCES = (
     "image-design://images/{+name}",
@@ -83,13 +89,14 @@ IMAGE_RESOURCES = (
 class Wire:
     """One `image-design mcp` process, spoken to in newline-delimited JSON-RPC on the initialize handshake."""
 
-    def __init__(self, arguments: list[str] | None = None) -> None:
+    def __init__(self, arguments: list[str] | None = None, cwd: Path | None = None) -> None:
         self.process = subprocess.Popen(
             [sys.executable, "-m", "image_design.cli", "mcp", *(arguments or [])],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
             encoding="utf-8",
+            cwd=cwd,
         )
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
         self.next_id = 0
@@ -184,22 +191,27 @@ def test_an_mcp_apps_host_gets_the_view_and_the_tools_it_calls_and_is_told_it_sh
     assert "shown to the user inline" in opened
 
 
-def test_the_app_shows_the_directory_it_was_started_on_until_open_app_names_another(tmp_path: Path) -> None:
-    wire = Wire(arguments=["--directory", str(tmp_path / "first"), "--data-directory", str(tmp_path / "data")])
+def test_the_app_shows_the_workspace_it_was_started_in_until_open_app_names_another(tmp_path: Path) -> None:
+    (tmp_path / "first").mkdir()
+    (tmp_path / "second").mkdir()
+    wire = Wire(cwd=tmp_path / "first")
     try:
         wire.initialize(MCP_APPS_HOST)
         started = wire.call_tool("list_images", {})["structuredContent"]
-        opened = text_of(wire.call_tool("open_app", {"directory": str(tmp_path / "second")}))
+        opened = text_of(wire.call_tool("open_app", {"workspace": str(tmp_path / "second")}))
         switched = wire.call_tool("list_images", {})["structuredContent"]
     finally:
         exit_code = wire.close()
 
     assert exit_code == 0
-    assert (started["directory"], started["data_directory"]) == (str(tmp_path / "first"), str(tmp_path / "data"))
-    assert f"It shows the images in {tmp_path / 'second'}." in opened
-    assert (switched["directory"], switched["data_directory"]) == (
+    assert (started["workspace"], started["directory"]) == (
+        str(tmp_path / "first"),
+        str(tmp_path / "first" / ".image-design"),
+    )
+    assert f"It shows the images in the workspace {tmp_path / 'second'}." in opened
+    assert (switched["workspace"], switched["data_directory"]) == (
         str(tmp_path / "second"),
-        str(tmp_path / "second" / ".agents"),
+        str(tmp_path / "second" / ".image-design" / ".agents"),
     )
 
 

@@ -14,14 +14,14 @@ left = delete_folder(name="concepts/drafts")
 
 ## Arguments
 
-- `--name`: The folder's path in the directory.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--name`: The folder's path in `.image-design`.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 
 ## Result
 
 Prints nothing and exits 0 once the folder is gone. When files that are not images are left in it, it names them, and
-the library returns their paths in the directory:
+the library returns their paths in `.image-design`:
 
 ```
 Deleted the images in concepts/drafts. It still holds what the tool does not delete: concepts/drafts/notes.txt

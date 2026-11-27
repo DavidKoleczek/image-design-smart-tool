@@ -38,6 +38,16 @@ def test_skill_is_a_wrapped_document_naming_every_capability() -> None:
         assert f"- `{capability.name}` [{kind}] -- {capability.summary}" in document
 
 
+def test_the_skill_and_a_capability_s_help_say_what_a_workspace_is() -> None:
+    tool = " ".join(lib.skill().split())
+    listing = " ".join(runner.invoke(app, ["list-images", "--help"]).output.split())
+
+    assert "works in a workspace, the top-level directory of the user's project" in tool
+    assert "The images are kept in its `.image-design`" in tool
+    assert "The image's agent runs in the workspace" in tool
+    assert "`--workspace`: The top-level directory of the user's project, whose `.image-design` holds" in listing
+
+
 def test_skill_routes_to_the_capability_skills_instead_of_carrying_them() -> None:
     body = lib.load_manifest().body
 

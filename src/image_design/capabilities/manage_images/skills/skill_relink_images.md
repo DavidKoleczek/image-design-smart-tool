@@ -20,8 +20,8 @@ relinking = relink_images()
 ## Arguments
 
 - `--likely`: An image to relink to its likely file as well, by the name it is kept under. Repeat it for each.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--json` (library: the `ImageRelinking` returned): what was relinked, what is likely, and what is still gone, as JSON
   instead of text.
 

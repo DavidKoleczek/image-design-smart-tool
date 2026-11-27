@@ -86,7 +86,7 @@ async def test_the_agent_is_given_the_tool_its_skills_and_its_run(agent: FakeDes
     request = agent.runs[0].request
     assert request.environment == {PARENT: run.run_id}
     assert request.workspace is not None
-    assert request.workspace.path == Path.cwd()
+    assert request.workspace.path == Path.cwd().resolve()
     assert request.writable
     command = request.path_directories[0] / "image-design"
     assert "-m image_design.cli" in command.read_text(encoding="utf-8")
@@ -97,6 +97,24 @@ async def test_the_agent_is_given_the_tool_its_skills_and_its_run(agent: FakeDes
     assert "image-design --help" in request.prompt
     assert "Less detail: no flower buds." in request.prompt
     assert "holds v1" in request.prompt
+
+
+async def test_the_agent_given_a_workspace_runs_there_and_is_told_the_tool_s_things_are_in_its_image_directory(
+    agent: FakeDesignAgent, tmp_path: Path
+) -> None:
+    garden = tmp_path / "garden"
+    garden.mkdir()
+
+    await designed(agent, workspace=garden)
+
+    request = agent.runs[0].request
+    assert request.workspace is not None
+    assert request.workspace.path == garden
+    assert f"You were started in the workspace, {garden}, the top-level directory" in request.prompt
+    assert "in its .image-design" in request.prompt
+    assert "--directory" not in request.prompt
+    assert lib.view_image("cactus.png", workspace=garden).design is not None
+    assert not (Path.cwd() / ".image-design").exists()
 
 
 async def test_the_agent_makes_its_images_with_the_image_model_it_was_given(
@@ -519,7 +537,7 @@ async def test_the_app_starts_the_agent_and_goes_on_in_its_session(
     agent: FakeDesignAgent, images_api: FakeImagesAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     await made()
-    app_server = lib.app_server()
+    app_server = lib.app_server(Path.cwd())
 
     # In this process, as the app's tests run them; the app runs each in a process of its own.
     async def design_here(detach: bool, **arguments: Any) -> lib.DesignRun:

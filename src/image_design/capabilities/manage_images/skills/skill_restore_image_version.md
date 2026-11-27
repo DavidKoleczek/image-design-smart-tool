@@ -13,10 +13,10 @@ summary = restore_image_version(name="concepts/cactus.png", version="v1")
 
 ## Arguments
 
-- `--name`: The image's path in the directory.
+- `--name`: The image's path in `.image-design`.
 - `--version`: The version to put back, such as `v1`.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--json` (library: the `ImageSummary` returned): the image as JSON instead of text.
 
 ## Result

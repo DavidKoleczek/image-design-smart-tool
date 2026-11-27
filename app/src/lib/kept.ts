@@ -48,20 +48,26 @@ export function keep<Value>(options: {
   };
 
   const save = async () => {
+    const at = place;
     unsaved = false;
     saving += 1;
     try {
       await options.save(state.value);
-      if (state.error) {
+      if (at === place && state.error) {
         set({ ...state, error: null });
       }
     } catch (cause) {
-      set({
-        ...state,
-        error: `Could not save ${options.what}. ${describe(cause)}`,
-      });
+      if (at === place) {
+        set({
+          ...state,
+          error: `Could not save ${options.what}. ${describe(cause)}`,
+        });
+      }
     } finally {
-      saving -= 1;
+      // One for the place before was forgotten with it, so it holds back no read of this one.
+      if (at === place) {
+        saving -= 1;
+      }
     }
   };
 
@@ -92,12 +98,17 @@ export function keep<Value>(options: {
       }
       await lastSave;
     },
-    /** Read it from where the server keeps it now. A change not yet saved was for the place before, and is dropped. */
-    moved() {
+    /**
+     * Forget it, as once the server keeps it somewhere else, until it is read from there. A change not yet saved was
+     * for the place before, and is dropped.
+     */
+    forget() {
       clearTimeout(timer);
       unsaved = false;
+      saving = 0;
       place += 1;
-      return load();
+      lastSave = Promise.resolve();
+      set({ value: options.initial, error: null });
     },
     subscribe(listener: () => void): () => void {
       listeners.add(listener);

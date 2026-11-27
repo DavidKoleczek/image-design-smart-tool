@@ -22,8 +22,7 @@ FORMATS = {**{suffix: format.upper() for suffix, format in IMAGE_FORMATS.items()
 def add_image_version(
     name: str,
     path: Path | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     parent: str | None = None,
     drafts: list[str] | None = None,
 ) -> ImageSummary:
@@ -34,7 +33,7 @@ def add_image_version(
     by when None. `drafts` are the drafts the file was made from, such as by merging them. With no `path`, the one
     draft in `drafts` is kept as it is, as a version its run made.
     """
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     named = image_name(name, root, data)
     suffix = PurePosixPath(named).suffix.lower()
     drafts = drafts or []

@@ -20,6 +20,12 @@ export class AppError extends Error {
  */
 function worded(error: AppError): string | null {
   switch (error.reason) {
+    case "no-such-workspace":
+      return "That folder isn't there anymore, or isn't a folder. Pick another workspace.";
+    case "no-workspace":
+      return "Pick a workspace first: your project's top-level folder.";
+    case "workspace-changed":
+      return "The app had switched to another workspace, so that wasn't done. Try it again here.";
     case "no-such-image":
       return "That image is no longer there. It may have been moved or deleted outside the app.";
     case "no-such-version":

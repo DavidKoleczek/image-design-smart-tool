@@ -48,6 +48,9 @@ uv tool uninstall image-design
 
 ## Interface
 
+Each command works in a workspace, the top-level directory of your project: the working directory, or the one `--workspace` names. The images are kept in its `.image-design`.
+The app starts from anywhere. It opens on the workspace you opened last, or asks you to pick one first, and you can switch workspaces in it.
+
 ```bash
 # Run the app in background on your system at http://127.0.0.1:8789
 # PowerShell (Windows)
@@ -64,6 +67,9 @@ pkill -f "image-design app --port 8789"
 image-design mcp
 # Serve the app in the browser
 image-design app
+
+# Bring existing images, or whole folders of them, into the workspace
+image-design import-images ~/Pictures/references logo.png --folder references
 
 image-design design-image "A paper-cut cactus in a terracotta pot, in the style of the reference." --name concepts/cactus.png --reference style.png
 image-design design-image "Less detail, and keep the shading." --name concepts/cactus.png --resume-session true --image-model chatgpt

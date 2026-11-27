@@ -1,4 +1,4 @@
-"""What the app remembers: the person's settings, the same in every directory, and what they picked in each one."""
+"""What the app remembers: the person's settings, the same in every workspace, and what they picked in each one."""
 
 from pathlib import Path
 from typing import Any

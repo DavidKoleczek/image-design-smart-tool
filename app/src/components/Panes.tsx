@@ -27,7 +27,7 @@ function pixels(pane: PaneLayout, fallback: number): number {
   return pane.open ? (pane.size ?? fallback) : 0;
 }
 
-/** Where Your images and the tabs start, as percentages of the width the workspace has now. */
+/** Where Your images and the tabs start, as percentages of the width the panes have now. */
 function imagesLayout(layout: AppLayout, width: number): Layout | undefined {
   if (width <= 0) {
     return undefined;
@@ -64,7 +64,7 @@ function tabsWidth(wide: boolean, layout: AppLayout, width: number): number {
  * Your images beside the tabs, resizable and collapsible. A side pane opens as far as the person drags it, up to what
  * leaves the tabs 360px.
  */
-export function Workspace({
+export function Panes({
   layout,
   width,
   images,

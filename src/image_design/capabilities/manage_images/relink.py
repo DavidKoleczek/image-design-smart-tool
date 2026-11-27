@@ -17,9 +17,7 @@ from image_design.shared.images.store import (
 )
 
 
-def relink_images(
-    likely: list[str] | None = None, directory: Path | None = None, data_directory: Path | None = None
-) -> ImageRelinking:
+def relink_images(likely: list[str] | None = None, workspace: Path | None = None) -> ImageRelinking:
     """Point each image whose file is gone at the file that is certainly it, and report the rest.
 
     A file is certainly an image's when the tool keeps nothing for it and it holds exactly what the image's current
@@ -27,7 +25,7 @@ def relink_images(
     an image's when it only has the image's file name, as after it was changed and then moved: it is reported, and
     taken for the images named in `likely`.
     """
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     kept, _ = kept_images(root, data)
     known = {image.name.casefold() for image in kept}
     # An image a run is still making has no file yet, and one that never had a version never had a file.

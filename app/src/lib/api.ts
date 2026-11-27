@@ -10,6 +10,7 @@ const MOVE_TOOL = "move_image";
 const COPY_TOOL = "copy_image";
 const IMPORT_TOOL = "import_image";
 const CHOOSE_IMAGES_TOOL = "choose_image_files";
+const CHOOSE_IMAGE_FOLDER_TOOL = "choose_image_folder";
 const DELETE_TOOL = "delete_image";
 const CREATE_FOLDER_TOOL = "create_folder";
 const MOVE_FOLDER_TOOL = "move_folder";
@@ -48,6 +49,11 @@ const READ_CONFIG_TOOL = "read_config";
 const UPDATE_CONFIG_TOOL = "update_config";
 const READ_STATE_TOOL = "read_app_state";
 const SAVE_STATE_TOOL = "save_app_state";
+const READ_WORKSPACES_TOOL = "read_app_workspaces";
+const OPEN_WORKSPACE_TOOL = "open_app_workspace";
+const CHOOSE_WORKSPACE_TOOL = "choose_app_workspace";
+const CREATE_WORKSPACE_TOOL = "create_app_workspace";
+const FORGET_WORKSPACE_TOOL = "forget_app_workspace";
 const IMAGE_FILE_PREFIX = "image-design://images/";
 const IMAGE_VERSION_PREFIX = "image-design://versions/";
 const IMAGE_THUMBNAIL_PREFIX = "image-design://thumbnails/";
@@ -184,6 +190,8 @@ export type ImageView = ImageSummary & {
 
 /** `AppImages` in schemas.py. */
 export type ImageListing = {
+  /** The top-level directory of the person's project, whose .image-design is `directory`. */
+  workspace: string;
   directory: string;
   data_directory: string;
   images: ImageSummary[];
@@ -199,11 +207,32 @@ export type ImageListing = {
 /** `ImageMove` in schemas.py: an image whose file is under another name than the tool has for it. */
 export type ImageMove = { name: string; new_name: string };
 
-/** A file the app would not bring in, and which failure it was, as `describe` words them. */
+/** `ImageRefusal` in schemas.py: a file the app would not bring in, and which failure it was, as `describe` words them. */
 export type RefusedFile = {
   name: string;
   reason: string | null;
   message: string;
+};
+
+/** `ImageImports` in schemas.py: what came in from files and folders on the machine the app runs on. */
+export type ImageImports = {
+  images: ImageSummary[];
+  /** The folders made for the folders that came in, by their paths in the directory. */
+  folders: string[];
+  refused: RefusedFile[];
+};
+
+/** `RecentWorkspace` in schemas.py. */
+export type RecentWorkspace = { path: string; missing: boolean };
+
+/** `AppWorkspaces` in schemas.py. */
+export type AppWorkspaces = {
+  /** Null before one is picked, or once its folder is gone. */
+  current: string | null;
+  /** Newest first. */
+  recent: RecentWorkspace[];
+  /** Where a new workspace is made unless another folder is picked. */
+  new_in: string;
 };
 
 /** `PaneLayout` in schemas.py. */
@@ -506,6 +535,28 @@ const START_TIMEOUT_MS = 120_000;
 // A window that asks the person for something stays open for as long as they take to answer it.
 const DIALOG_TIMEOUT_MS = 3_600_000;
 
+// What a call fails with when the app no longer shows the workspace the view does.
+const WORKSPACE_LOST: ReadonlySet<string | null> = new Set([
+  "workspace-changed",
+  "no-workspace",
+  "no-such-workspace",
+]);
+
+// The workspace the view shows, which every call names, so the server refuses one sent as the app switched rather
+// than make it in the other workspace; null before one is picked.
+let shown: string | null = null;
+let lost: () => void = () => {};
+
+/** Name `workspace` in every call from now on. */
+export function showWorkspace(workspace: string | null) {
+  shown = workspace;
+}
+
+/** Call `listener` whenever a call finds the app shows another workspace, none, or one whose folder is gone. */
+export function onWorkspaceLost(listener: () => void) {
+  lost = listener;
+}
+
 function textOf(result: CallToolResult): string {
   return result.content
     .flatMap((block) => (block.type === "text" ? [block.text] : []))
@@ -549,12 +600,15 @@ async function call(
     await moving;
   }
   const result = await app.callServerTool(
-    { name, arguments: args },
+    { name, arguments: shown === null ? args : { ...args, workspace: shown } },
     timeout ? { timeout } : undefined,
   );
   if (result.isError) {
     const failure = result.structuredContent as
       { reason?: string | null; image?: string | null } | undefined;
+    if (WORKSPACE_LOST.has(failure?.reason ?? null)) {
+      lost();
+    }
     throw new AppError(
       textOf(result) || `\`${name}\` failed.`,
       failure?.reason ?? null,
@@ -578,7 +632,7 @@ async function structuredFrom(
   return result.structuredContent as Record<string, unknown>;
 }
 
-/** The images in the app's directory, in name order, and the one the app showed last. */
+/** The images in the app's workspace, in name order, and the one the app showed last. */
 export async function listImages(): Promise<ImageListing> {
   const structured = await structuredFrom(LIST_TOOL, {});
   if (!Array.isArray(structured.images)) {
@@ -656,12 +710,26 @@ export async function importImage(
  */
 export async function chooseImageFiles(
   folder: string | null,
-): Promise<{ images: ImageSummary[]; refused: RefusedFile[] }> {
+): Promise<ImageImports> {
   return (await structuredFrom(
     CHOOSE_IMAGES_TOOL,
     folder === null ? {} : { folder },
     DIALOG_TIMEOUT_MS,
-  )) as { images: ImageSummary[]; refused: RefusedFile[] };
+  )) as ImageImports;
+}
+
+/**
+ * Ask the person for a folder in their platform's folder dialog, and bring it into `folder`, or the top when null,
+ * with the folders in it and the images among its files.
+ */
+export async function chooseImageFolder(
+  folder: string | null,
+): Promise<ImageImports> {
+  return (await structuredFrom(
+    CHOOSE_IMAGE_FOLDER_TOOL,
+    folder === null ? {} : { folder },
+    DIALOG_TIMEOUT_MS,
+  )) as ImageImports;
 }
 
 /** Make a folder in the directory, and return its name. */
@@ -1020,7 +1088,7 @@ export async function clearOpenAIKey(): Promise<OpenAIKeyStatus> {
   return (await structuredFrom(CLEAR_KEY_TOOL, {})) as OpenAIKeyStatus;
 }
 
-/** How the person set up the app, the same in every directory. */
+/** How the person set up the app, the same in every workspace. */
 export async function readAppSettings(): Promise<AppSettings> {
   return (await structuredFrom(READ_SETTINGS_TOOL, {})) as AppSettings;
 }
@@ -1034,7 +1102,7 @@ export async function saveAppSettings(
   })) as AppSettings;
 }
 
-/** `ImageDesignConfig` in schemas.py: the person's defaults for the tool, the same in every directory. */
+/** `ImageDesignConfig` in schemas.py: the person's defaults for the tool, the same in every workspace. */
 export type ImageDesignConfig = {
   /** The image models the image's agent picks from, in order, when it is given none. Those left out follow. */
   design_image_models: string[];
@@ -1055,12 +1123,54 @@ export async function updateConfig(
   )) as ImageDesignConfig;
 }
 
-/** What the person last picked in the app for the images in its directory. */
+/** What the person last picked in the app for the images in its workspace. */
 export async function readAppState(): Promise<AppState> {
   return (await structuredFrom(READ_STATE_TOOL, {})) as AppState;
 }
 
-/** Keep what the person picked for the images in the app's directory, replacing what was kept before. */
+/** Keep what the person picked for the images in the app's workspace, replacing what was kept before. */
 export async function saveAppState(state: AppState): Promise<AppState> {
   return (await structuredFrom(SAVE_STATE_TOOL, { state })) as AppState;
+}
+
+/** The workspace the app shows, and those opened in it, newest first. */
+export async function readAppWorkspaces(): Promise<AppWorkspaces> {
+  return (await structuredFrom(READ_WORKSPACES_TOOL, {})) as AppWorkspaces;
+}
+
+/** Show the images in the workspace at `path`, keeping it as the one opened last. */
+export async function openAppWorkspace(path: string): Promise<AppWorkspaces> {
+  return (await structuredFrom(OPEN_WORKSPACE_TOOL, {
+    path,
+  })) as AppWorkspaces;
+}
+
+/** Ask the person for a workspace in their folder dialog, or with `parent` for a folder to make one in; null if they cancel. */
+export async function chooseAppWorkspace(
+  parent = false,
+): Promise<string | null> {
+  const structured = await structuredFrom(
+    CHOOSE_WORKSPACE_TOOL,
+    parent ? { parent } : {},
+    DIALOG_TIMEOUT_MS,
+  );
+  return (structured.path as string | null) ?? null;
+}
+
+/** Make the folder `name` in `parent` as a new workspace, and show it. */
+export async function createAppWorkspace(
+  name: string,
+  parent: string,
+): Promise<AppWorkspaces> {
+  return (await structuredFrom(CREATE_WORKSPACE_TOOL, {
+    name,
+    parent,
+  })) as AppWorkspaces;
+}
+
+/** Drop the workspace at `path` from those offered, leaving its folder as it is. */
+export async function forgetAppWorkspace(path: string): Promise<AppWorkspaces> {
+  return (await structuredFrom(FORGET_WORKSPACE_TOOL, {
+    path,
+  })) as AppWorkspaces;
 }

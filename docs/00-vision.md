@@ -5,7 +5,8 @@ A one stop shop for anything image creation and editing with AI. It could be use
 There are sub-capabilities, that directly interact with image generation models. There are capabilities creating, creating (re-generating) from references, and editing.
 
 Directory layout:
-- `.image-design/` is the default directory for everything related to what you do within this tool and app
+- A "workspace" is the top-level directory of the user's project. 
+- `.image-design/` in it is the directory for everything related to what you do within this tool and app
   - Rest of the files and directories underneath are the final generated images
   - Except `.agents/` is special in that it holds the data associated with the generated images. Chat logs, history, metadata, etc. Everything except what's needed to reproduce images is gitignored by default.
 

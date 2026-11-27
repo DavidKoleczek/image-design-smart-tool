@@ -26,10 +26,9 @@ and the agent is told which named parts of the drawing are under each.
 ## Arguments
 
 - `PROMPT`: What to draw, or what to change.
-- `--name`: The image's path in the directory, ending in `.svg`.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory. Pass the same one
-  every time.
+- `--name`: The image's path in `.image-design`, ending in `.svg`.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--reference`: An image to show the agent with the prompt, such as a style or a subject. Repeatable. Any format.
 - `--marks`: A JSON file of marks to draw on the render the agent is shown.
 - `--canvas`: `WIDTHxHEIGHT`. Defaults to 512x512 for a new drawing, and to the image's own for an edit.

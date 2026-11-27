@@ -16,9 +16,9 @@ EXPORT_FORMATS = {suffix: IMAGE_FORMATS[suffix] for suffix in (".png", ".jpg", "
 JPEG_QUALITY = 95
 
 
-def check_svg_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> SvgCheck:
+def check_svg_image(name: str, workspace: Path | None = None) -> SvgCheck:
     """Measure the SVG in the image's file against its budgets: those of its last drawing, else its own size."""
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     kept, path = _svg(root, data, name)
     image = find_image(root, data, kept)
     content = path.read_bytes()
@@ -34,11 +34,10 @@ def export_svg_image(
     output: Path,
     scale: float = 1,
     version: str | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
 ) -> Path:
     """Render the image's SVG, or one of its versions, to a .png, .jpg, or .webp at `scale` times its size."""
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     suffix = output.suffix.lower()
     if suffix not in EXPORT_FORMATS:
         raise invalid(
@@ -78,7 +77,7 @@ def _svg(root: Path, data: Path, name: str) -> tuple[str, Path]:
     path = root / kept
     if not path.is_file():
         raise ImageDesignError(
-            f"There is no file {path}. Name an SVG image in {root}, or pass the --directory it is in.",
+            f"There is no file {path}. Name an SVG image in {root}, or pass the --workspace it is in.",
             "no-such-image",
             name,
         )

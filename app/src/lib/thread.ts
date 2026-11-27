@@ -909,3 +909,11 @@ export function toggleOpened(key: string, open: boolean) {
     listener();
   }
 }
+
+/** Forget the blocks opened or closed, for a workspace shown next, whose images are others under the same names. */
+export function forgetOpened() {
+  opened = {};
+  for (const listener of listeners) {
+    listener();
+  }
+}

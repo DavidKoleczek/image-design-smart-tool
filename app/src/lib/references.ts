@@ -229,6 +229,16 @@ export function sentReferences(references: Reference[]): SentReference[] {
 // The mask last sent up for each image, and which painting of it that was, so the same one is not sent twice.
 const sentMasks = new Map<string, { revision: number; upload: string }>();
 
+/**
+ * Forget the references of the requests being written, for a workspace shown next, whose images are others under the
+ * same names. What is known of a file by its path stays, since a path names the same file in any workspace.
+ */
+export function forgetReferences() {
+  lists.clear();
+  sentMasks.clear();
+  emit();
+}
+
 // A request's references stay with its image, and a reference that is an image of the directory stays that image.
 onRenamed((from, to) => {
   const named = (name: string) => movedPath(name, from, to);
@@ -418,9 +428,11 @@ function readThumb(path: string): Promise<string> {
     if (thumbs.size >= THUMBS_KEPT) {
       thumbs.clear();
     }
-    reading = readReference(path);
-    thumbs.set(path, reading);
-    reading.catch(() => thumbs.delete(path));
+    const read = readReference(path);
+    reading = read;
+    thumbs.set(path, read);
+    // A failed read is tried again next time.
+    read.catch(() => thumbs.get(path) === read && thumbs.delete(path));
   }
   return reading;
 }

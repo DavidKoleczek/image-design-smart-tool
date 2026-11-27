@@ -27,12 +27,12 @@ summary = add_image_version(name="concepts/cactus.png", path=Path("cropped.png")
 
 ## Arguments
 
-- `--name`: The image's path in the directory.
+- `--name`: The image's path in `.image-design`.
 - `--path`: The file to keep as its next version. Leave it out to keep a draft as it is.
 - `--draft`: A draft of the image, by its run id. Alone, the draft to keep. With `--path`, a draft the file was made
   from, such as by merging drafts, which the version names. Repeatable with `--path`.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--json` (library: the `ImageSummary` returned): the image as JSON instead of text.
 
 ## Result

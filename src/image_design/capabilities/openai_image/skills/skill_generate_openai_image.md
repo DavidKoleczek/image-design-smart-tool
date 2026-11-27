@@ -36,11 +36,10 @@ image-design generate-openai-image "Make the pot green." --name concepts/cactus.
 ## Arguments
 
 - `PROMPT`: What to make, or what to change.
-- `--name`: The image's path in the directory. Its extension sets the format: `.png`, `.jpg`, `.webp`, or `.gif` for an
+- `--name`: The image's path in `.image-design`. Its extension sets the format: `.png`, `.jpg`, `.webp`, or `.gif` for an
   animation.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory. Pass the same one
-  every time.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--reference`: Another image to send with the prompt, such as for a style or a subject. Repeatable. Any image
   format, or an SVG; one other than PNG, JPEG, or WebP is sent as a PNG at its own size.
 - `--marks`: A JSON file of marks drawn over the image being edited, sent as a separate layer.

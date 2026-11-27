@@ -32,7 +32,12 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /** What is about the app itself: its theme, its keys, its layout, and its docs; and the person's defaults for the tool. */
-export function SettingsMenu({ onShortcuts }: { onShortcuts: () => void }) {
+export function SettingsMenu({
+  onShortcuts,
+}: {
+  /** Shows the keyboard shortcuts; absent where there are none, as before a workspace is picked. */
+  onShortcuts?: () => void;
+}) {
   const { settings, error } = useSettings();
   const { methods } = useMethods();
   const documentation = DOCUMENTATION;
@@ -77,16 +82,20 @@ export function SettingsMenu({ onShortcuts }: { onShortcuts: () => void }) {
           </>
         )}
         <hr className="-mx-1 my-1 border-line" />
-        <PopoverClose className={ROW} onClick={onShortcuts}>
-          <span className="flex-1">Keyboard shortcuts</span>
-          <Kbd>?</Kbd>
-        </PopoverClose>
+        {onShortcuts && (
+          <PopoverClose className={ROW} onClick={onShortcuts}>
+            <span className="flex-1">Keyboard shortcuts</span>
+            <Kbd>?</Kbd>
+          </PopoverClose>
+        )}
         <PopoverClose className={ROW} onClick={openKeyDialog}>
           OpenAI API key
         </PopoverClose>
-        <button type="button" className={ROW} onClick={resetLayout}>
-          Reset layout
-        </button>
+        {onShortcuts && (
+          <button type="button" className={ROW} onClick={resetLayout}>
+            Reset layout
+          </button>
+        )}
         {documentation && (
           <button
             type="button"

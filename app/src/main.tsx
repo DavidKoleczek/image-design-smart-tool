@@ -11,15 +11,16 @@ import { connect } from "@/lib/host";
 import { loadKey } from "@/lib/key";
 import { loadMethods } from "@/lib/methods";
 import { loadSettings } from "@/lib/settings";
-import { loadAppState } from "@/lib/state";
+import { refreshWorkspaces } from "@/lib/workspaces";
 
 const root = createRoot(document.getElementById("root")!);
 
 try {
   await connect();
+  // Before the view first paints, so it opens in the person's theme and layout, on the workspace the app shows.
   await Promise.all([
     loadSettings(),
-    loadAppState(),
+    refreshWorkspaces(),
     loadMethods(),
     loadKey(),
     loadConfig(),

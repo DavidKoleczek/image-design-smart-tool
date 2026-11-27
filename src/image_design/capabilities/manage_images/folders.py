@@ -1,4 +1,4 @@
-"""The folders of an image directory: make one, move one with everything in it, and delete one with its images."""
+"""The folders of a workspace's images: make one, move one with everything in it, and delete one with its images."""
 
 from collections.abc import Callable
 import contextlib
@@ -25,14 +25,12 @@ from image_design.shared.images.store import (
 LEFT_BY_FILE_MANAGERS = (".ds_store", "thumbs.db", "desktop.ini")
 
 
-def create_folder(
-    name: str, directory: Path | None = None, data_directory: Path | None = None, numbered: bool = False
-) -> str:
-    """Make a folder in the directory, and any above it, and return its name.
+def create_folder(name: str, workspace: Path | None = None, numbered: bool = False) -> str:
+    """Make a folder in the image directory, and any above it, and return its name.
 
     A name that is taken is refused, or with `numbered` becomes the first free one of `name (2)`, `name (3)`, and on.
     """
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     new = folder_name(name, root, data)
     if (root / new).exists():
         new = _numbered(root, new, numbered, lambda each: (root / each).exists())
@@ -45,19 +43,13 @@ def create_folder(
     return new
 
 
-def move_folder(
-    name: str,
-    new_name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
-    numbered: bool = False,
-) -> str:
+def move_folder(name: str, new_name: str, workspace: Path | None = None, numbered: bool = False) -> str:
     """Give the folder another name, which moves everything in it, and return that name. Its images keep their
     versions.
 
     A name that is taken is refused, or with `numbered` becomes the first free one of `name (2)`, `name (3)`, and on.
     """
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     old = _existing(root, data, name)
     new = folder_name(new_name, root, data)
     if new == old:
@@ -101,13 +93,13 @@ def move_folder(
     return new
 
 
-def delete_folder(name: str, directory: Path | None = None, data_directory: Path | None = None) -> list[str]:
+def delete_folder(name: str, workspace: Path | None = None) -> list[str]:
     """Delete every image in the folder as `delete_image` does, then the folder and the folders in it.
 
-    Returns what is left, by paths in the directory: the files in it that no listing shows as images, which the tool
-    never deletes, and the folders that hold them. Empty when the folder is gone.
+    Returns what is left, by paths in the image directory: the files in it that no listing shows as images, which the
+    tool never deletes, and the folders that hold them. Empty when the folder is gone.
     """
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     old = _existing(root, data, name)
     kept = {record.name.casefold(): record.name for _, record in records(data) if within(record.name, old)}
     files = {each.casefold(): each for each in found(root, data).names if within(each, old)}
@@ -118,7 +110,7 @@ def delete_folder(name: str, directory: Path | None = None, data_directory: Path
         if image is not None:
             refuse_run_here(image)
     for each in names:
-        delete_image(each, root, data)
+        delete_image(each, root.parent)
     left: list[str] = []
     for folder, _, files_there in (root / old).walk(top_down=False):
         for file in files_there:
@@ -141,7 +133,7 @@ def _existing(root: Path, data: Path, name: str) -> str:
             return each
     raise ImageDesignError(
         f"There is no folder named {name!r} in {root}. The folders there: {', '.join(folders) or 'none'}. Name one "
-        "of them, or pass the --directory it is in.",
+        "of them, or pass the --workspace it is in.",
         "no-such-folder",
     )
 

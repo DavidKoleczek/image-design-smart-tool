@@ -52,6 +52,7 @@ from image_design.shared.images.store import (
     lock_path,
     new_run_id,
     read_script,
+    resolve_workspace,
 )
 
 # What starts a detached run, given its request on stdin.
@@ -71,8 +72,7 @@ class SvgImageRequest(BaseModel):
 
     prompt: str
     name: str
-    directory: Path | None = None
-    data_directory: Path | None = None
+    workspace: Path | None = None
     references: list[Path] = []
     marks: list[Mark] = []
     canvas: tuple[int, int] | NotGiven = NOT_GIVEN
@@ -88,8 +88,7 @@ class SvgImageRequest(BaseModel):
 async def draw_svg_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     canvas: tuple[int, int] | NotGiven = NOT_GIVEN,
@@ -108,8 +107,7 @@ async def draw_svg_image(
         SvgImageRequest,
         prompt=prompt,
         name=name,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references or [],
         marks=marks or [],
         canvas=canvas,
@@ -130,22 +128,19 @@ async def draw_svg_image(
             name,
         )
     _require_arguments(request)
-    root, data = directories(request.directory, request.data_directory)
-    # Made absolute here, since the run's process need not resolve them from the same place.
+    # Made absolute here, so the run's process works in the same workspace whatever directory it starts in.
+    workspace = resolve_workspace(request.workspace)
     absolute = request.model_copy(
-        update={
-            "directory": root,
-            "data_directory": data,
-            "references": [path.resolve() for path in request.references],
-        }
+        update={"workspace": workspace, "references": [path.resolve() for path in request.references]}
     )
+    root, data = directories(workspace)
     return await detaching.detach(BACKGROUND_COMMAND, absolute, root, data, SvgDetachedRun)
 
 
 async def start(request: SvgImageRequest, intelligence: Intelligence | None = None) -> SvgInProcessRun:
     """Check the request, set up the work folder, and start the agent that draws in it."""
     _require_arguments(request)
-    root, data = directories(request.directory, request.data_directory)
+    root, data = directories(request.workspace)
     name = image_name(request.name, root, data)
     sent = references(request.references)
     marking.require_marks(request.marks)

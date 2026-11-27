@@ -81,6 +81,14 @@ export function draftOf(key: string): Draft {
   return drafts.get(key) ?? EMPTY;
 }
 
+/** Forget what was written, for a workspace shown next, whose images are others under the same names. */
+export function forgetDrafts() {
+  drafts.clear();
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
 /** Give a new image's draft to the image it became once it was created. */
 export function moveDraft(from: string, to: string) {
   const draft = drafts.get(from);

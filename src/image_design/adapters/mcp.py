@@ -8,18 +8,18 @@ from mcp.server.stdio import stdio_server
 from image_design import lib
 
 
-def run_stdio(directory: Path | None = None, data_directory: Path | None = None) -> None:
+def run_stdio(workspace: Path | None = None) -> None:
     """Serve the MCP server over stdin and stdout until the client disconnects, then stop the app if it was opened.
 
     Args:
-        directory: Where the images the app shows are kept; `.image-design` in the working directory when omitted.
-        data_directory: Where the tool keeps their versions and runs; `.agents` in the directory when omitted.
+        workspace: The workspace whose images the app shows, as for `lib.app_server`; when omitted, the working
+            directory, which is the session's own project.
     """
-    asyncio.run(_serve(directory, data_directory))
+    asyncio.run(_serve(workspace or Path.cwd()))
 
 
-async def _serve(directory: Path | None, data_directory: Path | None) -> None:
-    app_server = lib.app_server(directory, data_directory)
+async def _serve(workspace: Path) -> None:
+    app_server = lib.app_server(workspace)
     try:
         async with stdio_server() as (read_stream, write_stream):
             await app_server.server.run(read_stream, write_stream, app_server.server.create_initialization_options())

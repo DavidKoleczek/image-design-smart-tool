@@ -13,14 +13,13 @@ from image_design.shared.images.store import directories, require_image
 def steer_image(
     name: str,
     message: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     origin: str | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
 ) -> None:
     """Leave a message for the image's agent, which the process running it delivers."""
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     image = require_image(root, data, name)
     run = image.designing()
     if run is None:

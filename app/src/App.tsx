@@ -6,13 +6,16 @@ import { DeleteDialog, RenameDialog } from "@/components/ImageMenu";
 import { ImagesPane } from "@/components/ImagesPane";
 import { ImageSwitcher } from "@/components/ImageSwitcher";
 import { KeyDialog } from "@/components/KeyDialog";
+import { Panes } from "@/components/Panes";
+import { SettingsMenu } from "@/components/SettingsMenu";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { StatusBar } from "@/components/StatusBar";
 import { TabStrip } from "@/components/TabStrip";
 import { TabView } from "@/components/TabView";
 import { TopBar, type NarrowPane, type Pane } from "@/components/TopBar";
 import { Segmented } from "@/components/ui/segmented";
-import { Workspace } from "@/components/Workspace";
+import { AppMark, Wordmark } from "@/components/Wordmark";
+import { WorkspacePicker } from "@/components/WorkspacePicker";
 import { fitTool, type CanvasMode } from "@/lib/canvas";
 import { draftOf, updateDraft, useDraft } from "@/lib/drafts";
 import { useGuidance } from "@/lib/guidance";
@@ -25,7 +28,7 @@ import { renamed } from "@/lib/renames";
 import { folderIn } from "@/lib/request";
 import { updateSettings, useSettings } from "@/lib/settings";
 import { useShortcuts } from "@/lib/shortcuts";
-import { followDirectory } from "@/lib/state";
+import { loadAppState } from "@/lib/state";
 import {
   activateTab,
   bringUp,
@@ -44,13 +47,85 @@ import {
 import type { Entry } from "@/lib/tree";
 import { cn } from "@/lib/utils";
 import { viewed } from "@/lib/viewed";
+import { useWorkspaces, useWorkspaceWait } from "@/lib/workspaces";
 
+type Display = { fullscreen: boolean; expandable: boolean };
+
+/**
+ * The workspace the app shows, or picking one first when it shows none. Everything of a workspace mounts afresh for
+ * each, so nothing of the last one shows in the next.
+ */
 function App() {
-  const [root, breakpoint, width] = useBreakpoint();
-  const [display, setDisplay] = useState({
+  const [display, setDisplay] = useState<Display>({
     fullscreen: false,
     expandable: false,
   });
+  const { shown } = useWorkspaces();
+  useWorkspaceWait(shown === null);
+
+  useEffect(
+    () =>
+      onDisplay(({ mode, available }) =>
+        setDisplay({
+          fullscreen: mode === "fullscreen",
+          expandable: mode !== "fullscreen" && available.includes("fullscreen"),
+        }),
+      ),
+    [],
+  );
+
+  return shown === null ? (
+    <FirstStep fullscreen={display.fullscreen} />
+  ) : (
+    <InWorkspace key={shown} display={display} />
+  );
+}
+
+/** Picking a workspace, in place of everything else, until the app shows one. */
+function FirstStep({ fullscreen }: { fullscreen: boolean }) {
+  const [root, breakpoint] = useBreakpoint();
+  return (
+    <div
+      ref={root}
+      className={cn(
+        "flex flex-col overflow-hidden bg-canvas text-ink",
+        fullscreen ? "h-dvh" : "h-140",
+      )}
+    >
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-panel pr-2 pl-3">
+        {breakpoint === "narrow" ? (
+          <AppMark />
+        ) : (
+          <h1 className="flex shrink-0 items-center">
+            <Wordmark />
+          </h1>
+        )}
+        <span className="flex-1" />
+        <SettingsMenu />
+      </header>
+      <main className="flex min-h-0 flex-1 justify-center overflow-y-auto px-4 py-8">
+        <section
+          aria-labelledby="choose-workspace"
+          className="w-full max-w-110"
+        >
+          <h2 id="choose-workspace" className="text-title">
+            Choose a workspace
+          </h2>
+          <p className="mt-1 mb-4 text-ink-muted">
+            Your project's top-level folder. The app keeps its images in the
+            folder's .image-design.
+          </p>
+          <WorkspacePicker />
+        </section>
+      </main>
+      <KeyDialog />
+    </div>
+  );
+}
+
+/** The images of the workspace the app shows, the tabs open on them, and their requests. */
+function InWorkspace({ display }: { display: Display }) {
+  const [root, breakpoint, width] = useBreakpoint();
   const [narrowPane, setNarrowPane] = useState<NarrowPane>("image");
   const [shortcuts, setShortcuts] = useState(false);
   const { listing, error, brought, refresh } = useImages();
@@ -74,22 +149,21 @@ function App() {
   const search = useRef<HTMLInputElement>(null);
   // The folder a new image goes in by default: the one selected in Your images, or the one its selection is in.
   const here = useRef<string | null>(null);
-  const dataDirectory = listing?.data_directory ?? null;
-  // The data directory whose picks are read, so its tabs can open.
-  const [ready, setReady] = useState<string | null>(null);
+  // Whether the workspace's picks are read, so its tabs can open as they were left.
+  const [ready, setReady] = useState(false);
   useEffect(() => {
     let current = true;
-    void followDirectory(dataDirectory).then(() => {
+    void loadAppState().then(() => {
       if (current) {
-        setReady(dataDirectory);
+        setReady(true);
       }
     });
     return () => {
       current = false;
     };
-  }, [dataDirectory]);
+  }, []);
   useEffect(() => {
-    if (listing !== null && listing.data_directory === ready) {
+    if (listing !== null && ready) {
       openTabs(listing);
     }
   }, [listing, ready]);
@@ -108,17 +182,6 @@ function App() {
   const panes = { images: usePanelRef(), request: usePanelRef() };
   // A pane opened or closed from the top bar, which the next layout change saves like a drag.
   const toggled = useRef(false);
-
-  useEffect(
-    () =>
-      onDisplay(({ mode, available }) =>
-        setDisplay({
-          fullscreen: mode === "fullscreen",
-          expandable: mode !== "fullscreen" && available.includes("fullscreen"),
-        }),
-      ),
-    [],
-  );
 
   const layoutKey = breakpoint === "wide" ? "wide" : "medium";
   const layout = settings[layoutKey];
@@ -157,16 +220,18 @@ function App() {
     }
   };
 
+  /** The folder a new image goes in by default: the one selected in Your images, or the one the tab in view is in. */
+  const newFolder = (): string =>
+    here.current ??
+    (tab?.image ? folderOf(tab.image) : folderIn(listing, draft.folder));
+
   /**
    * Start a new image in `folder`, by default the folder selected in Your images, or the one the image in view, or the
    * new image in view, is in. A new image in view with nothing written for it yet is the one started. Returns what its
    * request is kept under.
    */
   const startNew = (folder?: string): string => {
-    const where =
-      folder ??
-      here.current ??
-      (tab?.image ? folderOf(tab.image) : folderIn(listing, draft.folder));
+    const where = folder ?? newFolder();
     if (tab && tab.image === null) {
       const key = keyOf(tab);
       const draft = draftOf(key);
@@ -312,9 +377,9 @@ function App() {
         }
       />
       <main className="flex min-h-0 flex-1">
-        <ErrorBoundary what="The workspace" className="m-4 flex-1">
+        <ErrorBoundary what="This view" className="m-4 flex-1">
           {breakpoint === "wide" ? (
-            <Workspace
+            <Panes
               layout={layout}
               width={width}
               imagesPanel={panes.images}
@@ -326,6 +391,7 @@ function App() {
                   search={search}
                   hereRef={here}
                   onNew={startNew}
+                  newFolder={newFolder}
                   onRemove={setDeleting}
                   onChanged={refresh}
                   {...picking}

@@ -314,6 +314,15 @@ export function clearGuides(name: string) {
   }
 }
 
+/** Forget every image's marks and mask, for a workspace shown next, whose images are others under the same names. */
+export function forgetGuides() {
+  guides.clear();
+  drawnOn.clear();
+  masks.clear();
+  revisions.clear();
+  emit();
+}
+
 onRenamed((from, to) => {
   const after = (name: string) => movedPath(name, from, to);
   const moved = [

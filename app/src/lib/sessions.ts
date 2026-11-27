@@ -39,6 +39,12 @@ export function setResume(name: string, resume: boolean) {
   changed();
 }
 
+/** Forget where Continue session was switched, for a workspace shown next, whose images are others. */
+export function forgetResumes() {
+  resumes.clear();
+  changed();
+}
+
 onRenamed((from, to) => {
   if (rekey(resumes, (name) => movedPath(name, from, to))) {
     changed();

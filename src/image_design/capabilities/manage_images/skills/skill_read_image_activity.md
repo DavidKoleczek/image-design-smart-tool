@@ -16,9 +16,9 @@ later = read_image_activity(name="sailboat.svg", after=activity.cursor)
 
 ## Arguments
 
-- `--name`: The image's path in the directory.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--name`: The image's path in `.image-design`.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--after`: The cursor an earlier call printed, to read only what came since.
 - `--json` (library: the `ImageActivity` returned): every event, with its data, as JSON instead of text.
 

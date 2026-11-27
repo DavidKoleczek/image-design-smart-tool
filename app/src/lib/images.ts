@@ -37,6 +37,8 @@ let state: Images = { listing: null, error: null, brought: null };
 const NOTHING_ARRIVING: ReadonlyMap<string, string> = new Map();
 // The images that show while their files are still going up, each with the upload it goes up as.
 let arriving = NOTHING_ARRIVING;
+// Counts the workspaces shown, so a listing or a pick asked for in one never lands in the next.
+let generation = 0;
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
@@ -217,10 +219,11 @@ function followMoved(before: ImageListing, after: ImageListing) {
 async function refresh(): Promise<void> {
   const across = picks;
   const asked = changes.asking();
+  const shownIn = generation;
   try {
     const fresh = await listImages();
-    // One asked for before the listing that shows, and answered after it.
-    if (read !== null && asked < read.asked) {
+    // One asked for before the listing that shows, and answered after it, or for the workspace shown before.
+    if ((read !== null && asked < read.asked) || shownIn !== generation) {
       return;
     }
     const waiting = changes.over(asked);
@@ -244,18 +247,34 @@ async function refresh(): Promise<void> {
     error = null;
     show(next);
   } catch (cause) {
-    error = `Could not list the images. ${describe(cause)}`;
-    reshow();
+    if (shownIn === generation) {
+      error = `Could not list the images. ${describe(cause)}`;
+      reshow();
+    }
   }
+}
+
+/** Forget the images listed, for a workspace shown next, which lists its own. */
+export function forgetImages() {
+  generation += 1;
+  read = null;
+  brought = null;
+  error = null;
+  followed = undefined;
+  arriving = NOTHING_ARRIVING;
+  show(null);
 }
 
 /** Record the image as the one the app shows, which it opens on, once it is in view here. */
 export function recordShown(name: string) {
+  const shownIn = generation;
   picks += 1;
   showImage(name)
     .then(
       () => {
-        followed = name;
+        if (shownIn === generation) {
+          followed = name;
+        }
       },
       () => {
         // It stays in view here; only the record of what the app shows is behind.
@@ -267,11 +286,11 @@ export function recordShown(name: string) {
 }
 
 /**
- * The images in the app's directory, polled, and the one the server was last asked to bring up. Call it in one place,
+ * The images in the app's workspace, polled, and the one the server was last asked to bring up. Call it in one place,
  * since each call polls.
  *
  * An image is brought up when the server is asked to from anywhere but here, as `open_app` from the host session
- * does, and with the first listing of a directory when the app showed one there before. An image made or changed
+ * does, and with the first listing of a workspace when the app showed one there before. An image made or changed
  * anywhere else is never brought up.
  */
 export function useImages(): Images & { refresh: () => Promise<void> } {

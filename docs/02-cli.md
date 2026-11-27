@@ -26,6 +26,7 @@ image-design generate-openai-image "A paper-cut cactus in a terracotta pot." --n
 
 A few arguments are written differently on the command line:
 
+- `paths` for `import-images`: Positional, one or more files and folders.
 - `references`: Repeat `--reference <path>` for each file.
 - `drafts` for `add-image-version`: Repeat `--draft <run id>` for each draft.
 - `marks`: Pass `--marks <path>`, a JSON file that holds a list of marks.
@@ -74,12 +75,13 @@ The agent runs this installation's `image-design` on its PATH, so each call it m
 ## Other commands
 
 ```
-image-design list-images                                         the images in the directory
+image-design list-images                                         the images in the workspace
 image-design view-image --name <name> [--frames-output <dir>]   one image, its versions, and its frames
 image-design restore-image-version --name <name> --version <v>   put an earlier version back
 image-design move-image --name <name> --new-name <name>          rename or move an image
 image-design copy-image --name <name> --new-name <name>          copy an image and its data
 image-design import-image --path <file> [--name <name>]          bring an image file in
+image-design import-images <path>... [--folder <folder>]         bring files and folders of images in
 image-design add-image-version --name <name> --path <file>       keep a file as an image's next version
 image-design delete-image --name <name>                          delete an image and its data
 image-design create-folder --name <folder>                       make a folder
@@ -100,14 +102,14 @@ image-design app [--port <n>]                                    serve the app i
 image-design mcp                                                 serve the app over stdio as an MCP App
 ```
 
-Every command that works on images also takes `--directory` and `--data-directory`.
+Every command that works on images also takes `--workspace`, the project's top-level directory, which defaults to the working directory. A `--name` is a path in the workspace's `.image-design`.
 
-`steer-image`, `steer-svg-image`, `cancel-image`, and `delete-image` print nothing. `delete-folder` prints only the files it left. `create-folder` and `move-folder` print the folder's name. `manifest` prints JSON. The others print text, or JSON with `--json`.
+`steer-image`, `steer-svg-image`, `cancel-image`, and `delete-image` print nothing. `delete-folder` prints only the files it left. `create-folder` and `move-folder` print the folder's name. `import-images` prints the path of each image it brought in, and what it left out on stderr, and exits 1 when nothing came in. `manifest` prints JSON. The others print text, or JSON with `--json`.
 
 `move-image`, `copy-image`, `import-image`, `create-folder`, and `move-folder` take `--numbered`. For `relink-images`, repeat `--likely <name>` for each image.
 
-`app` calls `lib.app_server().open()`, prints its URL, and keeps serving until Ctrl+C, which exits 0.
-`mcp` calls `image_design.adapters.mcp.run_stdio()`, for MCP clients that launch the server themselves. stdin and stdout carry only MCP messages until the client disconnects.
-For both, `--directory` and `--data-directory` set the images the app shows.
+`app` calls `lib.app_server().open()`, prints its URL, and keeps serving until Ctrl+C, which exits 0. It can be started from any directory. It opens on the workspace opened last, or asks the user to pick one first, and the user can switch workspaces in it. `--name` opens it on an image, and exits 1 when there is no workspace to open it in.
+`mcp` calls `image_design.adapters.mcp.run_stdio()`, for MCP clients that launch the server themselves. It shows the working directory, which is the session's project. stdin and stdout carry only MCP messages until the client disconnects.
+For both, `--workspace` sets the workspace the app opens on.
 
 A command exits with 1 and prints the error to stderr when the library raises `ImageDesignError`. An invalid command line exits with 2.

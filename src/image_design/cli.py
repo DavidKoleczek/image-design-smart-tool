@@ -39,9 +39,7 @@ from image_design.schemas import (
     ReasoningEffort,
 )
 
-DIRECTORY_HELP = "Where images are kept; .image-design here when omitted."
-DATA_DIRECTORY_HELP = "Where the tool keeps versions and runs; .agents in the directory when omitted."
-APP_DIRECTORY_HELP = "Where the images to show are kept; .image-design here when omitted."
+WORKSPACE_HELP = "The project's top-level directory, whose .image-design holds the images; here when omitted."
 JSON_HELP = "Print JSON instead of text."
 NUMBERED_HELP = "Take the next free name like it, such as 'cactus (2).png', when the name is taken."
 DRAFT_HELP = (
@@ -145,11 +143,10 @@ def generate_openai_image(
     name: Annotated[
         str,
         typer.Option(
-            "--name", help="The image's path in the directory, such as concepts/cactus.png; one that exists is edited."
+            "--name", help="The image's path in .image-design, such as concepts/cactus.png; one that exists is edited."
         ),
     ],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     references: Annotated[
         list[Path] | None, typer.Option("--reference", help="Another image to send with the prompt; repeatable.")
     ] = None,
@@ -207,8 +204,7 @@ def generate_openai_image(
             lib.generate_openai_image(
                 prompt=prompt,
                 name=name,
-                directory=directory,
-                data_directory=data_directory,
+                workspace=workspace,
                 references=references,
                 marks=_marks(marks),
                 mask=mask,
@@ -241,11 +237,10 @@ def generate_chatgpt_image(
     name: Annotated[
         str,
         typer.Option(
-            "--name", help="The image's path in the directory, such as concepts/cactus.png; one that exists is edited."
+            "--name", help="The image's path in .image-design, such as concepts/cactus.png; one that exists is edited."
         ),
     ],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     references: Annotated[
         list[Path] | None, typer.Option("--reference", help="Another image to send with the prompt; repeatable.")
     ] = None,
@@ -280,8 +275,7 @@ def generate_chatgpt_image(
             lib.generate_chatgpt_image(
                 prompt=prompt,
                 name=name,
-                directory=directory,
-                data_directory=data_directory,
+                workspace=workspace,
                 references=references,
                 marks=_marks(marks),
                 version=version,
@@ -306,11 +300,17 @@ def design_image(
     name: Annotated[
         str,
         typer.Option(
-            "--name", help="The image's path in the directory, such as concepts/cactus.png; one that exists is edited."
+            "--name", help="The image's path in .image-design, such as concepts/cactus.png; one that exists is edited."
         ),
     ],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            help="The project's top-level directory, where the agent runs and whose .image-design holds the images; "
+            "here when omitted.",
+        ),
+    ] = None,
     references: Annotated[
         list[Path] | None, typer.Option("--reference", help="An image that goes with the request; repeatable.")
     ] = None,
@@ -366,8 +366,7 @@ def design_image(
             lib.design_image(
                 prompt=prompt,
                 name=name,
-                directory=directory,
-                data_directory=data_directory,
+                workspace=workspace,
                 references=references,
                 marks=_marks(marks),
                 mask=mask,
@@ -393,10 +392,9 @@ def design_image(
 
 @app.command()
 def steer_image(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
     message: Annotated[str, typer.Option("--message", help="What the agent should do.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     origin: Annotated[str | None, typer.Option("--origin", help="Who asked, such as app.")] = None,
     references: Annotated[
         list[Path] | None, typer.Option("--reference", help="An image to show the agent with it; repeatable.")
@@ -409,8 +407,7 @@ def steer_image(
     lib.steer_image(
         name=name,
         message=message,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         origin=origin,
         references=references,
         marks=_marks(marks),
@@ -422,10 +419,9 @@ def draw_svg_image(
     prompt: Annotated[str, typer.Argument(help="What to draw, or what to change.", show_default=False)],
     name: Annotated[
         str,
-        typer.Option("--name", help="The image's path in the directory, such as logo.svg; one that exists is edited."),
+        typer.Option("--name", help="The image's path in .image-design, such as logo.svg; one that exists is edited."),
     ],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     references: Annotated[
         list[Path] | None, typer.Option("--reference", help="An image to show the agent with the prompt; repeatable.")
     ] = None,
@@ -469,8 +465,7 @@ def draw_svg_image(
             lib.draw_svg_image(
                 prompt=prompt,
                 name=name,
-                directory=directory,
-                data_directory=data_directory,
+                workspace=workspace,
                 references=references,
                 marks=_marks(marks),
                 canvas=_canvas(canvas),
@@ -492,10 +487,9 @@ def draw_svg_image(
 
 @app.command()
 def steer_svg_image(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
     message: Annotated[str, typer.Option("--message", help="What the agent should change.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     origin: Annotated[str | None, typer.Option("--origin", help="Who asked, such as app.")] = None,
     references: Annotated[
         list[Path] | None, typer.Option("--reference", help="An image to show the agent with it; repeatable.")
@@ -509,8 +503,7 @@ def steer_svg_image(
     lib.steer_svg_image(
         name=name,
         message=message,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         origin=origin,
         references=references,
         marks=_marks(marks),
@@ -519,42 +512,37 @@ def steer_svg_image(
 
 @app.command()
 def check_svg_image(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
     """Measure an SVG image against its budgets. Deterministic."""
-    check = lib.check_svg_image(name=name, directory=directory, data_directory=data_directory)
+    check = lib.check_svg_image(name=name, workspace=workspace)
     typer.echo(check.model_dump_json(indent=2) if json else check.describe())
 
 
 @app.command()
 def export_svg_image(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
     output: Annotated[Path, typer.Option("--output", help="The file to write: a .png, .jpg, or .webp.")],
     scale: Annotated[float, typer.Option("--scale", help="Times the canvas size.")] = 1,
     version: Annotated[
         str | None, typer.Option("--version", help="The version to render; the one in the image's file when omitted.")
     ] = None,
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
 ) -> None:
     """Render an SVG image to a raster file. Deterministic."""
-    written = lib.export_svg_image(
-        name=name, output=output, scale=scale, version=version, directory=directory, data_directory=data_directory
-    )
+    written = lib.export_svg_image(name=name, output=output, scale=scale, version=version, workspace=workspace)
     typer.echo(_shown(written))
 
 
 @app.command()
 def list_images(
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
-    """Every image in the directory, with its versions and how its last run went. Deterministic."""
-    listing = lib.list_images(directory=directory, data_directory=data_directory)
+    """Every image in the workspace, with its versions and how its last run went. Deterministic."""
+    listing = lib.list_images(workspace=workspace)
     if json:
         typer.echo(listing.model_dump_json(indent=2))
         return
@@ -575,7 +563,7 @@ def list_images(
 
 @app.command()
 def view_image(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
     version: Annotated[
         str | None,
         typer.Option("--version", help="The version to view frame by frame; the one in the image's file when omitted."),
@@ -584,14 +572,11 @@ def view_image(
         Path | None,
         typer.Option("--frames-output", help="A folder to write each frame to, as frame-<index>.png."),
     ] = None,
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
     """One image and its versions, and with --frames-output its frames as PNGs. Deterministic."""
-    view = lib.view_image(
-        name=name, version=version, frames_output=frames_output, directory=directory, data_directory=data_directory
-    )
+    view = lib.view_image(name=name, version=version, frames_output=frames_output, workspace=workspace)
     if json:
         typer.echo(view.model_dump_json(indent=2))
         return
@@ -607,33 +592,27 @@ def view_image(
 
 @app.command()
 def move_image(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
     new_name: Annotated[str, typer.Option("--new-name", help="The path to give it, with the same extension.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     numbered: Annotated[bool, typer.Option("--numbered", help=NUMBERED_HELP)] = False,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
-    """Rename an image, or move it to another folder of the directory. Deterministic."""
-    summary = lib.move_image(
-        name=name, new_name=new_name, directory=directory, data_directory=data_directory, numbered=numbered
-    )
+    """Rename an image, or move it to another folder. Deterministic."""
+    summary = lib.move_image(name=name, new_name=new_name, workspace=workspace, numbered=numbered)
     typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
 
 
 @app.command()
 def copy_image(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
     new_name: Annotated[str, typer.Option("--new-name", help="The copy's path, with the same extension.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     numbered: Annotated[bool, typer.Option("--numbered", help=NUMBERED_HELP)] = False,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
     """Copy an image with its versions and its history. Deterministic."""
-    summary = lib.copy_image(
-        name=name, new_name=new_name, directory=directory, data_directory=data_directory, numbered=numbered
-    )
+    summary = lib.copy_image(name=name, new_name=new_name, workspace=workspace, numbered=numbered)
     typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
 
 
@@ -644,24 +623,52 @@ def import_image(
         str | None,
         typer.Option(
             "--name",
-            help="The image's path in the directory, or a folder ending in a slash; the file's own name when omitted.",
+            help="The image's path in .image-design, or a folder ending in a slash; the file's own name when omitted.",
         ),
     ] = None,
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     numbered: Annotated[bool, typer.Option("--numbered", help=NUMBERED_HELP)] = False,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
-    """Bring an image file into the directory as a new image. Deterministic."""
-    summary = lib.import_image(
-        path=path, name=name, directory=directory, data_directory=data_directory, numbered=numbered
-    )
+    """Bring an image file into the workspace as a new image under a name of its own. Deterministic."""
+    summary = lib.import_image(path=path, name=name, workspace=workspace, numbered=numbered)
     typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
 
 
 @app.command()
+def import_images(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(
+            help="Image files and folders of them to bring in, which are left as they are.", show_default=False
+        ),
+    ],
+    folder: Annotated[
+        str | None,
+        typer.Option("--folder", help="The folder in .image-design to bring them into; the top when omitted."),
+    ] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """Bring image files, and folders of them, into the workspace as new images. Deterministic.
+
+    Prints the path of each image brought in, and what was left out and why on stderr. Exits 1 when nothing came in.
+    """
+    imports = lib.import_images(paths=paths, folder=folder, workspace=workspace)
+    if json:
+        typer.echo(imports.model_dump_json(indent=2))
+    else:
+        for image in imports.images:
+            typer.echo(_shown(image.path))
+        for refusal in imports.refused:
+            typer.echo(f"Left out {refusal.name}: {refusal.message}", err=True)
+    if not imports.images and not imports.folders:
+        raise typer.Exit(1)
+
+
+@app.command()
 def add_image_version(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
     path: Annotated[
         Path | None, typer.Option("--path", help="The file to keep as its next version, in the image's format.")
     ] = None,
@@ -673,63 +680,54 @@ def add_image_version(
             "from. Repeatable.",
         ),
     ] = None,
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
     """Keep a file, such as a crop or a merge a script made, or a draft, as the next version of an image.
     Deterministic."""
-    summary = lib.add_image_version(
-        name=name, path=path, directory=directory, data_directory=data_directory, drafts=drafts
-    )
+    summary = lib.add_image_version(name=name, path=path, workspace=workspace, drafts=drafts)
     typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
 
 
 @app.command()
 def delete_image(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
 ) -> None:
     """Delete an image's file and everything kept for it. Deterministic."""
-    lib.delete_image(name=name, directory=directory, data_directory=data_directory)
+    lib.delete_image(name=name, workspace=workspace)
 
 
 @app.command()
 def create_folder(
-    name: Annotated[str, typer.Option("--name", help="The folder's path in the directory.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    name: Annotated[str, typer.Option("--name", help="The folder's path in .image-design.")],
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     numbered: Annotated[bool, typer.Option("--numbered", help=NUMBERED_HELP)] = False,
 ) -> None:
-    """Make a folder in the directory. Deterministic."""
-    made = lib.create_folder(name=name, directory=directory, data_directory=data_directory, numbered=numbered)
+    """Make a folder for images. Deterministic."""
+    made = lib.create_folder(name=name, workspace=workspace, numbered=numbered)
     typer.echo(made)
 
 
 @app.command()
 def move_folder(
-    name: Annotated[str, typer.Option("--name", help="The folder's path in the directory.")],
+    name: Annotated[str, typer.Option("--name", help="The folder's path in .image-design.")],
     new_name: Annotated[str, typer.Option("--new-name", help="The path to give it.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     numbered: Annotated[bool, typer.Option("--numbered", help=NUMBERED_HELP)] = False,
 ) -> None:
     """Rename a folder, or move it into another, with everything in it. Deterministic."""
-    moved = lib.move_folder(
-        name=name, new_name=new_name, directory=directory, data_directory=data_directory, numbered=numbered
-    )
+    moved = lib.move_folder(name=name, new_name=new_name, workspace=workspace, numbered=numbered)
     typer.echo(moved)
 
 
 @app.command()
 def delete_folder(
-    name: Annotated[str, typer.Option("--name", help="The folder's path in the directory.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    name: Annotated[str, typer.Option("--name", help="The folder's path in .image-design.")],
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
 ) -> None:
     """Delete a folder and the images in it. Deterministic."""
-    left = lib.delete_folder(name=name, directory=directory, data_directory=data_directory)
+    left = lib.delete_folder(name=name, workspace=workspace)
     if left:
         typer.echo(f"Deleted the images in {name}. It still holds what the tool does not delete: {', '.join(left)}")
 
@@ -740,12 +738,11 @@ def relink_images(
         list[str] | None,
         typer.Option("--likely", help="An image to relink to its likely file as well; repeat for each."),
     ] = None,
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
     """Find the images whose files were moved outside the tool, and keep each where its file is. Deterministic."""
-    relinking = lib.relink_images(likely=likely, directory=directory, data_directory=data_directory)
+    relinking = lib.relink_images(likely=likely, workspace=workspace)
     typer.echo(relinking.model_dump_json(indent=2) if json else relinking.describe())
 
 
@@ -760,39 +757,36 @@ def list_image_methods(
 
 @app.command()
 def restore_image_version(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
     version: Annotated[str, typer.Option("--version", help="The version to put back, such as v1.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
     """Put an earlier version of an image back in its file. Deterministic."""
-    summary = lib.restore_image_version(name=name, version=version, directory=directory, data_directory=data_directory)
+    summary = lib.restore_image_version(name=name, version=version, workspace=workspace)
     typer.echo(summary.model_dump_json(indent=2) if json else _describe(summary))
 
 
 @app.command()
 def cancel_image(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
 ) -> None:
     """Stop the run working on an image. Deterministic."""
-    lib.cancel_image(name=name, directory=directory, data_directory=data_directory)
+    lib.cancel_image(name=name, workspace=workspace)
 
 
 @app.command()
 def read_image_activity(
-    name: Annotated[str, typer.Option("--name", help="The image's path in the directory.")],
-    directory: Annotated[Path | None, typer.Option("--directory", help=DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    name: Annotated[str, typer.Option("--name", help="The image's path in .image-design.")],
+    workspace: Annotated[Path | None, typer.Option("--workspace", help=WORKSPACE_HELP)] = None,
     after: Annotated[
         str | None, typer.Option("--after", help="The cursor an earlier call printed, to read only what came since.")
     ] = None,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
     """The history of an image: each request, what its agent did, and how each run ended. Deterministic."""
-    activity = lib.read_image_activity(name=name, directory=directory, data_directory=data_directory, after=after)
+    activity = lib.read_image_activity(name=name, workspace=workspace, after=after)
     if json:
         typer.echo(activity.model_dump_json(indent=2))
         return
@@ -809,18 +803,30 @@ def read_image_activity(
 @app.command("app")
 def app_(
     port: Annotated[int | None, typer.Option(help="The port to bind; a free one is chosen when omitted.")] = None,
-    directory: Annotated[Path | None, typer.Option("--directory", help=APP_DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace",
+            help="The project's top-level directory, whose images the app shows; the one opened last when omitted.",
+        ),
+    ] = None,
     name: Annotated[
-        str | None, typer.Option("--name", help="An image to open on, by its path in the directory.")
+        str | None, typer.Option("--name", help="An image to open on, by its path in .image-design.")
     ] = None,
 ) -> None:
     """Serve the app in a browser page on this machine and print its URL.
 
-    Keeps serving until Ctrl+C. Exits 1 with the cause and remedy when the port is held.
+    The person picks the workspace in it, and it opens on the one opened last. Keeps serving until Ctrl+C. Exits 1
+    with the cause and remedy when the port is held.
     """
-    app_server = lib.app_server(directory=directory, data_directory=data_directory)
+    app_server = lib.app_server(workspace=workspace)
     if name is not None:
+        if app_server.workspace is None:
+            raise ImageDesignError(
+                f"There is no workspace to open {name} in, since none was opened in the app before. Pass --workspace "
+                "with the project's top-level directory.",
+                "no-workspace",
+            )
         app_server.show(name)
     typer.echo(app_server.open(port).url)
     with contextlib.suppress(KeyboardInterrupt):
@@ -831,15 +837,19 @@ def app_(
 
 @app.command()
 def mcp(
-    directory: Annotated[Path | None, typer.Option("--directory", help=APP_DIRECTORY_HELP)] = None,
-    data_directory: Annotated[Path | None, typer.Option("--data-directory", help=DATA_DIRECTORY_HELP)] = None,
+    workspace: Annotated[
+        Path | None,
+        typer.Option(
+            "--workspace", help="The project's top-level directory, whose images the app shows; here when omitted."
+        ),
+    ] = None,
 ) -> None:
     """Serve the app's MCP server on stdio, with the app as an MCP App.
 
     For MCP clients that launch the server themselves. Reads and writes MCP messages on stdin and stdout until the
     client disconnects; prints nothing else to stdout.
     """
-    mcp_adapter.run_stdio(directory, data_directory)
+    mcp_adapter.run_stdio(workspace)
 
 
 @app.command()
@@ -854,7 +864,7 @@ def config(
     ] = None,
     json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
 ) -> None:
-    """Show your defaults for the tool, the same in every directory, or change those given. Deterministic."""
+    """Show your defaults for the tool, the same in every workspace, or change those given. Deterministic."""
     if design_image_models is None:
         kept = lib.read_config()
     else:

@@ -15,10 +15,10 @@ summary = copy_image(name="cactus.png", new_name="concepts/cactus.png")
 
 ## Arguments
 
-- `--name`: The image's path in the directory.
+- `--name`: The image's path in `.image-design`.
 - `--new-name`: The copy's path, with the same extension.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--numbered`: When the new name is taken, take the next free name like it, such as `cactus (2).png`, instead of
   failing.
 - `--json` (library: the `ImageSummary` returned): the copy as JSON instead of text.

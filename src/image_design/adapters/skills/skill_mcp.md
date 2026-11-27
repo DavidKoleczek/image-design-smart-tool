@@ -12,14 +12,15 @@ The library has no `mcp` function. The command calls `run_stdio()` in `image_des
 
 ## Arguments
 
-- `--directory`: Where the images to show are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images to show. Defaults to the working directory, the session's project.
 
 ## Tools
 
-- `open_app`: serves the app and returns its browser URL and the directory it shows. Its `_meta.ui.resourceUri` names the view, so a host that renders MCP Apps shows it inline. A client that takes URL elicitation, such as Claude Code, is asked to open the URL in the browser. Calling it again returns the same URL. Pass `directory`, and `data_directory` when it is not `.agents` in that directory, to switch the app to other images, and `name` to bring an image up in it.
+- `open_app`: serves the app and returns its browser URL and the workspace it shows. Its `_meta.ui.resourceUri` names the view, so a host that renders MCP Apps shows it inline. A client that takes URL elicitation, such as Claude Code, is asked to open the URL in the browser. Calling it again returns the same URL. Pass `workspace` to switch the app to another workspace's images, and `name` to bring an image up in it.
 
-The view calls the server's other tools, such as `list_images`, `show_image`, `generate_openai_image`, `cancel_image`, and `save_app_settings`. They are listed only to hosts that render MCP Apps and are marked for the app alone, so an agent uses the CLI instead.
+The user can switch workspaces in the app. When it shows another than the session's own, `open_app`'s result names the `--workspace` to pass to commands for its images.
+
+The view calls the server's other tools, such as `list_images`, `show_image`, `generate_openai_image`, `open_app_workspace`, and `save_app_settings`. They are listed only to hosts that render MCP Apps and are marked for the app alone, so an agent uses the CLI instead.
 
 ## Resources
 

@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from "react";
 
 import {
+  chooseImageFiles,
+  chooseImageFolder,
   copyImage,
   createFolder,
   deleteFolder,
@@ -219,6 +221,53 @@ export function bringIn(
     });
     preview(upload, file);
   }
+}
+
+/** What the person can choose to bring in, in the machine's own dialog: image files, or a folder of them. */
+export type Chosen = "images" | "folder";
+
+/**
+ * Ask the person for image files, or for a folder, in the machine's own dialog, and bring them into `folder`, "" for
+ * the top. A folder comes in under its own name with the folders in it, and of its files only the images. Returns what
+ * could not come in, and why: each file refused, or the dialog when it could not show.
+ */
+export async function bringInChosen(
+  chosen: Chosen,
+  folder: string,
+): Promise<{ what: string; why: string }[]> {
+  try {
+    const { refused } = await (
+      chosen === "folder" ? chooseImageFolder : chooseImageFiles
+    )(folder || null);
+    return refused.map((each) => ({
+      what: `${each.name} was not added.`,
+      why: describe(new AppError(each.message, each.reason)),
+    }));
+  } catch (cause) {
+    return [
+      {
+        what:
+          chosen === "folder"
+            ? "No folder was added."
+            : "No images were added.",
+        why: describe(cause),
+      },
+    ];
+  }
+}
+
+/** Wait until every change asked for is made, so what the server keeps is what shows. */
+export function flushChanges(): Promise<void> {
+  return changes.idle();
+}
+
+/**
+ * Drop the changes not yet made, the files waiting to go up, and what could not be done, for a workspace shown next.
+ * They name images and folders by their paths in the one shown before.
+ */
+export function forgetChanges() {
+  changes.forget();
+  files.clear();
 }
 
 /** The name a file brought in had where it came from, by its upload, which is not always the name it shows under. */

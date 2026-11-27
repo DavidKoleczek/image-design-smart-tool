@@ -70,8 +70,9 @@ def hex_color(color: str) -> tuple[int, ...]:
 async def test_an_image_is_created_then_edited_then_restored_and_every_version_is_kept(
     images_api: FakeImagesAPI,
 ) -> None:
-    directory, data = Path("art"), Path("data")
-    where = {"directory": directory, "data_directory": data}
+    workspace = Path("garden")
+    workspace.mkdir()
+    where = {"workspace": workspace}
     created = await made(prompt="A paper-cut cactus.", name="concepts/cactus.png", **where)
     first = created.path.read_bytes()
     # A change by hand, which the edit has to keep rather than lose.
@@ -109,8 +110,10 @@ async def test_an_image_is_created_then_edited_then_restored_and_every_version_i
         ("v3", "openai"),
     ]
     assert created.path.read_bytes() == first
+    assert created.path == (workspace / ".image-design" / "concepts" / "cactus.png").resolve()
+    data = workspace / ".image-design" / ".agents"
     assert (data / ".gitignore").read_text(encoding="utf-8") == GITIGNORE.read_text(encoding="utf-8")
-    assert not (directory / ".agents").exists()
+    assert not Path(".image-design").exists()
 
 
 def test_a_saved_key_is_used_when_the_environment_has_none_and_is_never_part_of_its_status(

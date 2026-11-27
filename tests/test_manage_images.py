@@ -52,7 +52,11 @@ async def test_a_directory_lists_the_images_the_tool_made_and_the_files_put_ther
     [changed, _] = lib.list_images().images
 
     assert (empty.images, read_only) == ([], True)
-    assert (listing.directory, listing.data_directory) == (ROOT.resolve(), DATA.resolve())
+    assert (listing.workspace, listing.directory, listing.data_directory) == (
+        Path.cwd().resolve(),
+        ROOT.resolve(),
+        DATA.resolve(),
+    )
     assert [summary.name for summary in listing.images] == ["concepts/cactus.png", "Photo.PNG"]
     assert (cactus.width, cactus.height, cactus.frames, cactus.current, cactus.status) == (1024, 1024, 1, "v1", "done")
     assert cactus.modified is not None
@@ -69,7 +73,8 @@ async def test_a_listing_leaves_out_an_image_whose_data_cannot_be_read_and_says_
     await made("A fern.", "fern.png")
     [record] = [path for path in (DATA / IMAGES).glob(f"*/{RECORD}") if '"cactus.png"' in path.read_text("utf-8")]
     (record.parent / "versions.json").write_text("{", encoding="utf-8")
-    Path("a-file").write_text("", encoding="utf-8")
+    Path("filed").mkdir()
+    (Path("filed") / ".image-design").write_text("", encoding="utf-8")
 
     listing = lib.list_images()
 
@@ -77,8 +82,25 @@ async def test_a_listing_leaves_out_an_image_whose_data_cannot_be_read_and_says_
     assert [(summary.name, len(summary.versions)) for summary in listing.images] == [("cactus.png", 0), ("fern.png", 1)]
     assert len(listing.unreadable) == 1
     assert "versions.json" in listing.unreadable[0]
-    with pytest.raises(ImageDesignError, match="is a file, not a directory of images"):
-        lib.list_images(directory=Path("a-file"))
+    with pytest.raises(ImageDesignError, match="is a file, so the workspace's images cannot be kept there"):
+        lib.list_images(workspace=Path("filed"))
+
+
+def test_a_workspace_is_a_folder_and_its_image_directory_stands_for_it(tmp_path: Path) -> None:
+    (tmp_path / "garden" / ".image-design").mkdir(parents=True)
+    (tmp_path / "notes.txt").write_text("", encoding="utf-8")
+
+    given_its_images = lib.list_images(workspace=tmp_path / "garden" / ".image-design")
+    with pytest.raises(ImageDesignError) as not_a_folder:
+        lib.list_images(workspace=tmp_path / "notes.txt")
+    with pytest.raises(ImageDesignError) as missing:
+        lib.create_folder("drafts", workspace=tmp_path / "nowhere")
+
+    assert given_its_images.workspace == tmp_path / "garden"
+    assert not_a_folder.value.reason == missing.value.reason == "no-such-workspace"
+    assert f"{tmp_path / 'notes.txt'} is not a folder" in str(not_a_folder.value)
+    assert "--workspace" in str(missing.value)
+    assert not (tmp_path / "nowhere").exists()
 
 
 async def test_viewing_an_image_only_reads_it(images_api: FakeImagesAPI) -> None:
@@ -391,6 +413,64 @@ async def test_an_imported_file_is_kept_from_the_start_in_a_format_the_tool_keep
     assert [version.id for version in lib.view_image("Desk Photo.jpg").versions] == ["v1", "v2"]
 
 
+def test_files_and_folders_of_images_come_in_together_under_free_names_and_one_that_cannot_is_left_out(
+    images_api: FakeImagesAPI, tmp_path: Path
+) -> None:
+    trip = tmp_path / "trip"
+    (trip / "day 2").mkdir(parents=True)
+    (trip / ".cache").mkdir()
+    Image.new("RGB", (640, 480), "#336699").save(trip / "beach.jpeg", format="JPEG")
+    Image.new("RGB", (64, 64), "#993366").save(trip / "day 2" / "pier.bmp", format="BMP")
+    Image.new("RGB", (64, 64), "#000000").save(trip / ".cache" / "thumb.png", format="PNG")
+    Image.new("RGB", (64, 64), "#000000").save(trip / ".hidden.png", format="PNG")
+    (trip / "notes.txt").write_text("Not an image, and not one by name either.", encoding="utf-8")
+    (trip / "broken.png").write_text("Named as an image, but not one.", encoding="utf-8")
+    desk = tmp_path / "desk.png"
+    desk.write_bytes(picture(320, 200, "#ffffff"))
+    text = tmp_path / "notes.png"
+    text.write_text("Not an image.", encoding="utf-8")
+    by_hand("photos/desk.png")
+    lib.create_folder("photos/trip")
+
+    imports = lib.import_images([trip, desk, text, tmp_path / "gone.png"], folder="photos")
+    nothing = lib.import_images([text])
+
+    assert [image.name for image in imports.images] == [
+        "photos/trip (2)/beach.jpg",
+        "photos/trip (2)/day 2/pier.png",
+        "photos/desk (2).png",
+    ]
+    assert imports.folders == ["photos/trip (2)", "photos/trip (2)/day 2"]
+    assert [(refusal.name, refusal.reason) for refusal in imports.refused] == [
+        ("trip/broken.png", "not-an-image"),
+        ("notes.png", "not-an-image"),
+        ("gone.png", "no-such-file"),
+    ]
+    assert all(image.current == "v1" for image in imports.images)
+    assert not (ROOT / "photos" / "trip (2)" / ".cache").exists()
+    assert not (ROOT / "photos" / "trip (2)" / "notes.txt").exists()
+    # Everything brought in is left where it was.
+    assert ((trip / "beach.jpeg").is_file(), desk.is_file()) == (True, True)
+    assert (nothing.images, nothing.folders, [refusal.name for refusal in nothing.refused]) == ([], [], ["notes.png"])
+
+
+def test_the_cli_imports_images_and_exits_1_when_nothing_came_in(images_api: FakeImagesAPI, tmp_path: Path) -> None:
+    (tmp_path / "trip").mkdir()
+    Image.new("RGB", (64, 64), "#336699").save(tmp_path / "trip" / "beach.png", format="PNG")
+    (tmp_path / "notes.png").write_text("Not an image.", encoding="utf-8")
+
+    imported = runner.invoke(app, ["import-images", str(tmp_path / "trip"), str(tmp_path / "notes.png")])
+    as_json = runner.invoke(app, ["import-images", str(tmp_path / "trip"), "--folder", "photos", "--json"])
+    nothing = runner.invoke(app, ["import-images", str(tmp_path / "notes.png")])
+
+    assert imported.exit_code == 0
+    assert imported.stdout.splitlines() == [str(ROOT / "trip" / "beach.png")]
+    assert imported.stderr.startswith("Left out notes.png: ")
+    assert json.loads(as_json.stdout)["folders"] == ["photos/trip"]
+    assert nothing.exit_code == 1
+    assert nothing.stdout == ""
+
+
 async def test_an_image_moved_outside_the_tool_is_relinked_to_its_file(images_api: FakeImagesAPI) -> None:
     for name in ("cactus.png", "fern.png", "moss.png", "a/twin.png", "lost.png"):
         await made(f"Paint {name}.", name)
@@ -550,7 +630,8 @@ def test_the_cli_lists_views_moves_and_deletes_images(images_api: FakeImagesAPI)
     missing = runner.invoke(app, ["delete-image", "--name", "concepts/cactus.png"])
     methods = runner.invoke(app, ["list-image-methods"])
     methods_json = runner.invoke(app, ["list-image-methods", "--json"])
-    elsewhere = runner.invoke(app, ["list-images", "--directory", "nowhere"])
+    Path("garden").mkdir()
+    elsewhere = runner.invoke(app, ["list-images", "--workspace", "garden"])
 
     assert nothing_viewed.output.splitlines() == [
         "- cactus.png: 1024x1024, holds v1, done",
@@ -573,7 +654,7 @@ def test_the_cli_lists_views_moves_and_deletes_images(images_api: FakeImagesAPI)
     assert methods.output.startswith("generate-openai-image: ready\n- Names end in: .png, .jpg, .webp, .gif\n")
     assert "\n\ndraw-svg-image: " in methods.output
     assert json.loads(methods_json.output)["chatgpt"]["max_images"] == 5
-    assert elsewhere.output == "There are no images in nowhere.\n"
+    assert elsewhere.output == f"There are no images in {Path('garden') / '.image-design'}.\n"
 
 
 def test_the_cli_copies_imports_and_relinks_images_and_makes_moves_and_deletes_folders(

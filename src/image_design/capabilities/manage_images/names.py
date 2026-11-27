@@ -22,7 +22,7 @@ def find(root: Path, data: Path, name: str) -> StoredImage | str:
     known = ", ".join(found) or "none"
     raise ImageDesignError(
         f"There is no image named {name!r} in {root}. The images there: {known}. Name one of them, or pass the "
-        "--directory and --data-directory it was made with.",
+        "--workspace it is in.",
         "no-such-image",
         name,
     )

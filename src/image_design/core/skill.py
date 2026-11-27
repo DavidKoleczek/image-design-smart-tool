@@ -63,7 +63,7 @@ CAPABILITIES = (
     ),
     Capability(
         "list-images",
-        "List the images in the directory, with their versions and how their last runs went.",
+        "List the images in the workspace, with their versions and how their last runs went.",
         model_backed=False,
         skill="capabilities/manage_images/skills/skill_list_images.md",
     ),
@@ -75,7 +75,7 @@ CAPABILITIES = (
     ),
     Capability(
         "move-image",
-        "Rename an image, or move it to another folder of the directory.",
+        "Rename an image, or move it to another folder.",
         model_backed=False,
         skill="capabilities/manage_images/skills/skill_move_image.md",
     ),
@@ -87,9 +87,15 @@ CAPABILITIES = (
     ),
     Capability(
         "import-image",
-        "Bring an image file from anywhere on this machine into the directory as a new image.",
+        "Bring an image file from anywhere on this machine into the workspace as a new image, under a name of its own.",
         model_backed=False,
         skill="capabilities/manage_images/skills/skill_import_image.md",
+    ),
+    Capability(
+        "import-images",
+        "Bring image files, and folders of them, from anywhere on this machine into the workspace as new images.",
+        model_backed=False,
+        skill="capabilities/manage_images/skills/skill_import_images.md",
     ),
     Capability(
         "delete-image",
@@ -99,7 +105,7 @@ CAPABILITIES = (
     ),
     Capability(
         "create-folder",
-        "Make a folder in the directory.",
+        "Make a folder for images.",
         model_backed=False,
         skill="capabilities/manage_images/skills/skill_create_folder.md",
     ),

@@ -15,12 +15,12 @@ written = export_svg_image(name="sailboat.svg", output=Path("exports/sailboat@2x
 
 ## Arguments
 
-- `--name`: The image's path in the directory, ending in `.svg`.
+- `--name`: The image's path in `.image-design`, ending in `.svg`.
 - `--output`: The file to write, ending in `.png`, `.jpg`, or `.webp`. Its folder is made if need be.
 - `--scale`: Times the canvas size. Defaults to 1.
 - `--version`: The version to render, such as `v2`. Defaults to the one in the image's file.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 
 ## Result
 

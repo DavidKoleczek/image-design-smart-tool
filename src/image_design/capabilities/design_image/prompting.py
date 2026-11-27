@@ -4,7 +4,6 @@ from pathlib import Path
 from string import Template
 
 from image_design.capabilities.design_image import tooling
-from image_design.capabilities.design_image.told import argument
 from image_design.core.skill import skill
 from image_design.schemas import CHATGPT_IMAGE_MODEL, Mark
 from image_design.shared.images import marks as marking
@@ -12,10 +11,9 @@ from image_design.shared.images import marks as marking
 PROMPTS = Path(__file__).parent / "prompts"
 # A new session's prompt. Its $request is the request; $told the image's history; $target the lines under the
 # workflow's first step of the image it is for; $tool the command it makes images with and $command that command's
-# name; $given the end of the second step, with the lines under it of what came with the request; $directory the
-# image's work directory and $directories the flags of an image directory that is not the default; $skills the craft
-# skills whose text is $guidelines; and $tool_help the command's help. $told and $directories are empty when there is
-# nothing to say.
+# name; $given the end of the second step, with the lines under it of what came with the request; $workspace the
+# workspace the agent runs in and $directory the image's work directory; $skills the craft skills whose text is
+# $guidelines; and $tool_help the command's help. $told is empty when there is nothing to say.
 NEW = Template((PROMPTS / "new.md").read_text(encoding="utf-8"))
 # A resumed session's prompt, with $told what happened since its last turn, $guidelines the editing skill, $tool_guide
 # empty or SWITCHED, and the rest as in NEW. $tool is said again each turn, since the person can pick another image
@@ -53,7 +51,6 @@ OPENAI_TOOL = "`image-design generate-openai-image --model {model}`"
 CHATGPT_TOOL = "`image-design generate-chatgpt-image`"
 OPENAI_COMMAND = "generate-openai-image"
 CHATGPT_COMMAND = "generate-chatgpt-image"
-DIRECTORIES = " The images are not in the default directory, so pass {flags} to each `image-design` command."
 # Where a line of the list under the workflow's first step starts, and where the lines under it do.
 ITEM = "   - "
 UNDER = "     "
@@ -100,18 +97,6 @@ def picked(size: tuple[int, int] | None, quality: str | None) -> list[str]:
     if quality is not None:
         parts.append(QUALITY_PICKED.format(quality=quality))
     return ["\n".join([PICKED, *(f"- {part}" for part in parts)])] if parts else []
-
-
-def directories(root: Path, data: Path, default_root: Path, default_data: Path) -> str:
-    """How every command names the image directory, when the defaults from the agent's working directory are not it."""
-    flags = []
-    if root != default_root:
-        flags.append(f"--directory {argument(str(root))}")
-    if data != default_data:
-        flags.append(f"--data-directory {argument(str(data))}")
-    if not flags:
-        return ""
-    return DIRECTORIES.format(flags=" ".join(f"`{flag}`" for flag in flags))
 
 
 def steered(message: str, items: list[str]) -> str:
@@ -163,8 +148,8 @@ def new(
     request: str,
     target_items: list[str],
     given_items: list[str],
+    workspace: Path,
     directory: Path,
-    directories_line: str,
     image_model: str,
     editing: bool,
     told_block: str,
@@ -178,8 +163,8 @@ def new(
         given=given_block(given_items),
         tool=tool(image_model),
         command=command(image_model),
+        workspace=str(workspace),
         directory=str(directory),
-        directories=directories_line,
         skills=named(skills),
         tool_help=skill(command(image_model)),
         guidelines=guidelines(skills),

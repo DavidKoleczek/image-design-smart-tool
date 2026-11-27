@@ -2,10 +2,18 @@
 
 Every capability of Image Design is in `image_design.lib`. All other surfaces, including the CLI, are thin wrappers over the library.
 
+## Workspaces
+
+Every function that works on images takes `workspace`, the top-level directory of the user's project. It defaults to the working directory.
+The images are kept in its `.image-design`, and the tool's data for them in `.image-design/.agents`, so each project has its own.
+The image's agent runs in the workspace, so it can read the rest of the project, and its commands default to the same images.
+A workspace that is not a folder is refused with reason `no-such-workspace`. A path to a workspace's `.image-design` stands for the workspace. A workspace with no `.image-design` lists as empty, and the first image made there makes it.
+Images kept anywhere else come in as new images with [`import_images`](#manage-images).
+
 ## Design an image with an agent
 
 `design_image` creates or edits an image by running an agent that directs an image model.
-The agent has a shell in the working directory, this installation's `image-design` on its PATH, the tool's own skill, and skills for the craft of writing image calls.
+The agent has a shell in the workspace, this installation's `image-design` on its PATH, the tool's own skill, and skills for the craft of writing image calls.
 It looks at the image, its history, and the references, writes each call to the image model it is given, and makes it with `generate-openai-image` or `generate-chatgpt-image`, choosing every other setting of the call itself.
 It may make several images, write scripts for exact work such as a crop or a composite, and read the project to learn what the image is for.
 
@@ -13,8 +21,7 @@ It may make several images, write scripts for exact work such as a crop or a com
 async def design_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     mask: Path | None = None,
@@ -62,8 +69,7 @@ The agent's run is kept in the image's `designs.json`, beside its `runs.json`, a
 def steer_image(
     name: str,
     message: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     origin: str | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
@@ -80,8 +86,7 @@ def steer_image(
 async def generate_openai_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     mask: Path | None = None,
@@ -114,9 +119,8 @@ run = await generate_openai_image(
 result = await run.result()
 ```
 
-Images are saved in `directory`, which defaults to `.image-design` in the working directory.
-Their earlier versions and the tool's other data are kept in `data_directory`, which defaults to `.agents` in `directory`.
-`name` is the image's path in `directory`. Its extension sets the output format: `.png`, `.jpg`, `.webp`, or `.gif` for an animation.
+Images are saved in the workspace's `.image-design`, and their earlier versions and the tool's other data in its `.agents`. See [Workspaces](#workspaces).
+`name` is the image's path in `.image-design`. Its extension sets the output format: `.png`, `.jpg`, `.webp`, or `.gif` for an animation.
 
 To edit an image, pass the name of an image that exists:
 
@@ -127,7 +131,7 @@ run = await generate_openai_image(
 )
 ```
 
-An edit overwrites the image's file. The previous version is kept in `data_directory`, and `restore_image_version` brings it back.
+An edit overwrites the image's file. The previous version is kept in the data directory, and `restore_image_version` brings it back.
 
 With `draft`, an edit is tried without changing the image. It starts from `version`, or the version in the image's file, and its result is kept apart in the run's folder rather than as a version, in the result's `draft`. The image's file and versions stay as they are. Drafts on an image can run at the same time as each other and as a call that is not a draft, which lets several edits start from one version. `add_image_version` keeps a draft as the next version, or a file merged from several drafts. A draft is only for an image the tool keeps a version of.
 
@@ -223,7 +227,7 @@ class ImageDesignConfig(BaseModel):
     design_image_models: list[str] = []
 ```
 
-The config holds the person's defaults for the tool. It is the same for every directory, kept in `config.json` beside `app-settings.json`, and the app's Settings change it too.
+The config holds the person's defaults for the tool. It is the same for every workspace, kept in `config.json` beside `app-settings.json`, and the app's Settings change it too.
 `update_config` changes what it is given and leaves the rest as it is. It refuses a model the agent cannot be given, and a model kept in the file that the tool no longer offers is passed over.
 `read_config` raises `ImageDesignError` for a file that is there but not valid, rather than going by defaults the person did not set.
 
@@ -239,8 +243,7 @@ If Codex is signed in with an API key instead, the function raises `ImageDesignE
 async def generate_chatgpt_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     version: str | None = None,
@@ -314,8 +317,7 @@ It then renders the SVG with [resvg](https://github.com/linebender/resvg), looks
 async def draw_svg_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     canvas: tuple[int, int] | NotGiven = NOT_GIVEN,
@@ -368,20 +370,18 @@ resvg renders static SVG only. It skips what it does not support, such as animat
 def steer_svg_image(
     name: str,
     message: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     origin: str | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
 ) -> None
-def check_svg_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> SvgCheck
+def check_svg_image(name: str, workspace: Path | None = None) -> SvgCheck
 def export_svg_image(
     name: str,
     output: Path,
     scale: float = 1,
     version: str | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
 ) -> Path
 ```
 
@@ -413,75 +413,73 @@ Both agent providers implement the `Intelligence` protocol in `image_design.inte
 These functions work on any image, whichever function made it. None of them calls a model.
 
 ```python
-def list_images(directory: Path | None = None, data_directory: Path | None = None) -> ImageListing
+def list_images(workspace: Path | None = None) -> ImageListing
 def view_image(
     name: str,
     version: str | None = None,
     frames_output: Path | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
 ) -> ImageView
-def restore_image_version(name: str, version: str, directory: Path | None = None, data_directory: Path | None = None) -> ImageSummary
+def restore_image_version(name: str, version: str, workspace: Path | None = None) -> ImageSummary
 def move_image(
     name: str,
     new_name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     numbered: bool = False,
 ) -> ImageSummary
 def copy_image(
     name: str,
     new_name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     numbered: bool = False,
 ) -> ImageSummary
 def import_image(
     path: Path,
     name: str | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     numbered: bool = False,
 ) -> ImageSummary
+def import_images(
+    paths: list[Path],
+    folder: str | None = None,
+    workspace: Path | None = None,
+) -> ImageImports
 def add_image_version(
     name: str,
     path: Path | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     parent: str | None = None,
     drafts: list[str] | None = None,
 ) -> ImageSummary
-def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None
-def create_folder(name: str, directory: Path | None = None, data_directory: Path | None = None, numbered: bool = False) -> str
+def delete_image(name: str, workspace: Path | None = None) -> None
+def create_folder(name: str, workspace: Path | None = None, numbered: bool = False) -> str
 def move_folder(
     name: str,
     new_name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     numbered: bool = False,
 ) -> str
-def delete_folder(name: str, directory: Path | None = None, data_directory: Path | None = None) -> list[str]
+def delete_folder(name: str, workspace: Path | None = None) -> list[str]
 def relink_images(
     likely: list[str] | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
 ) -> ImageRelinking
-def cancel_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None
+def cancel_image(name: str, workspace: Path | None = None) -> None
 def read_image_activity(
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     after: str | None = None,
 ) -> ImageActivity
 def list_image_methods() -> ImageMethods
 ```
 
-- `list_images` returns every image in the directory with its versions, the status of its last run that was not a draft, and the drafts going on it in `drafting`, and every folder in `folders`, including empty ones. An image's `id` names what the tool keeps for it and stays the same when the image moves. It is None for a file the tool keeps nothing for.
+- `list_images` returns the workspace, every image in its `.image-design` with its versions, the status of its last run that was not a draft, and the drafts going on it in `drafting`, and every folder in `folders`, including empty ones. An image's `id` names what the tool keeps for it and stays the same when the image moves. It is None for a file the tool keeps nothing for.
 - `view_image` returns one image with its versions, and in `viewed` the image's file, or the `version` you pass, frame by frame with how long each frame is shown. A still image has one frame. Pass a folder as `frames_output` to also write each frame there as a PNG named `frame-<index>.png`. Nothing else is written.
 - `restore_image_version` replaces the image's file with an earlier version. For an SVG image, it also restores that version's `image.py`.
 - `move_image` renames an image or moves it to another folder. The image keeps its versions. The new name must keep the extension.
 - `copy_image` makes another image with a copy of the image's file and of everything kept for it: its versions, its runs, and for an SVG image its script and sessions. It is refused while a run is working on the image.
-- `import_image` copies an image file from anywhere on the machine into the directory as a new image, with the file as its first version. A PNG, JPEG, WebP, GIF, or SVG is kept as it is. Any other still image, such as a BMP or TIFF, is kept as a PNG. Without `name` the image has the file's name. A `name` that ends in a slash is the folder to put it in.
+- `import_image` copies an image file from anywhere on the machine into the workspace as a new image, with the file as its first version. A PNG, JPEG, WebP, GIF, or SVG is kept as it is. Any other still image, such as a BMP or TIFF, is kept as a PNG. Without `name` the image has the file's name. A `name` that ends in a slash is the folder to put it in.
+- `import_images` brings in many files and folders at once, each as `import_image` does, into `folder` or the top of `.image-design`. A folder comes in under its own name with the folders in it. Of its files only images come in, and hidden files and folders are left out. A name that is taken becomes a numbered one, so nothing is overwritten. What cannot come in is refused with why, and the rest still comes in. It returns the new images, the folders made, and what was refused.
 - `add_image_version` keeps a file, such as a crop or a merge a script made, as the image's next version and puts it in the image's file. The file must be in the image's format, except that any still image is kept as a PNG for a `.png`. `parent` is as for `generate_openai_image`. `drafts` names the drafts the file was made from, by their run ids, and the version keeps them in its `drafts`. Without `path`, the one draft in `drafts` is kept as it is, as a version its call made.
 - `delete_image` deletes an image and everything kept for it. If a run or a draft is working on the image, it's stopped first.
 - `create_folder` makes a folder and returns its name. A folder stays until `delete_folder` removes it, even when a move or a delete leaves it empty.
@@ -521,29 +519,41 @@ class ImageRelinking(BaseModel):
 class ImageMove(BaseModel):
     name: str  # the name the tool had for the image
     new_name: str  # where its file is
+
+
+class ImageImports(BaseModel):
+    images: list[ImageSummary]
+    folders: list[str]  # the folders made, by their paths in .image-design
+    refused: list[ImageRefusal]
+
+
+class ImageRefusal(BaseModel):
+    name: str  # for one inside a folder brought in, its path from that folder
+    reason: str | None
+    message: str
 ```
 
-An image's file is kept apart from the tool's data for it. With the default `data_directory`, the layout is:
+An image's file is kept apart from the tool's data for it. In a workspace, the layout is:
 
 ```text
-.image-design/
-  logo.svg
-  concepts/
-    cactus.png
-  .agents/
-    images/<id>/
-      image.json
-      image.py
-      image.py.lock
-      versions/
-      runs/
-      work/
-      sessions/
+<workspace>/
+  .image-design/
+    logo.svg
+    concepts/
+      cactus.png
+    .agents/
+      images/<id>/
+        image.json
+        image.py
+        image.py.lock
+        versions/
+        runs/
+        work/
+        sessions/
 ```
 
-`data_directory` has a `.gitignore` that ignores everything except each image's `image.json`, `image.py`, and `image.py.lock`.
-If you set `data_directory`, pass the same one in every call. The tool does not record where it is.
-An image file that you put in the directory yourself is listed like any other. The tool keeps nothing for it until the first request on it, which keeps the file as the image's first version.
+`.agents` has a `.gitignore` that ignores everything except each image's `image.json`, `image.py`, and `image.py.lock`.
+An image file that you put in `.image-design` yourself is listed like any other. The tool keeps nothing for it until the first request on it, which keeps the file as the image's first version.
 Move and rename images and folders with these functions. A file manager moves the file but not the name the tool keeps for the image, which `relink_images` then repairs.
 
 ## App
@@ -557,35 +567,41 @@ def app_view() -> str
 The view's HTML, compiled from `app/` and offered as the `ui://image-design/app` resource in the MCP server. Raises `ImageDesignError` naming the build command when the view is not compiled.
 
 ```python
-def app_server(directory: Path | None = None, data_directory: Path | None = None) -> AppServer
+def app_server(workspace: Path | None = None) -> AppServer
 ```
 
 ```python
 class AppServer:
     server: Server
-    directory: Path
-    data_directory: Path
+    workspace: Path | None
 
     def open(self, port: int | None = None) -> App: ...
     def show(self, name: str) -> str: ...
     def close(self) -> None: ...
 ```
 
-- `directory`, `data_directory`: The images the app shows, and where the tool keeps their data. The defaults are the same as for the functions that work on images.
+- `workspace`: The workspace whose images the app shows. When none is given, it is the one opened last that is still a folder, or None until the user picks one in the app. The user can switch it in the app.
 - `port`: The port for the browser page, on `127.0.0.1`. If you do not give a port, the tool selects a free port. If another program uses the port, `open` raises `ImageDesignError`.
 
 `server` is an MCP SDK low-level server to run over any transport; several at once share the state.
-`open` serves the browser host page on `127.0.0.1` from daemon threads and returns once it listens, or returns the one already open. The page reaches the same server at its own `/mcp` and renders the view behind a sandbox proxy on a second port, a separate origin as the MCP Apps spec requires. `close` stops serving. `App.url` is where to open the page. `show` brings an image up in the app: an open app switches to it, and one opened later opens on it.
+`open` serves the browser host page on `127.0.0.1` from daemon threads and returns once it listens, or returns the one already open. It keeps the workspace as the one opened last. The page reaches the same server at its own `/mcp` and renders the view behind a sandbox proxy on a second port, a separate origin as the MCP Apps spec requires. `close` stops serving. `App.url` is where to open the page. `show` brings an image up in the app: an open app switches to it, and one opened later opens on it.
 
-The server has one tool for an agent, `open_app`. It opens the browser page and returns its URL. It also takes `directory` and `data_directory`, and switches the app to them when the directory can be listed, and `name`, an image to bring up as `show` does.
+The server has one tool for an agent, `open_app`. It opens the browser page and returns its URL. It also takes `workspace`, and switches the app to it when it can be listed, and `name`, an image to bring up as `show` does. Its result names the workspace shown, or says the app shows none yet, and gives the `--workspace` to pass to commands when that is not the server's working directory.
 The other tools are for the view. They are listed only to hosts that render MCP Apps, and marked for the app alone. The view and the resource templates are listed to the same hosts.
 
-- `list_images`, `view_image`, `move_image`, `copy_image`, `delete_image`, `create_folder`, `move_folder`, `delete_folder`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's directory.
+A view tool that works in the app's workspace takes `workspace`, the one the view shows. The call works in the workspace shown when it arrives, to its end, so a switch partway through does not move it to another. It is refused with reason `workspace-changed` when it was sent for a workspace the app no longer shows, with `no-workspace` before one is picked, and with `no-such-workspace` once the workspace's folder is gone, which is not made again. `upload_file`, `list_image_methods`, the OpenAI key, settings, and config tools, and the workspace tools work in no workspace and are never refused.
+
+- `read_app_workspaces` returns the workspace shown, the workspaces opened in the app, newest first, each with whether it is still a folder, and `new_in`, where a new one is made by default.
+- `open_app_workspace` switches the app to a workspace, and keeps it as the one opened last. Opening a workspace writes nothing in it.
+- `choose_app_workspace` asks the user for a workspace, or with `parent` for the folder to make one in, in the platform's folder dialog. When the dialog cannot show, its failure names `image-design app --workspace <folder>`.
+- `create_app_workspace` makes a folder `name` in `parent` and switches to it. A name that is taken is refused.
+- `forget_app_workspace` drops a workspace from those offered, and leaves its folder alone.
+- `list_images`, `view_image`, `move_image`, `copy_image`, `delete_image`, `create_folder`, `move_folder`, `delete_folder`, `restore_image_version`, `read_image_activity`, `cancel_image`, and `list_image_methods` call the library function of the same name on the app's workspace.
   - `list_images` first calls `relink_images`, so an image moved outside the app is listed where its file is. It also returns `shown`, the image the app showed last, and `likely`, the images `relink_images` left as likely.
 - `relink_image` relinks one of those images to its likely file.
-- `import_image` brings an upload into the app's directory as a new image, in a `folder` or at the top. `choose_image_files` asks the user for files in the platform's file dialog and imports each. It returns the images, and the reason for each file it refused.
+- `import_image` brings an upload into the app's workspace as a new image, in a `folder` or at the top. `choose_image_files` asks the user for files in the platform's file dialog, and `choose_image_folder` for a folder in its folder dialog. Each brings what was chosen in with `import_images` and returns its `ImageImports`.
 - `show_image` records the image the user is looking at, which the app opens on next time.
-- `generate_openai_image` and `generate_chatgpt_image` start a run on the app's directory with `detach=True` and `origin="app"`, so the image goes on being made when the app closes. They return the image's name and the run's ID once the run has started. They take the prompt, the name, the version to edit, the model and output options, and what guides the request: `references`, `marks`, and for the OpenAI API a `mask`. For the OpenAI API they also take `frame`, `frames`, and `frame_ms`. Each reference is a `path` the app offers or an `upload`, and the mask is an upload. A `path` can have a `frame`, which sends that one frame of an animation as a still image. A started run has copied what it was given, so the uploads it took are cleared, and the result's `references` says where each is offered from now.
+- `generate_openai_image` and `generate_chatgpt_image` start a run on the app's workspace with `detach=True` and `origin="app"`, so the image goes on being made when the app closes. They return the image's name and the run's ID once the run has started. They take the prompt, the name, the version to edit, the model and output options, and what guides the request: `references`, `marks`, and for the OpenAI API a `mask`. For the OpenAI API they also take `frame`, `frames`, and `frame_ms`. Each reference is a `path` the app offers or an `upload`, and the mask is an upload. A `path` can have a `frame`, which sends that one frame of an animation as a still image. A started run has copied what it was given, so the uploads it took are cleared, and the result's `references` says where each is offered from now.
 - `preview_openai_image_request` and `preview_chatgpt_image_request` take the same arguments and return the `ImageRequestPreview`.
 - `draw_svg_image` starts a drawing the same way. It takes the prompt, the name, `references`, `marks`, the budgets, `resume_session`, the agent provider, model, and reasoning effort, and `timeout_seconds`.
 - `steer_svg_image` leaves a message for the agent drawing an image, with `references` and `marks`. The message holds copies of what it was given, so the uploads it took are cleared.
@@ -593,14 +609,14 @@ The other tools are for the view. They are listed only to hosts that render MCP 
 - `list_images` gives each image its agent's last run as `design`, which is None when it has had none.
 - `export_svg_image` asks the user where to save in the platform's save dialog, then renders the drawing, or one of its versions, there at a `scale` of its canvas.
 - `upload_file` takes a file from the view in base64 pieces, under an ID the view makes up: a reference dropped or pasted into the app, an image file dropped on Your images, or the mask painted in it. Uploads wait in `image-design-uploads` in the system's temp folder. One that nothing takes is cleared when the app closes, or by the next app to start a day later.
-- `read_reference_library` returns the references the app offers besides the images in its directory: the pinned files, and what requests sent from the app were given before. A version kept for an image is named after the image and the version.
+- `read_reference_library` returns the references the app offers besides the images in its workspace: the pinned files, and what requests sent from the app were given before. A version kept for an image is named after the image and the version.
 - `list_reference_folder` returns a page of the images in a folder pinned to show its files and in the folders inside it, each with the folder it is in. Hidden files and folders, and links to folders, are left out. A page ends at 500 images or after 1,000 folders, so even a whole drive answers quickly. Pass its `after` to get the next page.
 - `choose_reference_files` and `choose_reference_folder` ask the user in the platform's own file dialog, which needs Tk in the Python that runs the app.
 - `keep_reference` copies an upload into `app/pins` in the data directory, so a dropped image can be pinned. The copy is cleared once the state is saved without it among the pins.
 - `read_openai_key`, `enter_openai_key`, and `clear_openai_key` are over `openai_api_key_status`, `save_openai_api_key`, and `clear_openai_api_key`. None takes or returns the key. `enter_openai_key` has the user type it into a window on the machine the server runs on, so the key is in no message between the view, its host, and the server.
 - `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, whether a request's advanced options show, and the pane sizes.
 - `read_config` and `update_config` are over the library's, for the order the image's agent picks an image model in.
-- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, whether a new image is a still image or an animation, the agent and budgets for a new drawing, the image's agent and its image model, the pinned references and folders, and the images open in tabs, each with whether it is a preview that the next image opened takes.
+- `read_app_state` and `save_app_state` keep what was last picked for the images in the app's workspace, such as the image model and its output options, whether a new image is a still image or an animation, the agent and budgets for a new drawing, the image's agent and its image model, the pinned references and folders, and the images open in tabs, each with whether it is a preview that the next image opened takes.
 
 The view reads images as resources, each as base64. A read is refused unless the listing has that image or version, the version has that frame, or the image's activity has that preview.
 
@@ -610,13 +626,14 @@ The view reads images as resources, each as base64. A read is refused unless the
 - `image-design://frames/{version}/{index}/{+name}` is one frame of a version as a PNG, by its index from 0. Use `file` as the version for the image's file.
 - `image-design://frame-thumbnails/{version}/{index}/{+name}` is a WebP of one frame that fits 256 by 256 pixels.
 - `image-design://previews/{run}/{index}/{+name}` is an in-progress image of a run. `run` is the run's ID, and `index` is the one its `preview` event has.
-- `image-design://references/{+path}` is a WebP that fits 256 by 256 pixels of an image the app offers as a reference, by its path on the machine. It is refused unless the file is an image in the app's directory, pinned, anywhere inside a folder pinned to show its files, used before, chosen in the file dialog, or kept in the data directory as a version or as a copy of what a run was given. A request's references are held to the same rule.
+- `image-design://references/{+path}` is a WebP that fits 256 by 256 pixels of an image the app offers as a reference, by its path on the machine. It is refused unless the file is an image in the app's workspace, pinned, anywhere inside a folder pinned to show its files, used before, chosen in the file dialog, or kept in the data directory as a version or as a copy of what a run was given. A request's references are held to the same rule.
 - `image-design://reference-files/{+path}` is the same reference as a request sends it, so the view can show it large: a PNG, JPEG, or WebP as it is, and any other image as a PNG. It is held to the same rule.
 
 The app keeps what it remembers in these files:
 
-- `app-settings.json` is the same for every directory. It is in `image-design` in the user's config folder: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, and `$XDG_CONFIG_HOME` or `~/.config` on Linux.
-- `app/app.json` is in the data directory, so each directory has its own. The data directory's `.gitignore` ignores the `app` folder.
+- `app-settings.json` is the same for every workspace. It is in `image-design` in the user's config folder: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, and `$XDG_CONFIG_HOME` or `~/.config` on Linux.
+- `app-workspaces.json` is beside it, with the workspaces opened in the app, newest first, at most 20. Every app reads it, so each offers the workspaces the others opened.
+- `app/app.json` is in the data directory, so each workspace has its own. The data directory's `.gitignore` ignores the `app` folder.
 - `app/used.json` lists the references that requests sent from the app were given, newest first.
 
 ## MCP server
@@ -624,10 +641,10 @@ The app keeps what it remembers in these files:
 The app's MCP server over stdio, a thin surface over the library like the CLI, in `image_design.adapters.mcp`.
 
 ```python
-def run_stdio(directory: Path | None = None, data_directory: Path | None = None) -> None
+def run_stdio(workspace: Path | None = None) -> None
 ```
 
-It runs `app_server(directory, data_directory).server` over stdio until the client disconnects, then stops the browser page if `open_app` opened it.
+It runs `app_server(workspace).server` over stdio until the client disconnects, then stops the browser page if `open_app` opened it. When `workspace` is omitted, it is the working directory, which is the session's own project.
 
 ## Manifest
 

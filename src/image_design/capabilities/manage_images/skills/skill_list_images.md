@@ -1,9 +1,10 @@
-`list-images` lists every image in the directory, in name order. An image file you put in the directory yourself is
-listed too, with no versions until the tool changes it. Folders are listed as well, in `--json` as `folders`.
+`list-images` lists every image in a workspace's `.image-design`, in name order. An image file you put there yourself
+is listed too, with no versions until the tool changes it. Folders are listed as well, in `--json` as `folders`. A
+workspace with no `.image-design` yet lists as empty.
 
 ```bash
 image-design list-images
-image-design list-images --json
+image-design list-images --workspace ~/projects/garden --json
 ```
 
 ```python
@@ -14,8 +15,8 @@ listing = list_images()
 
 ## Arguments
 
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--json` (library: the `ImageListing` returned): the listing as JSON instead of text, with every version of every
   image, its last run, and every folder.
 

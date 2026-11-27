@@ -5,7 +5,7 @@ description: >-
   `image_design.lib`. Triggers on "image-design".
 license: MIT
 metadata:
-  version: "0.3.1"
+  version: "0.4.0"
 ---
 
 # Using image-design

@@ -27,10 +27,9 @@ sent second, so with marks the references start at image 3.
 ## Arguments
 
 - `PROMPT`: What to make, or what to change. It is passed to the image tool as written.
-- `--name`: The image's path in the directory, ending in `.png`.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory. Pass the same one
-  every time.
+- `--name`: The image's path in `.image-design`, ending in `.png`.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--reference`: Another image to send with the prompt, such as for a style or a subject. Repeatable. Any image
   format, or an SVG; one other than PNG, JPEG, or WebP is sent as a PNG at its own size. A request sends at most 5
   images, counting the image being edited and its marked copy.

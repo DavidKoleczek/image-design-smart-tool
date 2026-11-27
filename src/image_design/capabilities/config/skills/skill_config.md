@@ -1,5 +1,5 @@
 `config` shows your defaults for the tool, or changes those given and leaves the rest as they are. They are the same
-in every directory, kept in `config.json` in `image-design` in your config folder, and the app's Settings change them
+in every workspace, kept in `config.json` in `image-design` in your config folder, and the app's Settings change them
 too.
 
 - `design_image_models`: the image models `design-image` picks from, in order, when it is given no `--image-model`.

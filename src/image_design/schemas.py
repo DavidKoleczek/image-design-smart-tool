@@ -132,6 +132,8 @@ class IntelligenceModels(BaseModel):
 
 # region: Images
 
+# The folder in a workspace, the top-level directory of the user's project, that holds the images and the tool's data.
+IMAGES_FOLDER = ".image-design"
 ImageFormat = Literal["png", "jpeg", "webp", "gif"]
 # The extensions a raster image's name can end in, and the format each is saved in.
 IMAGE_FORMATS: dict[str, ImageFormat] = {".png": "png", ".jpg": "jpeg", ".webp": "webp", ".gif": "gif"}
@@ -354,10 +356,11 @@ class ImageSummary(BaseModel):
 
 
 class ImageListing(BaseModel):
-    """Every image in a directory, in name order, and its folders."""
+    """Every image in a workspace, in name order, and its folders."""
 
-    directory: Path
-    data_directory: Path
+    workspace: Path = Field(description="The top-level directory of the user's project")
+    directory: Path = Field(description=f"Where its images are kept: its {IMAGES_FOLDER}")
+    data_directory: Path = Field(description="Where the tool keeps their versions and runs")
     images: list[ImageSummary]
     folders: list[str] = Field(
         description="Every folder in the directory, by its path with forward slashes, whether or not it holds an image"
@@ -365,6 +368,25 @@ class ImageListing(BaseModel):
     unreadable: list[str] = Field(
         default_factory=list, description="Why each image whose data cannot be read was left out"
     )
+
+
+class ImageRefusal(BaseModel):
+    """A file or folder that could not be brought in, and why."""
+
+    name: str = Field(description="Its name, and for one inside a folder brought in, its path from that folder")
+    reason: str | None = Field(description="A stable name for the failure, as `ImageDesignError.reason` has it")
+    message: str = Field(description="What went wrong and how to fix it")
+
+
+class ImageImports(BaseModel):
+    """What `import_images` brought in, and what it could not."""
+
+    images: list[ImageSummary] = Field(description="The new images, in the order they came in")
+    folders: list[str] = Field(
+        description="The folders made for the folders brought in and those in them, by their paths with forward "
+        "slashes, numbered where the name was taken"
+    )
+    refused: list[ImageRefusal]
 
 
 class ImageMove(BaseModel):
@@ -804,7 +826,7 @@ class AppLayout(BaseModel):
 
 
 class AppSettings(BaseModel):
-    """app-settings.json in the user's config directory: how the person set up the app, the same in every directory."""
+    """app-settings.json in the user's config directory: how the person set up the app, the same in every workspace."""
 
     theme: ThemePreference = Field(default="system", description="`system` follows the host's theme")
     images_view: ImagesView = Field(
@@ -971,6 +993,30 @@ class AppImages(ImageListing):
     likely: list[ImageMove] = Field(
         default_factory=list,
         description="The images with no file that `relink_image` can point at the file that may be theirs",
+    )
+
+
+class OpenedWorkspaces(BaseModel):
+    """app-workspaces.json in the user's config directory: the workspaces opened in the app, for any app to offer."""
+
+    workspaces: list[Path] = Field(default_factory=list, description="Newest first, each once, at most 20")
+
+
+class RecentWorkspace(BaseModel):
+    """A workspace opened in the app before."""
+
+    path: Path = Field(description="Absolute")
+    missing: bool = Field(description="Whether it is no longer a folder on this machine")
+
+
+class AppWorkspaces(BaseModel):
+    """The workspace the app shows, and the ones it can switch to."""
+
+    current: Path | None = Field(description="None before one is picked, or once its folder is gone")
+    recent: list[RecentWorkspace] = Field(description="Those opened in the app, newest first")
+    new_in: Path = Field(
+        description="Where a new workspace is made unless another folder is picked: beside the one shown, else the "
+        "one opened last, else the home folder"
     )
 
 

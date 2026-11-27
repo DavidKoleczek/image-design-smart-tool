@@ -7,24 +7,30 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Kbd } from "@/components/ui/kbd";
 import { LoadingMark } from "@/components/ui/loading-mark";
-import { MenuItem, MenuSeparator } from "@/components/ui/menu";
+import {
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "@/components/ui/menu";
 import { Notice } from "@/components/ui/notice";
 import { Thumb } from "@/components/ui/thumb";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
-  chooseImageFiles,
   relinkImage,
   restoreImageVersion,
   showInFileManager,
   type ImageListing,
   type ImageSummary,
 } from "@/lib/api";
-import { AppError, describe } from "@/lib/errors";
+import { describe } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
 import { fileManager, pathIn, shortDirectory, useArriving } from "@/lib/images";
 import type { Change } from "@/lib/operations";
 import {
   bringIn,
+  bringInChosen,
   broughtName,
   copy,
   dismissFailures,
@@ -33,6 +39,7 @@ import {
   reportFailure,
   useFailures,
   usePreview,
+  type Chosen,
 } from "@/lib/organize";
 import { baseName, folderOf, topmost, within } from "@/lib/paths";
 import { filePicture } from "@/lib/pictures";
@@ -152,7 +159,7 @@ function refused(change: Change): string {
 }
 
 /**
- * The pane on the left: the images and folders of the app's directory as a file manager shows them, over the
+ * The pane on the left: the images and folders of the app's workspace as a file manager shows them, over the
  * directory they are kept in.
  */
 export function ImagesPane({
@@ -162,6 +169,7 @@ export function ImagesPane({
   search,
   hereRef,
   onNew,
+  newFolder,
   onSelect,
   onOpenTab,
   onRemove,
@@ -179,6 +187,8 @@ export function ImagesPane({
   hereRef: RefObject<string | null>;
   /** Start a new image in the folder, or by default where a new image goes. */
   onNew: (folder?: string) => void;
+  /** Where a new image goes by default, which is where Add brings images in. */
+  newFolder: () => string;
   onSelect: (name: string) => void;
   /** Delete was asked for, of these images and folders, none of them inside another. */
   onRemove: (entries: Entry[]) => void;
@@ -265,21 +275,14 @@ export function ImagesPane({
     }
   }, [creating]);
 
-  /** Ask for image files in the machine's own file dialog, and bring them into the folder. */
-  const addImages = (folder: string) =>
-    void chooseImageFiles(folder || null)
-      .then(
-        ({ refused: left }) => {
-          for (const each of left) {
-            reportFailure(
-              `${each.name} was not added.`,
-              describe(new AppError(each.message, each.reason)),
-            );
-          }
-        },
-        (cause: unknown) =>
-          reportFailure("No images were added.", describe(cause)),
-      )
+  /** Ask for image files, or a folder of them, in the machine's own dialog, and bring them into the folder. */
+  const add = (chosen: Chosen, folder: string) =>
+    void bringInChosen(chosen, folder)
+      .then((left) => {
+        for (const { what, why } of left) {
+          reportFailure(what, why);
+        }
+      })
       .then(onChanged);
 
   /** Ask the server for something about an image by its name, and say so when it could not be done. */
@@ -323,9 +326,13 @@ export function ImagesPane({
   );
   const adding = (path: string) => (
     <>
-      <MenuItem onClick={() => addImages(path)}>
+      <MenuItem onClick={() => add("images", path)}>
         <Icon name="import" />
         Add images
+      </MenuItem>
+      <MenuItem onClick={() => add("folder", path)}>
+        <Icon name="folder" />
+        Add a folder
       </MenuItem>
       <MenuItem
         disabled={!explorer.pastes}
@@ -591,6 +598,25 @@ export function ImagesPane({
             <span className="hidden @3xs:inline">New image</span>
           </Button>
         </Tooltip>
+        <Menu>
+          <Tooltip content="Add">
+            <MenuTrigger
+              render={<Button variant="secondary" icon aria-label="Add" />}
+            >
+              <Icon name="import" />
+            </MenuTrigger>
+          </Tooltip>
+          <MenuContent>
+            <MenuItem onClick={() => add("images", newFolder())}>
+              <Icon name="image" />
+              Images
+            </MenuItem>
+            <MenuItem onClick={() => add("folder", newFolder())}>
+              <Icon name="folder" />
+              Folder
+            </MenuItem>
+          </MenuContent>
+        </Menu>
         <label className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-sm border border-line-control bg-field pr-1.5 pl-2 transition-[background-color,border-color] focus-within:border-ink focus-within:bg-panel">
           <Icon name="search" className="text-ink-muted" />
           <input

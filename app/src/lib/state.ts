@@ -26,17 +26,17 @@ const store = keep<AppState>({
   save: saveAppState,
   what: "what you picked here",
 });
-let followed: string | null = null;
-let following: Promise<void> = Promise.resolve();
-
-/** Read what the person last picked for the images in the app's directory, before the view first paints. */
+/** Read what the person last picked for the images in the app's workspace, before its tabs open. */
 export const loadAppState = store.load;
 
-/** Change what is picked at once, and save it for the app's directory once the person stops changing it. */
+/** Change what is picked at once, and save it for the app's workspace once the person stops changing it. */
 export const updateAppState = store.update;
 
 /** Save a change still waiting, and wait until the server has it. */
 export const flushAppState = store.flush;
+
+/** Forget what is picked, for a workspace shown next, which reads its own; a change still waiting is dropped. */
+export const forgetAppState = store.forget;
 
 // A folder stays open or closed, and a pin stays on its file, under the name each has now. The server moves the
 // pins it keeps as well, and these are the view's own copy, which the next save would put back as they were.
@@ -59,19 +59,6 @@ onRenamed((from, to) => {
 /** What is picked now, for an effect that changes it only when it differs. */
 export function appStateNow(): AppState {
   return store.snapshot().value;
-}
-
-/** Read it again once the app shows another directory, whose picks are its own. Resolves once they are read. */
-export function followDirectory(dataDirectory: string | null): Promise<void> {
-  if (dataDirectory === null || dataDirectory === followed) {
-    return following;
-  }
-  const switched = followed !== null;
-  followed = dataDirectory;
-  if (switched) {
-    following = store.moved();
-  }
-  return following;
 }
 
 export function useAppState(): { state: AppState; error: string | null } {

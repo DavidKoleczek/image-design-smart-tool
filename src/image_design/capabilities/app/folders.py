@@ -97,16 +97,22 @@ def ask_secret(title: str, label: str) -> str | None:
     return value or None
 
 
-def choose_files(directory: Path, title: str) -> list[Path]:
-    """Ask the person for files in their platform's file dialog, opened at `directory`; none when they cancel."""
+def choose_files(directory: Path, title: str, instead: str) -> list[Path]:
+    """Ask the person for files in their platform's file dialog, opened at `directory`; none when they cancel.
+
+    `instead` says what to do when the dialog cannot show.
+    """
     if not directory.is_dir():
         raise ImageDesignError(f"{directory} is not a folder on this machine. Unpin it and pin the folder again.")
-    return _ask(directory, title, "files")
+    return _ask(directory, title, "files", instead)
 
 
-def choose_folder(directory: Path, title: str) -> Path | None:
-    """Ask the person for a folder in their platform's folder dialog, opened at `directory`; None when they cancel."""
-    chosen = _ask(directory, title, "folder")
+def choose_folder(directory: Path, title: str, instead: str) -> Path | None:
+    """Ask the person for a folder in their platform's folder dialog, opened at `directory`; None when they cancel.
+
+    `instead` says what to do when the dialog cannot show.
+    """
+    chosen = _ask(directory, title, "folder", instead)
     return chosen[0] if chosen else None
 
 
@@ -134,8 +140,8 @@ def show_in_file_manager(path: Path) -> None:
         raise ImageDesignError(f"Could not open the file manager: {error}. Open {path} in it yourself.") from None
 
 
-def _ask(directory: Path, title: str, kind: str) -> list[Path]:
-    answer = _run(CHOOSE_SCRIPT, [str(directory), title, kind, ""], "drop or paste the images onto the app instead")
+def _ask(directory: Path, title: str, kind: str, instead: str) -> list[Path]:
+    answer = _run(CHOOSE_SCRIPT, [str(directory), title, kind, ""], instead)
     return [Path(path) for path in json.loads(answer or "[]")]
 
 

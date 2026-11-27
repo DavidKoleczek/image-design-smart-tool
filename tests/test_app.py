@@ -5,6 +5,8 @@ from io import BytesIO
 import os
 from pathlib import Path
 import re
+import sys
+import threading
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -18,6 +20,7 @@ from mcp import Client, MCPError
 from mcp.types import BlobResourceContents, TextContent, TextResourceContents
 from PIL import Image
 import pytest
+from typer.testing import CliRunner
 
 from image_design import lib
 from image_design.capabilities.app import library as library_module
@@ -25,6 +28,7 @@ from image_design.capabilities.app import server as server_module
 from image_design.capabilities.app import uploads
 from image_design.capabilities.app.tools import VIEW_URI
 from image_design.capabilities.openai_image import generate
+from image_design.cli import app as cli_app
 from image_design.schemas import (
     AppImageRequest,
     AppImages,
@@ -32,9 +36,11 @@ from image_design.schemas import (
     AppSettings,
     AppState,
     AppTab,
+    AppWorkspaces,
     ImageActivity,
     ImageDesignConfig,
     ImageDesignError,
+    ImageImports,
     ImageListing,
     ImageMethods,
     ImageMove,
@@ -42,6 +48,7 @@ from image_design.schemas import (
     ImageSummary,
     ImageView,
     PaneLayout,
+    RecentWorkspace,
     ReferenceEntry,
     ReferenceLibrary,
     UsedReference,
@@ -56,8 +63,9 @@ DETACHED_TIMEOUT_SECONDS = 30
 def open_app() -> Iterator[Callable[..., lib.AppServer]]:
     opened: list[lib.AppServer] = []
 
-    def open_with(directory: Path | None = None, data_directory: Path | None = None) -> lib.AppServer:
-        app_server = lib.app_server(directory, data_directory)
+    def open_with(workspace: Path | None = None) -> lib.AppServer:
+        # The working directory when none is given, as `mcp` shows, which a test that makes images makes its own.
+        app_server = lib.app_server(workspace or Path.cwd())
         app_server.open()
         opened.append(app_server)
         return app_server
@@ -162,48 +170,50 @@ def test_a_held_port_is_a_named_failure_until_close_frees_it() -> None:
     second.close()
 
 
-async def test_the_view_lists_the_images_of_the_app_s_directory_until_open_app_names_another(
+async def test_the_view_lists_the_images_of_the_app_s_workspace_until_open_app_names_another(
     open_app: Callable[..., lib.AppServer], tmp_path: Path
 ) -> None:
-    (tmp_path / "first").mkdir()
-    (tmp_path / "first" / "photo.png").write_bytes(picture(800, 600, "#336699"))
+    (tmp_path / "first" / ".image-design").mkdir(parents=True)
+    (tmp_path / "first" / ".image-design" / "photo.png").write_bytes(picture(800, 600, "#336699"))
+    (tmp_path / "second").mkdir()
     (tmp_path / "file").write_text("", encoding="utf-8")
-    app_server = open_app(directory=tmp_path / "first")
+    app_server = open_app(tmp_path / "first")
 
     async with Client(f"{app_server.open().url}/mcp") as client:
         started = await client.call_tool("list_images", {})
-        opened = await client.call_tool("open_app", {"directory": str(tmp_path / "second")})
+        opened = await client.call_tool("open_app", {"workspace": str(tmp_path / "second")})
         switched = await client.call_tool("list_images", {})
-        refused = await client.call_tool("open_app", {"directory": str(tmp_path / "file")})
+        refused = await client.call_tool("open_app", {"workspace": str(tmp_path / "file")})
         kept = await client.call_tool("list_images", {})
-        await client.call_tool("open_app", {"data_directory": str(tmp_path / "data")})
-        elsewhere = await client.call_tool("list_images", {})
         unknown = await client.call_tool("draw", {})
 
     first = ImageListing.model_validate(started.structured_content)
     second = ImageListing.model_validate(switched.structured_content)
-    assert (first.directory, first.data_directory) == (tmp_path / "first", tmp_path / "first" / ".agents")
-    assert [(image.name, image.width, image.height) for image in first.images] == [("photo.png", 800, 600)]
-    assert f"It shows the images in {tmp_path / 'second'}." in text_of(opened)
-    assert (second.directory, second.data_directory, second.images) == (
-        tmp_path / "second",
-        tmp_path / "second" / ".agents",
-        [],
+    assert (first.workspace, first.directory, first.data_directory) == (
+        tmp_path / "first",
+        tmp_path / "first" / ".image-design",
+        tmp_path / "first" / ".image-design" / ".agents",
     )
-    assert refused.is_error
-    assert "is a file, not a directory of images" in text_of(refused)
+    assert [(image.name, image.width, image.height) for image in first.images] == [("photo.png", 800, 600)]
+    assert f"It shows the images in the workspace {tmp_path / 'second'}." in text_of(opened)
+    assert f'Pass `--workspace "{tmp_path / "second"}"`' in text_of(opened)
+    assert (second.workspace, second.images) == (tmp_path / "second", [])
+    assert not (tmp_path / "second" / ".image-design").exists()
+    assert refused.structured_content == {"reason": "no-such-workspace", "image": None}
+    assert "is not a folder, so it cannot be the workspace" in text_of(refused)
     assert ImageListing.model_validate(kept.structured_content) == second
-    assert ImageListing.model_validate(elsewhere.structured_content).data_directory == tmp_path / "data"
-    assert app_server.directory == tmp_path / "second"
+    assert app_server.workspace == tmp_path / "second"
     assert unknown.structured_content == {"reason": "no-such-tool", "image": None}
     assert "The tools are: open_app, list_images, " in text_of(unknown)
 
 
-async def test_the_view_keeps_the_person_s_settings_in_their_config_directory_for_every_directory(
+async def test_the_view_keeps_the_person_s_settings_in_their_config_directory_for_every_workspace(
     open_app: Callable[..., lib.AppServer], tmp_path: Path, config_directory: Path
 ) -> None:
-    logos = open_app(directory=tmp_path / "logos")
-    photos = open_app(directory=tmp_path / "photos")
+    (tmp_path / "logos").mkdir()
+    (tmp_path / "photos").mkdir()
+    logos = open_app(tmp_path / "logos")
+    photos = open_app(tmp_path / "photos")
     settings = AppSettings(theme="dark", wide=AppLayout(images=PaneLayout(open=False), request=PaneLayout(size=420)))
     kept = config_directory / "image-design" / "app-settings.json"
 
@@ -229,7 +239,7 @@ async def test_the_view_keeps_the_person_s_settings_in_their_config_directory_fo
 async def test_the_view_changes_the_order_the_agent_picks_an_image_model_in(
     open_app: Callable[..., lib.AppServer], tmp_path: Path
 ) -> None:
-    app_server = open_app(directory=tmp_path)
+    app_server = open_app(tmp_path)
 
     async with Client(f"{app_server.open().url}/mcp") as client:
         before = await client.call_tool("read_config", {})
@@ -245,31 +255,35 @@ async def test_the_view_changes_the_order_the_agent_picks_an_image_model_in(
     assert not list(tmp_path.rglob("app-settings.json"))
 
 
-async def test_what_was_picked_in_the_app_is_kept_with_each_directory_s_data(
+async def test_what_was_picked_in_the_app_is_kept_with_each_workspace_s_data(
     open_app: Callable[..., lib.AppServer], tmp_path: Path, config_directory: Path
 ) -> None:
-    app_server = open_app(directory=tmp_path / "logos")
-    kept = tmp_path / "logos" / ".agents" / "app" / "app.json"
+    (tmp_path / "logos").mkdir()
+    (tmp_path / "photos").mkdir()
+    app_server = open_app(tmp_path / "logos")
+    data = tmp_path / "logos" / ".image-design" / ".agents"
 
     async with Client(f"{app_server.open().url}/mcp") as client:
         before = await client.call_tool("read_app_state", {})
-        read_only = not (tmp_path / "logos").exists()
+        read_only = not (tmp_path / "logos" / ".image-design").exists()
         saved = await client.call_tool("save_app_state", {"state": {"method": "svg"}})
         picked = AppImageRequest(model="chatgpt", size=(1536, 1024), format=".webp", reasoning_effort="high")
         request = await client.call_tool("save_app_state", {"state": {"request": picked.model_dump(mode="json")}})
         await client.call_tool("save_app_state", {"state": {"method": "svg"}})
         bad = await client.call_tool("save_app_state", {"state": {"method": "paint"}})
-        await client.call_tool("open_app", {"directory": str(tmp_path / "photos")})
+        await client.call_tool("open_app", {"workspace": str(tmp_path / "photos")})
         elsewhere = await client.call_tool("read_app_state", {})
-        await client.call_tool("open_app", {"directory": str(tmp_path / "logos")})
+        await client.call_tool("open_app", {"workspace": str(tmp_path / "logos")})
         back = await client.call_tool("read_app_state", {})
 
     assert (AppState.model_validate(before.structured_content), read_only) == (AppState(), True)
     assert AppState.model_validate(saved.structured_content) == AppState(method="svg")
     assert AppState.model_validate(request.structured_content) == AppState(request=picked)
-    assert AppState.model_validate_json(kept.read_text(encoding="utf-8")) == AppState(method="svg")
+    assert AppState.model_validate_json((data / "app" / "app.json").read_text(encoding="utf-8")) == AppState(
+        method="svg"
+    )
     # The data directory's .gitignore comes with it, so what the app keeps there stays out of a project's commits.
-    assert (tmp_path / "logos" / ".agents" / ".gitignore").is_file()
+    assert (data / ".gitignore").is_file()
     assert bad.structured_content == {"reason": "bad-state", "image": None}
     assert "The app state method is not valid" in text_of(bad)
     assert AppState.model_validate(elsewhere.structured_content) == AppState()
@@ -356,7 +370,7 @@ async def test_the_view_files_images_in_folders_copies_and_imports_them_and_foll
     text.write_text("Not an image.", encoding="utf-8")
     library_module.remember_used(root / ".agents", [UsedReference(name="cactus.png", path=root / "cactus.png")])
     app_server = open_app()
-    monkeypatch.setattr(app_server, "_choose_files", lambda directory, title: [outside, text])
+    monkeypatch.setattr(app_server, "_choose_files", lambda directory, title, instead: [outside, text])
 
     async with Client(f"{app_server.open().url}/mcp") as client:
         folder = await client.call_tool("create_folder", {"name": "plants"})
@@ -432,15 +446,15 @@ async def test_the_view_files_images_in_folders_copies_and_imports_them_and_foll
     )
 
 
-async def test_the_view_shows_an_image_a_folder_or_the_directory_in_the_file_manager_and_nothing_outside_it(
+async def test_the_view_shows_an_image_a_folder_or_the_image_directory_in_the_file_manager_and_nothing_outside_it(
     open_app: Callable[..., lib.AppServer], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    root = tmp_path / "images"
+    root = tmp_path / ".image-design"
     (root / "plants").mkdir(parents=True)
     (root / "plants" / "fern.png").write_bytes(picture(64, 64, "#008000"))
     (tmp_path / "elsewhere.png").write_bytes(picture(64, 64, "#00ff00"))
     shown: list[Path] = []
-    app_server = open_app(root)
+    app_server = open_app(tmp_path)
     monkeypatch.setattr(app_server, "_show_in_file_manager", shown.append)
 
     async with Client(f"{app_server.open().url}/mcp") as client:
@@ -669,8 +683,8 @@ async def test_the_view_guides_a_request_with_uploads_marks_and_the_references_t
     chosen = tmp_path / "chosen.png"
     chosen.write_bytes(picture(32, 32, "#0000ff"))
     app_server = open_app()
-    monkeypatch.setattr(app_server, "_choose_files", lambda directory, title: [chosen])
-    monkeypatch.setattr(app_server, "_choose_folder", lambda directory, title: folder)
+    monkeypatch.setattr(app_server, "_choose_files", lambda directory, title, instead: [chosen])
+    monkeypatch.setattr(app_server, "_choose_folder", lambda directory, title, instead: folder)
     dropped = picture(800, 600, "#123456")
     mask = Image.new("RGBA", (1024, 1024), (0, 0, 0, 255))
     mask.paste((0, 0, 0, 0), (100, 100, 400, 400))
@@ -734,7 +748,7 @@ async def test_the_view_guides_a_request_with_uploads_marks_and_the_references_t
     assert [each.structured_content for each in bad] == [{"reason": "bad-upload", "image": None}] * 3
     assert picked_folder.structured_content == {"path": str(folder)}
     assert (kept.name, kept.width, kept.height, kept_content) == ("dropped.png", 800, 600, dropped)
-    assert kept.path.is_relative_to(app_server.data_directory / "app" / "pins")
+    assert kept.path.is_relative_to(Path.cwd() / ".image-design" / ".agents" / "app" / "pins")
     assert in_folder.structured_content == {
         "entries": [
             {"name": "palette.png", "path": str(folder / "palette.png"), "width": 640, "height": 480, "folder": ""},
@@ -848,7 +862,7 @@ async def test_the_view_has_the_key_typed_on_the_machine_and_never_sees_it(
     tmp_path: Path,
 ) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    app_server = open_app(tmp_path / "images")
+    app_server = open_app(tmp_path)
     answers: list[str | None] = [None, "sk-test-typed"]
     monkeypatch.setattr(app_server, "_ask_secret", lambda title, label: answers.pop(0))
 
@@ -878,7 +892,7 @@ async def test_the_view_draws_steers_and_exports_a_drawing_and_reads_what_its_ru
     agent = fake_agent(monkeypatch)
     agent.behavior = steered_to("#457b9d")
     monkeypatch.setattr(uploads, "UPLOADS", tmp_path / "uploads")
-    app_server = open_app(tmp_path / "images")
+    app_server = open_app(tmp_path)
 
     # In this process with the agent faked; a run in a process of its own is the detached tests'.
     async def draw_here(detach: bool, **arguments: Any) -> lib.ImageRun:
@@ -1047,7 +1061,7 @@ async def test_the_view_starts_a_run_in_a_process_of_its_own_reads_its_previews_
     assert busy.is_error
     # The run copied the upload into its own folder, which is where it is offered from once the upload is cleared.
     assert [(entry.name, entry.path.read_bytes()) for entry in library.used] == [("palette.png", palette)]
-    assert library.used[0].path.is_relative_to(app_server.data_directory)
+    assert library.used[0].path.is_relative_to(Path.cwd() / ".image-design" / ".agents")
     assert (guided.structured_content or {})["references"] == [str(library.used[0].path)]
     assert not (uploads.UPLOADS / ("d" * 32)).exists()
     assert isinstance(used, BlobResourceContents)
@@ -1056,3 +1070,418 @@ async def test_the_view_starts_a_run_in_a_process_of_its_own_reads_its_previews_
     assert not stopping.is_error
     assert (stopped.status, stopped.current, len(stopped.versions)) == ("cancelled", "v1", 1)
     assert images_api.requests == []
+
+
+def image_in(workspace: Path, name: str) -> Path:
+    """An image file in the workspace's .image-design, which the tool keeps nothing for yet."""
+    path = workspace / ".image-design" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(picture(64, 48, "#336699"))
+    return path
+
+
+async def ended(client: Client, name: str) -> ImageSummary:
+    """The image named `name` once a run on it has ended, as the app lists it."""
+    while True:
+        image = next((each for each in (await listed(client)).images if each.name == name), None)
+        if image is not None and image.status not in (None, "running"):
+            return image
+        await asyncio.sleep(0.05)
+
+
+async def test_with_no_workspace_given_the_app_opens_on_the_last_one_opened_that_is_still_a_folder_or_on_none(
+    open_app: Callable[..., lib.AppServer], tmp_path: Path
+) -> None:
+    first, second, unopened = tmp_path / "first", tmp_path / "second", tmp_path / "unopened"
+    for workspace in (first, second, unopened):
+        workspace.mkdir()
+    before = lib.app_server().workspace
+    open_app(first)
+    open_app(second)
+    # Served, but never opened, so not kept.
+    lib.app_server(unopened)
+    last = lib.app_server().workspace
+    second.rmdir()
+    earlier = lib.app_server().workspace
+    first.rmdir()
+    app_server = lib.app_server()
+    try:
+        async with Client(f"{app_server.open().url}/mcp") as client:
+            workspaces = await client.call_tool("read_app_workspaces", {})
+            refused = [
+                await client.call_tool("list_images", {}),
+                await client.call_tool("read_app_state", {}),
+                await client.call_tool("show_in_file_manager", {}),
+                await client.call_tool("open_app", {"name": "logo.png"}),
+            ]
+            settings = await client.call_tool("read_app_settings", {})
+            config = await client.call_tool("read_config", {})
+            opened = await client.call_tool("open_app", {})
+    finally:
+        app_server.close()
+
+    assert (before, last, earlier, app_server.workspace) == (None, second, first, None)
+    assert AppWorkspaces.model_validate(workspaces.structured_content) == AppWorkspaces(
+        current=None,
+        recent=[RecentWorkspace(path=second, missing=True), RecentWorkspace(path=first, missing=True)],
+        new_in=tmp_path,
+    )
+    for result in refused:
+        assert result.structured_content == {"reason": "no-workspace", "image": None}
+    assert "The app shows no workspace yet." in text_of(refused[0])
+    assert (settings.is_error, config.is_error) == (False, False)
+    assert "It shows no workspace yet" in text_of(opened)
+
+
+async def test_the_view_switches_workspaces_showing_each_one_s_images_image_shown_tabs_and_pins(
+    open_app: Callable[..., lib.AppServer], tmp_path: Path
+) -> None:
+    garden, harbor, empty = tmp_path / "garden", tmp_path / "harbor", tmp_path / "empty"
+    pin = image_in(garden, "cactus.png")
+    image_in(harbor, "boat.png")
+    image_in(harbor, "gull.png")
+    empty.mkdir()
+    (tmp_path / "notes.txt").write_text("", encoding="utf-8")
+    app_server = open_app(garden)
+
+    async def state_and_library(client: Client) -> tuple[AppState, ReferenceLibrary]:
+        state = AppState.model_validate((await client.call_tool("read_app_state", {})).structured_content)
+        library = (await client.call_tool("read_reference_library", {})).structured_content
+        return state, ReferenceLibrary.model_validate(library)
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        await client.call_tool("show_image", {"name": "cactus.png"})
+        await client.call_tool("save_app_state", {"state": {"tabs": [{"name": "cactus.png"}], "pins": [str(pin)]}})
+        switched = await client.call_tool("open_app_workspace", {"path": str(harbor / ".image-design")})
+        await client.call_tool("show_image", {"name": "gull.png"})
+        there = await listed(client)
+        there_state, there_library = await state_and_library(client)
+        refused = await client.call_tool("open_app_workspace", {"path": str(tmp_path / "notes.txt")})
+        kept = await listed(client)
+        await client.call_tool("open_app_workspace", {"path": str(empty)})
+        await client.call_tool("open_app_workspace", {"path": str(garden)})
+        back = await listed(client)
+        back_state, back_library = await state_and_library(client)
+
+    assert AppWorkspaces.model_validate(switched.structured_content).current == harbor
+    assert ([image.name for image in there.images], there.shown) == (["boat.png", "gull.png"], "gull.png")
+    assert (there_state.tabs, there_library.pinned) == ([], [])
+    assert refused.structured_content == {"reason": "no-such-workspace", "image": None}
+    assert kept.workspace == harbor
+    assert ([image.name for image in back.images], back.shown) == (["cactus.png"], "cactus.png")
+    assert [tab.name for tab in back_state.tabs] == ["cactus.png"]
+    assert [entry.path for entry in back_library.pinned] == [pin]
+    assert list(empty.iterdir()) == []
+
+
+async def test_the_workspaces_opened_are_offered_newest_first_each_once_at_most_20_and_forgetting_one_leaves_it(
+    open_app: Callable[..., lib.AppServer], tmp_path: Path
+) -> None:
+    projects = [tmp_path / f"project-{index}" for index in range(22)]
+    for project in projects:
+        project.mkdir()
+    app_server = open_app(projects[0])
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        for project in projects[1:]:
+            await client.call_tool("open_app_workspace", {"path": str(project)})
+        # The same folders, spelled another way.
+        await client.call_tool("open_app_workspace", {"path": f"{projects[5]}{os.sep}"})
+        again = await client.call_tool("open_app_workspace", {"path": str(projects[9] / ".." / projects[9].name)})
+        forgotten = await client.call_tool("forget_app_workspace", {"path": str(projects[20])})
+
+    newest = [projects[9], projects[5], *(projects[index] for index in range(21, 1, -1) if index not in (5, 9))]
+    offered = AppWorkspaces.model_validate(again.structured_content)
+    assert offered.current == projects[9]
+    assert [workspace.path for workspace in offered.recent] == newest
+    assert not any(workspace.missing for workspace in offered.recent)
+    assert [workspace.path for workspace in AppWorkspaces.model_validate(forgotten.structured_content).recent] == [
+        project for project in newest if project != projects[20]
+    ]
+    assert projects[20].is_dir()
+
+
+async def test_a_workspace_chosen_in_the_folder_dialog_comes_back_by_path_and_a_dialog_that_cannot_show_names_the_command(
+    open_app: Callable[..., lib.AppServer], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    garden, harbor = tmp_path / "garden", tmp_path / "harbor"
+    garden.mkdir()
+    harbor.mkdir()
+    app_server = open_app(garden)
+    shown: list[Path] = []
+    answers: list[Path | None] = [harbor, None]
+
+    def choose(directory: Path, title: str, instead: str) -> Path | None:
+        shown.append(directory)
+        return answers.pop(0)
+
+    monkeypatch.setattr(app_server, "_choose_folder", choose)
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        chosen = await client.call_tool("choose_app_workspace", {})
+        cancelled = await client.call_tool("choose_app_workspace", {})
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "no-python"))
+    async with Client(f"{open_app(garden).open().url}/mcp") as client:
+        unshown = await client.call_tool("choose_app_workspace", {})
+
+    assert chosen.structured_content == {"path": str(harbor)}
+    assert cancelled.structured_content == {"path": None}
+    assert (shown, app_server.workspace) == ([tmp_path, tmp_path], garden)
+    assert "Could not show a window to ask in" in text_of(unshown)
+    assert "`image-design app --workspace <folder>`" in text_of(unshown)
+
+
+async def test_a_new_workspace_is_a_folder_made_where_asked_and_opened_and_one_that_cannot_be_is_refused(
+    open_app: Callable[..., lib.AppServer], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    projects = tmp_path / "projects"
+    garden = projects / "garden"
+    garden.mkdir(parents=True)
+    (projects / "notes.txt").write_text("", encoding="utf-8")
+    app_server = open_app(garden)
+    shown: list[Path] = []
+
+    def choose(directory: Path, title: str, instead: str) -> Path:
+        shown.append(directory)
+        return tmp_path / "elsewhere"
+
+    monkeypatch.setattr(app_server, "_choose_folder", choose)
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        before = AppWorkspaces.model_validate((await client.call_tool("read_app_workspaces", {})).structured_content)
+        chosen = await client.call_tool("choose_app_workspace", {"parent": True})
+        made = await client.call_tool("create_app_workspace", {"name": " harbor ", "parent": str(before.new_in)})
+        refused = [
+            await client.call_tool("create_app_workspace", {"name": name, "parent": str(before.new_in)})
+            for name in ("garden", "notes.txt", "a/b", "..", "")
+        ]
+        nowhere = await client.call_tool("create_app_workspace", {"name": "dock", "parent": str(tmp_path / "gone")})
+
+    harbor = projects / "harbor"
+    workspaces = AppWorkspaces.model_validate(made.structured_content)
+    assert before.new_in == projects
+    assert (chosen.structured_content, shown) == ({"path": str(tmp_path / "elsewhere")}, [projects])
+    assert (workspaces.current, app_server.workspace) == (harbor, harbor)
+    assert [workspace.path for workspace in workspaces.recent] == [harbor, garden]
+    assert list(harbor.iterdir()) == []
+    assert [result.structured_content for result in refused[:2]] == [{"reason": "name-in-use", "image": None}] * 2
+    assert "already exists. Open it with Open Workspace, or choose another name." in text_of(refused[0])
+    assert all("is not a folder's name" in text_of(result) for result in refused[2:])
+    assert "is not a folder, so no workspace can be made in it" in text_of(nowhere)
+    assert sorted(path.name for path in projects.iterdir()) == ["garden", "harbor", "notes.txt"]
+    assert not (tmp_path / "gone").exists()
+
+
+async def test_every_app_offers_the_workspaces_the_others_opened_too(
+    open_app: Callable[..., lib.AppServer], tmp_path: Path
+) -> None:
+    garden, harbor, empty = tmp_path / "garden", tmp_path / "harbor", tmp_path / "empty"
+    for workspace in (garden, harbor, empty):
+        workspace.mkdir()
+    url = open_app(garden).open().url
+    open_app(harbor)
+
+    async with Client(f"{url}/mcp") as client:
+        switched = await client.call_tool("open_app_workspace", {"path": str(empty)})
+
+    offered = [workspace.path for workspace in AppWorkspaces.model_validate(switched.structured_content).recent]
+    assert offered == [empty, harbor, garden]
+    assert lib.app_server().workspace == empty
+
+
+async def test_a_call_for_a_workspace_the_app_no_longer_shows_is_refused_and_changes_nothing(
+    open_app: Callable[..., lib.AppServer], tmp_path: Path
+) -> None:
+    garden, harbor = tmp_path / "garden", tmp_path / "harbor"
+    cacti = [image_in(garden, "cactus.png"), image_in(harbor, "cactus.png")]
+    app_server = open_app(garden)
+    sent = str(app_server.workspace)
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        before = await client.call_tool("list_images", {"workspace": sent})
+        await client.call_tool("open_app_workspace", {"path": str(harbor)})
+        refused = [
+            await client.call_tool("list_images", {"workspace": sent}),
+            await client.call_tool("delete_image", {"name": "cactus.png", "workspace": sent}),
+            await client.call_tool("save_app_state", {"state": {"method": "svg"}, "workspace": sent}),
+        ]
+        settings = await client.call_tool("read_app_settings", {"workspace": sent})
+        here = await client.call_tool("list_images", {"workspace": str(harbor)})
+
+    assert not before.is_error, text_of(before)
+    for result in refused:
+        assert result.structured_content == {"reason": "workspace-changed", "image": None}
+        assert f"The app now shows {harbor}, so this call, sent for {sent}, was not made." in text_of(result)
+    assert all(cactus.is_file() for cactus in cacti)
+    assert not (harbor / ".image-design" / ".agents").exists()
+    assert not settings.is_error, text_of(settings)
+    assert [image.name for image in AppImages.model_validate(here.structured_content).images] == ["cactus.png"]
+
+
+async def test_a_workspace_removed_while_the_app_shows_it_is_refused_and_not_made_again(
+    open_app: Callable[..., lib.AppServer], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    garden = tmp_path / "garden"
+    garden.mkdir()
+    app_server = open_app(garden)
+    shown: list[Path] = []
+    monkeypatch.setattr(app_server, "_show_in_file_manager", shown.append)
+    garden.rmdir()
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        refused = [
+            await client.call_tool("list_images", {}),
+            await client.call_tool("save_app_state", {"state": {"method": "svg"}}),
+            await client.call_tool("show_in_file_manager", {}),
+        ]
+        workspaces = AppWorkspaces.model_validate(
+            (await client.call_tool("read_app_workspaces", {})).structured_content
+        )
+        forgotten = await client.call_tool("forget_app_workspace", {"path": str(garden)})
+
+    for result in refused:
+        assert result.structured_content == {"reason": "no-such-workspace", "image": None}
+    assert f"The workspace {garden} is no longer a folder." in text_of(refused[1])
+    assert (garden.exists(), shown) == (False, [])
+    assert (workspaces.current, [workspace.missing for workspace in workspaces.recent]) == (None, [True])
+    assert AppWorkspaces.model_validate(forgotten.structured_content) == AppWorkspaces(
+        current=None, recent=[], new_in=tmp_path
+    )
+
+
+async def test_images_and_a_folder_of_them_chosen_in_the_dialogs_come_in_under_free_names(
+    open_app: Callable[..., lib.AppServer], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    garden = tmp_path / "garden"
+    image_in(garden, "palette.png")
+    trip = tmp_path / "trip"
+    (trip / "day 1").mkdir(parents=True)
+    (trip / "palette.png").write_bytes(picture(40, 30, "#ff0000"))
+    (trip / "day 1" / "beach.jpg").write_bytes(picture(40, 30, "#00ff00", "jpeg"))
+    (trip / "notes.txt").write_text("Not an image.", encoding="utf-8")
+    (trip / ".cache").mkdir()
+    (trip / ".cache" / "hidden.png").write_bytes(picture(16, 16, "#000000"))
+    loose = tmp_path / "palette.png"
+    loose.write_bytes(picture(40, 30, "#0000ff"))
+    text = tmp_path / "notes.png"
+    text.write_text("Not an image.", encoding="utf-8")
+    app_server = open_app(garden)
+    opened_at: list[Path] = []
+    files: list[list[Path]] = [[loose, text], []]
+
+    def choose_folder(directory: Path, title: str, instead: str) -> Path:
+        opened_at.append(directory)
+        return trip
+
+    def choose_files(directory: Path, title: str, instead: str) -> list[Path]:
+        opened_at.append(directory)
+        return files.pop(0)
+
+    monkeypatch.setattr(app_server, "_choose_folder", choose_folder)
+    monkeypatch.setattr(app_server, "_choose_files", choose_files)
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        folder = await client.call_tool("choose_image_folder", {})
+        chosen = await client.call_tool("choose_image_files", {"folder": "trip/day 1"})
+        cancelled = await client.call_tool("choose_image_files", {})
+        listing = await listed(client)
+
+    brought = ImageImports.model_validate(folder.structured_content)
+    picked = ImageImports.model_validate(chosen.structured_content)
+    assert [image.name for image in brought.images] == ["trip/palette.png", "trip/day 1/beach.jpg"]
+    assert (brought.folders, brought.refused) == (["trip", "trip/day 1"], [])
+    assert [image.name for image in picked.images] == ["trip/day 1/palette.png"]
+    assert [(refusal.name, refusal.reason) for refusal in picked.refused] == [("notes.png", "not-an-image")]
+    assert cancelled.structured_content == {"images": [], "folders": [], "refused": []}
+    # Where a folder was chosen from is where the next dialog opens.
+    assert opened_at == [garden / ".image-design", tmp_path, tmp_path]
+    assert sorted(image.name for image in listing.images) == [
+        "palette.png",
+        "trip/day 1/beach.jpg",
+        "trip/day 1/palette.png",
+        "trip/palette.png",
+    ]
+
+
+def test_the_app_opened_on_an_image_with_no_workspace_to_open_it_in_exits_1_and_names_the_flag() -> None:
+    result = CliRunner().invoke(cli_app, ["app", "--name", "logo.png"])
+
+    assert result.exit_code == 1
+    assert "Pass --workspace with the project's top-level directory." in str(result.exception)
+
+
+@pytest.mark.detached
+async def test_a_request_sent_just_before_a_switch_makes_its_image_in_the_workspace_it_was_sent_for(
+    open_app: Callable[..., lib.AppServer],
+    images_api: FakeImagesAPI,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(uploads, "UPLOADS", tmp_path / "uploads")
+    monkeypatch.setattr(generate, "BACKGROUND_COMMAND", detached_openai.command("answer"))
+    garden, harbor = tmp_path / "garden", tmp_path / "harbor"
+    garden.mkdir()
+    harbor.mkdir()
+    app_server = open_app(garden)
+    arrived, switched = threading.Event(), threading.Event()
+    start = app_server._generate["generate_openai_image"]
+
+    async def after_the_switch(**arguments: Any) -> Any:
+        arrived.set()
+        await asyncio.to_thread(switched.wait, DETACHED_TIMEOUT_SECONDS)
+        return await start(**arguments)
+
+    monkeypatch.setattr(app_server, "_generate", {**app_server._generate, "generate_openai_image": after_the_switch})
+    sent = str(app_server.workspace)
+    url = f"{app_server.open().url}/mcp"
+
+    async with Client(url) as client, Client(url) as other:
+        await upload(client, "a" * 32, "palette.png", picture(40, 30, "#457b9d"))
+        request = asyncio.create_task(
+            client.call_tool(
+                "generate_openai_image",
+                {"prompt": "A cactus.", "name": "cactus.png", "references": [{"upload": "a" * 32}], "workspace": sent},
+            )
+        )
+        await asyncio.to_thread(arrived.wait, DETACHED_TIMEOUT_SECONDS)
+        await other.call_tool("open_app_workspace", {"path": str(harbor)})
+        switched.set()
+        started = await request
+        await other.call_tool("open_app_workspace", {"path": sent})
+        made = await asyncio.wait_for(ended(client, "cactus.png"), DETACHED_TIMEOUT_SECONDS)
+
+    assert not started.is_error, text_of(started)
+    assert (made.path, made.status) == (garden / ".image-design" / "cactus.png", "done")
+    # The reference it was given is remembered as used where it was sent for.
+    assert (garden / ".image-design" / ".agents" / "app" / "used.json").is_file()
+    assert not (harbor / ".image-design").exists()
+
+
+@pytest.mark.detached
+async def test_a_run_goes_on_while_the_app_shows_another_workspace_and_is_there_whole_on_switching_back(
+    open_app: Callable[..., lib.AppServer],
+    images_api: FakeImagesAPI,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(generate, "BACKGROUND_COMMAND", detached_openai.command("answer"))
+    garden, harbor = tmp_path / "garden", tmp_path / "harbor"
+    garden.mkdir()
+    image_in(harbor, "boat.png")
+    app_server = open_app(garden)
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        started = await client.call_tool("generate_openai_image", {"prompt": "A cactus.", "name": "cactus.png"})
+        await client.call_tool("open_app_workspace", {"path": str(harbor)})
+        away = await listed(client)
+        await client.call_tool("open_app_workspace", {"path": str(garden)})
+        made = await asyncio.wait_for(ended(client, "cactus.png"), DETACHED_TIMEOUT_SECONDS)
+        history = ImageActivity.model_validate(
+            (await client.call_tool("read_image_activity", {"name": "cactus.png"})).structured_content
+        )
+
+    assert not started.is_error, text_of(started)
+    assert [image.name for image in away.images] == ["boat.png"]
+    assert (made.status, made.current) == ("done", "v1")
+    kinds = [event.kind for event in history.events]
+    assert (kinds[0], kinds[-1], "version" in kinds) == ("started", "finished", True)

@@ -51,14 +51,18 @@ STOP_POLL_SECONDS = 0.1
 EXIT_WAIT_SECONDS = 1
 
 
-def list_images(directory: Path | None = None, data_directory: Path | None = None) -> ImageListing:
-    """Every image in the directory, in name order, and every folder. Reads only.
+def list_images(workspace: Path | None = None) -> ImageListing:
+    """Every image in the workspace, in name order, and every folder. Reads only.
 
-    An image file the tool keeps no data for, such as one put there by hand, is listed with no versions.
+    An image file the tool keeps no data for, such as one put there by hand, is listed with no versions. A workspace
+    with no image directory yet lists as empty.
     """
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     if root.exists() and not root.is_dir():
-        raise ImageDesignError(f"{root} is a file, not a directory of images. Pass the --directory images are kept in.")
+        raise ImageDesignError(
+            f"{root} is a file, so the workspace's images cannot be kept there. Move or rename it, or pass another "
+            "--workspace."
+        )
     kept, unreadable = kept_images(root, data)
     images = [image.summary() for image in kept]
     names = {image.name.casefold() for image in kept}
@@ -66,20 +70,21 @@ def list_images(directory: Path | None = None, data_directory: Path | None = Non
     images.extend(found_summary(root, name) for name in there.names if name.casefold() not in names)
     images.sort(key=lambda summary: summary.name.casefold())
     return ImageListing(
-        directory=root, data_directory=data, images=images, folders=there.folders, unreadable=unreadable
+        workspace=root.parent,
+        directory=root,
+        data_directory=data,
+        images=images,
+        folders=there.folders,
+        unreadable=unreadable,
     )
 
 
 def view_image(
-    name: str,
-    version: str | None = None,
-    frames_output: Path | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    name: str, version: str | None = None, frames_output: Path | None = None, workspace: Path | None = None
 ) -> ImageView:
     """The image's summary, with its file or one of its versions frame by frame. Writes only to `frames_output`, a
     folder each frame is written to as a PNG named after its index."""
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     viewing = find(root, data, name)
     summary = summary_of(viewing, root)
     if version is not None:
@@ -101,18 +106,12 @@ def view_image(
     return ImageView(**dict(summary), viewed=viewed)
 
 
-def move_image(
-    name: str,
-    new_name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
-    numbered: bool = False,
-) -> ImageSummary:
+def move_image(name: str, new_name: str, workspace: Path | None = None, numbered: bool = False) -> ImageSummary:
     """Give the image another name, which moves its file, and return its summary there. Its versions stay with it.
 
     A name that is taken is refused, or with `numbered` becomes the first free one of `name (2)`, `name (3)`, and on.
     """
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     moving = find(root, data, name)
     old = name_of(moving)
     new = with_same_extension(old, new_name, root, data)
@@ -147,19 +146,13 @@ def move_image(
     return summary_of(find(root, data, new), root)
 
 
-def copy_image(
-    name: str,
-    new_name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
-    numbered: bool = False,
-) -> ImageSummary:
+def copy_image(name: str, new_name: str, workspace: Path | None = None, numbered: bool = False) -> ImageSummary:
     """Make another image under `new_name` with a copy of the image's file and of everything kept for it, and return
     its summary.
 
     A name that is taken is refused, or with `numbered` becomes the first free one of `name (2)`, `name (3)`, and on.
     """
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     original = find(root, data, name)
     old = name_of(original)
     new = settled(root, data, with_same_extension(old, new_name, root, data), None, numbered, f"a copy of {old}")
@@ -191,9 +184,9 @@ def copy_image(
     return summary_of(find(root, data, new), root)
 
 
-def delete_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
+def delete_image(name: str, workspace: Path | None = None) -> None:
     """Delete the image's file and everything kept for it, stopping a run working on it first."""
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     deleting = find(root, data, name)
     if isinstance(deleting, str):
         _remove_file(root / deleting, deleting)
@@ -245,11 +238,9 @@ def refuse_run_here(image: StoredImage) -> None:
         )
 
 
-def restore_image_version(
-    name: str, version: str, directory: Path | None = None, data_directory: Path | None = None
-) -> ImageSummary:
+def restore_image_version(name: str, version: str, workspace: Path | None = None) -> ImageSummary:
     """Put an earlier version of the image back in its file. Keeps the file first if it was changed by hand."""
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     image = require_image(root, data, name)
     holder = f"restore-{version}"
     lock = take_lock(data, image.name, holder)
@@ -262,10 +253,10 @@ def restore_image_version(
     return image.summary()
 
 
-def cancel_image(name: str, directory: Path | None = None, data_directory: Path | None = None) -> None:
+def cancel_image(name: str, workspace: Path | None = None) -> None:
     """Ask the processes running the image's run, its drafts, and its agent, which may be others, to stop them. An
     agent that stops asks every call it made that is still going, on any image, to stop."""
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     image = require_image(root, data, name)
     going = [run for run in (image.designing(), image.running(), *image.drafting()) if run is not None]
     if not going:
@@ -274,9 +265,7 @@ def cancel_image(name: str, directory: Path | None = None, data_directory: Path 
         (image.run_folder(run.id) / CANCEL).touch()
 
 
-def read_image_activity(
-    name: str, directory: Path | None = None, data_directory: Path | None = None, after: str | None = None
-) -> ImageActivity:
+def read_image_activity(name: str, workspace: Path | None = None, after: str | None = None) -> ImageActivity:
     """Every event of every run of the image's conversation, in the order they happened, or only those after `after`,
     a cursor an earlier call gave. The conversation is the image's calls, its agent's runs, and the calls that agent
     made on other images.
@@ -285,7 +274,7 @@ def read_image_activity(
     So the cursor has, for each list, how many of its runs were read, and each of those that may still add events with
     how far into its events the reader got. It stays good as more runs are added.
     """
-    root, data = directories(directory, data_directory)
+    root, data = directories(workspace)
     image = require_image(root, data, name)
     streams = [
         [_Read(run.id, image.run_folder(run.id), run.pid) for run in image.runs],

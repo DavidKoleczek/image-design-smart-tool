@@ -43,7 +43,7 @@ from image_design.shared.images.requests import (
 )
 from image_design.shared.images.requests import references as sent_references
 from image_design.shared.images.runs import DetachedRun, ImageRun, InProcessRun
-from image_design.shared.images.store import StoredImage, directories, image_name, new_run_id
+from image_design.shared.images.store import StoredImage, directories, image_name, new_run_id, resolve_workspace
 
 # What starts a detached run, given its request on stdin. Tests swap it for a command that fakes the API.
 BACKGROUND_COMMAND = [sys.executable, "-m", "image_design.capabilities.openai_image.background"]
@@ -65,8 +65,7 @@ class OpenAIImageRequest(BaseModel):
 
     prompt: str
     name: str
-    directory: Path | None = None
-    data_directory: Path | None = None
+    workspace: Path | None = None
     references: list[Path] = []
     marks: list[Mark] = []
     mask: Path | None = None
@@ -90,8 +89,7 @@ class OpenAIImageRequest(BaseModel):
 async def generate_openai_image(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     mask: Path | None = None,
@@ -117,8 +115,7 @@ async def generate_openai_image(
         OpenAIImageRequest,
         prompt=prompt,
         name=name,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references or [],
         marks=marks or [],
         mask=mask,
@@ -141,24 +138,23 @@ async def generate_openai_image(
     if not detach:
         return await start(request)
     _require_arguments(request)
-    root, data = directories(request.directory, request.data_directory)
-    # Made absolute here, since the run's process need not resolve them from the same place.
+    # Made absolute here, so the run's process works in the same workspace whatever directory it starts in.
+    workspace = resolve_workspace(request.workspace)
     absolute = request.model_copy(
         update={
-            "directory": root,
-            "data_directory": data,
+            "workspace": workspace,
             "references": [path.resolve() for path in request.references],
             "mask": request.mask.resolve() if request.mask else None,
         }
     )
+    root, data = directories(workspace)
     return await detaching.detach(BACKGROUND_COMMAND, absolute, root, data, DetachedRun)
 
 
 def preview_openai_image_request(
     prompt: str,
     name: str,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     mask: Path | None = None,
@@ -179,8 +175,7 @@ def preview_openai_image_request(
         OpenAIImageRequest,
         prompt=prompt,
         name=name,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references or [],
         marks=marks or [],
         mask=mask,
@@ -197,7 +192,7 @@ def preview_openai_image_request(
         previews=previews,
     )
     _require_arguments(request)
-    root, data = directories(request.directory, request.data_directory)
+    root, data = directories(request.workspace)
     image = image_name(request.name, root, data)
     suffix = PurePosixPath(image).suffix.lower()
     chosen = _model(request.model)
@@ -226,7 +221,7 @@ def preview_openai_image_request(
 async def start(request: OpenAIImageRequest) -> InProcessRun:
     """Check the request, keep what it sends, and start sending it."""
     _require_arguments(request)
-    root, data = directories(request.directory, request.data_directory)
+    root, data = directories(request.workspace)
     name = image_name(request.name, root, data)
     suffix = PurePosixPath(name).suffix.lower()
     parent = calls.parent_of(root, data, request.parent, name)

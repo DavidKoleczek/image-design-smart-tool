@@ -130,6 +130,12 @@ def says(text: str) -> Behavior:
     return behave
 
 
+async def says_where_it_runs(run: FakeDesignRun) -> None:
+    """An agent that says the directory it was started in, and finishes."""
+    assert run.request.workspace is not None
+    run.finishes(str(run.request.workspace.path))
+
+
 def waits_for_a_message() -> Behavior:
     async def behave(run: FakeDesignRun) -> None:
         heard = await run.message()

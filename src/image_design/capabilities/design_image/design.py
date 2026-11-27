@@ -51,6 +51,7 @@ from image_design.shared.images.store import (
     new_image,
     new_run_id,
     release_lock,
+    resolve_workspace,
     take_lock,
 )
 
@@ -80,8 +81,7 @@ class DesignImageRequest(BaseModel):
     image_model: str
     size: tuple[int, int] | None = None
     quality: OpenAIImageQuality | None = None
-    directory: Path | None = None
-    data_directory: Path | None = None
+    workspace: Path | None = None
     references: list[Path] = []
     marks: list[Mark] = []
     mask: Path | None = None
@@ -101,8 +101,7 @@ async def design_image(
     image_model: str,
     size: tuple[int, int] | None = None,
     quality: OpenAIImageQuality | None = None,
-    directory: Path | None = None,
-    data_directory: Path | None = None,
+    workspace: Path | None = None,
     references: list[Path] | None = None,
     marks: list[Mark] | None = None,
     mask: Path | None = None,
@@ -126,8 +125,7 @@ async def design_image(
         image_model=image_model,
         size=size,
         quality=quality,
-        directory=directory,
-        data_directory=data_directory,
+        workspace=workspace,
         references=references or [],
         marks=marks or [],
         mask=mask,
@@ -154,16 +152,17 @@ async def begin(request: DesignImageRequest, detach: bool, intelligence: Intelli
             request.name,
         )
     _require_arguments(request)
-    root, data = directories(request.directory, request.data_directory)
-    # Made absolute here, since the run's process need not resolve them from the same place.
+    # Made absolute here, so the run's process, and the agent in it, work in the same workspace whatever directory it
+    # starts in.
+    workspace = resolve_workspace(request.workspace)
     absolute = request.model_copy(
         update={
-            "directory": root,
-            "data_directory": data,
+            "workspace": workspace,
             "references": [path.resolve() for path in request.references],
             "mask": request.mask.resolve() if request.mask is not None else None,
         }
     )
+    root, data = directories(workspace)
     return await detaching.detach(BACKGROUND_COMMAND, absolute, root, data, DesignDetachedRun)
 
 
@@ -171,6 +170,7 @@ class Context(NamedTuple):
     """What the agent's work goes on with once its run is kept."""
 
     request: DesignImageRequest
+    workspace: Path
     image: StoredImage
     run: ImageRunRecord
     intelligence: Intelligence
@@ -185,7 +185,8 @@ class Context(NamedTuple):
 async def start(request: DesignImageRequest, intelligence: Intelligence | None = None) -> DesignInProcessRun:
     """Check the request, claim the image's conversation, keep the run, and start the work that runs the agent."""
     _require_arguments(request)
-    root, data = directories(request.directory, request.data_directory)
+    workspace = resolve_workspace(request.workspace)
+    root, data = directories(workspace)
     name = image_name(request.name, root, data)
     sent = references(request.references)
     marking.require_marks(request.marks)
@@ -231,7 +232,9 @@ async def start(request: DesignImageRequest, intelligence: Intelligence | None =
         )
         image.designs.append(run)
         image.save_designs()
-        context = Context(request, image, run, intelligence, model, resumed, looking_at, version, shown, given)
+        context = Context(
+            request, workspace, image, run, intelligence, model, resumed, looking_at, version, shown, given
+        )
         suffix = PurePosixPath(image.name).suffix.lower()
         return DesignInProcessRun(
             image, run, lambda output: _work(context, output), request.timeout_seconds, claim, suffix
@@ -354,7 +357,8 @@ async def _work(context: Context, output: RunOutput) -> None:
             prompt=_prompt(context, image, session, told_calls),
             model=context.model,
             images=context.shown,
-            workspace=HostWorkspace(path=Path.cwd()),
+            # The workspace, so the agent can use the rest of the project, and its commands default to its images.
+            workspace=HostWorkspace(path=context.workspace),
             writable=True,
             reasoning_effort=request.reasoning_effort,
             timeout_seconds=(
@@ -403,14 +407,12 @@ def _prompt(context: Context, image: StoredImage, session: list[ImageRunRecord],
     )
     told_block = told.describe(told_calls, image, session, new=resumed is None)
     if resumed is None:
-        # What the agent's commands default to, from the working directory it is started in.
-        default_root, default_data = directories(None, None)
         return prompting.new(
             request.prompt,
             target,
             context.given,
+            context.workspace,
             image.folder / WORK,
-            prompting.directories(image.root, image.data, default_root, default_data),
             request.image_model,
             context.looking_at is not None,
             told_block,

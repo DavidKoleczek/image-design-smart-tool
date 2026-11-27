@@ -96,6 +96,8 @@ export function changeQueue(options: {
   let runs = 0;
   let asked = 0;
   let working: Promise<void> | null = null;
+  // Counts the times the changes were forgotten, so what a change under way then comes to is dropped with it.
+  let generation = 0;
 
   const emit = () => {
     for (const listener of listeners) {
@@ -115,8 +117,12 @@ export function changeQueue(options: {
   const make = async (operation: Operation) => {
     const { change } = operation;
     const shown = landing(change);
+    const made = generation;
     try {
       const given = await options.run(change);
+      if (made !== generation) {
+        return;
+      }
       operations = operations.map((each) =>
         each.id === operation.id
           ? { ...each, made: asked, change: landed(change, given) }
@@ -128,6 +134,9 @@ export function changeQueue(options: {
         options.onMoved(shown, given);
       }
     } catch (cause) {
+      if (made !== generation) {
+        return;
+      }
       operations = operations.filter((each) => each.id !== operation.id);
       failures = [
         ...failures,
@@ -198,6 +207,16 @@ export function changeQueue(options: {
       emit();
     },
     dismiss() {
+      failures = [];
+      emit();
+    },
+    /**
+     * Drop every change not yet made and every failure, as once what they name is no longer what shows. One under way
+     * goes on at the server, and what it comes to is dropped.
+     */
+    forget() {
+      generation += 1;
+      operations = [];
       failures = [];
       emit();
     },

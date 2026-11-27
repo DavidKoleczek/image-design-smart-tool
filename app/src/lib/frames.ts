@@ -42,6 +42,15 @@ onRenamed((from, to) => {
   }
 });
 
+/**
+ * Forget how each image was being looked at, for a workspace shown next. How long frames show stays, kept by what
+ * tells a file's content from any other.
+ */
+export function forgetPlayback() {
+  playbacks.clear();
+  emit();
+}
+
 function change(name: string, next: Partial<Playback>) {
   const current = playbacks.get(name);
   if (current) {

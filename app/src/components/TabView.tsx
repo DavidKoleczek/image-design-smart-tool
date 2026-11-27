@@ -4,7 +4,7 @@ import type { PanelImperativeHandle } from "react-resizable-panels";
 import { Canvas } from "@/components/Canvas";
 import { RequestPane } from "@/components/RequestPane";
 import type { NarrowPane } from "@/components/TopBar";
-import { TabPanes } from "@/components/Workspace";
+import { TabPanes } from "@/components/Panes";
 import type { AppLayout, AppMethod, ImageListing } from "@/lib/api";
 import { useGuides } from "@/lib/canvas";
 import { useDraft } from "@/lib/drafts";
@@ -114,6 +114,7 @@ export function TabView({
       blocked={mode === null ? blocks.markup : null}
       steering={steering}
       error={error}
+      folder={draft.folder}
       onView={view}
       onChanged={changed}
     />

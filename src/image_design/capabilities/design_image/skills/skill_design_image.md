@@ -1,8 +1,8 @@
 `design-image` creates or edits an image with an agent that directs an image model. It looks at the image and its
 history, writes each image call to the image model it is given and makes it with `generate-openai-image` or
 `generate-chatgpt-image`, choosing every other setting of the call itself, then says what it made. It works in a shell
-in the working directory with this tool's own commands and skills for the craft, and may make several images, write
-scripts for exact work such as a crop, and read the project. It needs the `codex` or `claude` extra, and the method of
+in the workspace with this tool's own commands and skills for the craft, and may make several images, write scripts
+for exact work such as a crop, and read the project. It needs the `codex` or `claude` extra, and the method of
 its image model set up: see `list-image-methods`.
 
 Reach for it when what matters is the result rather than the exact request: it holds the intent across edits and
@@ -31,9 +31,9 @@ and gets them as a file it can pass on with `--marks`.
 ## Arguments
 
 - `PROMPT`: What you want, for the agent; not what an image model receives.
-- `--name`: The image's path in the directory, not an `.svg`.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--name`: The image's path in `.image-design`, not an `.svg`.
+- `--workspace`: The top-level directory of the user's project, where the agent runs and whose `.image-design`
+  holds the images. Defaults to the working directory.
 - `--reference`: An image that goes with the request. Repeatable. Any format.
 - `--marks`: A JSON file of marks drawn on the image, which show what the request refers to.
 - `--mask`: An image the image's size, transparent where changes may go.

@@ -36,6 +36,7 @@ from pydantic import BaseModel, ValidationError
 
 from image_design.schemas import (
     IMAGE_FORMATS,
+    IMAGES_FOLDER,
     SVG_SUFFIX,
     ImageDesignError,
     ImageDesignStatus,
@@ -50,7 +51,6 @@ from image_design.schemas import (
 )
 from image_design.shared.images import pictures
 
-DEFAULT_DIRECTORY = Path(".image-design")
 DATA_FOLDER = ".agents"
 IMAGES = "images"
 LOCKS = "locks"
@@ -85,10 +85,28 @@ CRASHED = "The process running the request ended before the request did."
 FACTS_KEPT = 2048
 
 
-def directories(directory: Path | None, data_directory: Path | None) -> tuple[Path, Path]:
-    """The image directory and the data directory, resolved, with their defaults filled in."""
-    root = (directory or DEFAULT_DIRECTORY).resolve()
-    return root, (data_directory or root / DATA_FOLDER).resolve()
+def resolve_workspace(workspace: Path | None) -> Path:
+    """The workspace as an absolute path, the working directory when None, refusing one that is not a folder.
+
+    An image directory given in its place stands for its workspace, the folder that holds it.
+    """
+    resolved = (workspace or Path.cwd()).resolve()
+    if resolved.name == IMAGES_FOLDER:
+        resolved = resolved.parent
+    if not resolved.is_dir():
+        raise ImageDesignError(
+            f"{resolved} is not a folder, so it cannot be the workspace. Pass the project's top-level directory as "
+            "--workspace.",
+            "no-such-workspace",
+        )
+    return resolved
+
+
+def directories(workspace: Path | None) -> tuple[Path, Path]:
+    """The image directory and the data directory of `workspace`, the working directory when None: its
+    `.image-design`, and the `.agents` in that."""
+    root = resolve_workspace(workspace) / IMAGES_FOLDER
+    return root, root / DATA_FOLDER
 
 
 def image_name(name: str, root: Path, data: Path) -> str:
@@ -426,7 +444,7 @@ def require_image(root: Path, data: Path, name: str) -> StoredImage:
         known = ", ".join(image_names(data)) or "none"
         raise ImageDesignError(
             f"There is no image named {name!r} in {root} that the tool keeps data for. The images it does: {known}. "
-            "Name one of them, or pass the --directory and --data-directory it was made with.",
+            "Name one of them, or pass the --workspace it was made in.",
             "no-such-image",
             name,
         )

@@ -1,7 +1,7 @@
 ---
 smart_tool_format: 1
 name: image-design
-version: 0.3.1
+version: 0.4.0
 description: >-
   Image creation and editing workspace
 use_cases:
@@ -41,3 +41,7 @@ requires:
 ---
 
 Image creation and editing tool.
+
+Every capability works in a workspace, the top-level directory of the user's project: the working directory, or the
+one `--workspace` names. The images are kept in its `.image-design`, and the tool's data for them in
+`.image-design/.agents`. The image's agent runs in the workspace, so it can use the rest of the project.

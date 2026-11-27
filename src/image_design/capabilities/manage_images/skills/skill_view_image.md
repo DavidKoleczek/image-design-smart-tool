@@ -18,12 +18,12 @@ view = view_image(name="loops/sway.gif", version="v1", frames_output=Path("frame
 
 ## Arguments
 
-- `--name`: The image's path in the directory.
+- `--name`: The image's path in `.image-design`.
 - `--version`: The version to view frame by frame, such as `v2`. Defaults to the one in the image's file.
 - `--frames-output`: A folder to write each frame to, as `frame-<index>.png`. Its folders are made if need be. Without
   it, nothing is written.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--json` (library: the `ImageView` returned): the image as JSON instead of text, with its last run, the request that
   run was given, and in `viewed` each frame of what was viewed.
 

@@ -214,6 +214,15 @@ export function openImage(
   );
 }
 
+/** Forget the tabs, for a workspace shown next, which opens its own. */
+export function forgetTabs() {
+  tabs = { tabs: [], active: null };
+  directory = null;
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
 /** Bring up an image the server was asked to, once the tabs are of its directory. */
 export function bringUp(brought: Brought) {
   if (brought.dataDirectory === directory) {

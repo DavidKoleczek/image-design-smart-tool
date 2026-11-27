@@ -105,10 +105,34 @@ function cacheOf(picture: Picture): Map<string, Entry> {
 const SMALL_AT_ONCE = 4;
 let reading = 0;
 const waiting: (() => void)[] = [];
+// Counts the workspaces shown. A picture is read by its image's name from the workspace the server shows as the read
+// arrives, so one asked for in the workspace before is not read once another shows.
+let generation = 0;
+
+/**
+ * Forget the pictures still being read, and the full images and frames, for a workspace shown next, whose images are
+ * others under the same names. The thumbnails read stay, kept by what tells their content from any other.
+ */
+export function forgetPictures() {
+  generation += 1;
+  caches.full.clear();
+  caches.frames.clear();
+  for (const [key, entry] of caches.small) {
+    if (entry.url === null) {
+      caches.small.delete(key);
+    }
+  }
+}
 
 function inTurn(read: () => Promise<string>): Promise<string> {
+  const asked = generation;
   return new Promise((resolve, reject) => {
     const start = () => {
+      if (asked !== generation) {
+        reject(new Error("The app shows another workspace now."));
+        waiting.shift()?.();
+        return;
+      }
       reading += 1;
       read()
         .then(resolve, reject)
@@ -151,7 +175,7 @@ function entryOf(picture: Picture): Entry {
       entry.url = url;
     },
     // A failed read is tried again next time.
-    () => cache.delete(key),
+    () => cache.get(key) === entry && cache.delete(key),
   );
   cache.set(key, entry);
   const most = picture.small

@@ -246,6 +246,14 @@ export function dropDrawing(name: string) {
   }
 }
 
+/** Forget what was picked for each drawing, for a workspace shown next, whose drawings are others. */
+export function forgetDrawings() {
+  drawings.clear();
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
 onRenamed((from, to) => {
   if (rekey(drawings, (name) => movedPath(name, from, to))) {
     for (const listener of listeners) {

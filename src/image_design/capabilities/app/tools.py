@@ -1,5 +1,7 @@
 """What the app's MCP server offers: the tool that opens the app, the tools its view calls, and the view."""
 
+from typing import Any
+
 from mcp.server.apps import APP_MIME_TYPE
 from mcp.types import Resource, ResourceTemplate, Tool
 
@@ -15,32 +17,37 @@ REFERENCE_FILE_PREFIX = "image-design://reference-files/"
 # In the URI of a thumbnail or a frame, names the image's file where a version's id would be.
 FILE = "file"
 APP_ONLY = {"ui": {"resourceUri": VIEW_URI, "visibility": ["app"]}}
-IMAGE_NAME = {"type": "string", "description": "The image's path in the directory, such as concepts/cactus.png"}
+# What each view tool that works in the app's workspace takes, so a call sent as the app switched is refused rather
+# than made in the other workspace.
+SHOWN: dict[str, Any] = {
+    "workspace": {
+        "type": "string",
+        "description": "The workspace the view shows, as `read_app_workspaces` returns it; a call for another fails "
+        "with reason `workspace-changed`",
+    }
+}
+IMAGE_NAME = {"type": "string", "description": "The image's path in .image-design, such as concepts/cactus.png"}
 NUMBERED = {
     "type": "boolean",
     "description": "When the name is taken, take the next free name like it, such as `cactus (2).png`, and return it",
 }
-FOLDER_NAME = {"type": "string", "description": "The folder's path in the directory, such as concepts/drafts"}
+FOLDER_NAME = {"type": "string", "description": "The folder's path in .image-design, such as concepts/drafts"}
 OPEN_APP = Tool(
     name="open_app",
-    description="Show the Image Design app, where the user sees the images in a directory, and return its browser "
+    description="Show the Image Design app, where the user sees the images in a workspace, and return its browser "
     "URL. Hosts that render MCP Apps show it inline. Opening it again returns the same URL.",
     input_schema={
         "type": "object",
         "properties": {
-            "directory": {
+            "workspace": {
                 "type": "string",
-                "description": "Where the images to show are kept, absolute or relative to where this server started. "
-                "Omit it to keep the current one, .image-design in the working directory at first.",
-            },
-            "data_directory": {
-                "type": "string",
-                "description": "Where the tool keeps the versions and runs of those images. Omit it for .agents in "
-                "the directory.",
+                "description": "The top-level directory of the user's project, whose .image-design holds the images "
+                "to show, absolute or relative to where this server started. Omit it to keep the one the app shows, "
+                "which the user can switch in the app.",
             },
             "name": {
                 "type": "string",
-                "description": "An image to bring up, by its path in the directory. An open app switches to it.",
+                "description": "An image to bring up, by its path in .image-design. An open app switches to it.",
             },
         },
     },
@@ -48,15 +55,15 @@ OPEN_APP = Tool(
 )
 LIST_IMAGES = Tool(
     name="list_images",
-    description="The images in the app's directory, in name order, with their versions and how their last runs went, "
+    description="The images in the app's workspace, in name order, with their versions and how their last runs went, "
     "its folders, and the image the app showed last. An image whose file was moved outside the app is first kept "
     "under the name its file has, when that file is certainly its own. Called by the view.",
-    input_schema={"type": "object", "properties": {}},
+    input_schema={"type": "object", "properties": {**SHOWN}},
     _meta=APP_ONLY,
 )
 READ_SETTINGS = Tool(
     name="read_app_settings",
-    description="How the person set up the app, such as its theme and pane sizes, the same in every directory. Called "
+    description="How the person set up the app, such as its theme and pane sizes, the same in every workspace. Called "
     "by the view.",
     input_schema={"type": "object", "properties": {}},
     _meta=APP_ONLY,
@@ -74,7 +81,7 @@ SAVE_SETTINGS = Tool(
 )
 READ_CONFIG = Tool(
     name="read_config",
-    description="The person's defaults for the tool, the same in every directory, such as the order the image's "
+    description="The person's defaults for the tool, the same in every workspace, such as the order the image's "
     "agent picks an image model in when it is given none. Called by the view.",
     input_schema={"type": "object", "properties": {}},
     _meta=APP_ONLY,
@@ -98,17 +105,17 @@ UPDATE_CONFIG = Tool(
 )
 READ_STATE = Tool(
     name="read_app_state",
-    description="What the person last picked in the app for the images in its directory. Called by the view.",
-    input_schema={"type": "object", "properties": {}},
+    description="What the person last picked in the app for the images in its workspace. Called by the view.",
+    input_schema={"type": "object", "properties": {**SHOWN}},
     _meta=APP_ONLY,
 )
 SAVE_STATE = Tool(
     name="save_app_state",
-    description="Keep what the person last picked in the app for the images in its directory, replacing what was "
+    description="Keep what the person last picked in the app for the images in its workspace, replacing what was "
     "kept, and return it as kept. Called by the view.",
     input_schema={
         "type": "object",
-        "properties": {"state": {"type": "object", "description": "What `read_app_state` returns, changed"}},
+        "properties": {"state": {"type": "object", "description": "What `read_app_state` returns, changed"}, **SHOWN},
         "required": ["state"],
     },
     _meta=APP_ONLY,
@@ -116,7 +123,7 @@ SAVE_STATE = Tool(
 SHOW_IMAGE = Tool(
     name="show_image",
     description="Record the image the person is looking at, which the app opens on next time. Called by the view.",
-    input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
+    input_schema={"type": "object", "properties": {"name": IMAGE_NAME, **SHOWN}, "required": ["name"]},
     _meta=APP_ONLY,
 )
 VIEW_IMAGE = Tool(
@@ -128,6 +135,7 @@ VIEW_IMAGE = Tool(
         "properties": {
             "name": IMAGE_NAME,
             "version": {"type": "string", "description": "The version to view, such as v2. Omit it for the file"},
+            **SHOWN,
         },
         "required": ["name"],
     },
@@ -135,14 +143,15 @@ VIEW_IMAGE = Tool(
 )
 MOVE_IMAGE = Tool(
     name="move_image",
-    description="Rename an image, or move it to another folder of the directory, and return it there. It keeps its "
+    description="Rename an image, or move it to another folder of .image-design, and return it there. It keeps its "
     "versions. Called by the view.",
     input_schema={
         "type": "object",
         "properties": {
             "name": IMAGE_NAME,
-            "new_name": {"type": "string", "description": "Its new path in the directory, with the same extension"},
+            "new_name": {"type": "string", "description": "Its new path in .image-design, with the same extension"},
             "numbered": NUMBERED,
+            **SHOWN,
         },
         "required": ["name", "new_name"],
     },
@@ -156,58 +165,68 @@ COPY_IMAGE = Tool(
         "type": "object",
         "properties": {
             "name": IMAGE_NAME,
-            "new_name": {"type": "string", "description": "The copy's path in the directory, with the same extension"},
+            "new_name": {"type": "string", "description": "The copy's path in .image-design, with the same extension"},
             "numbered": NUMBERED,
+            **SHOWN,
         },
         "required": ["name", "new_name"],
     },
     _meta=APP_ONLY,
 )
+INTO_FOLDER = {
+    "type": "string",
+    "description": "The folder of .image-design to bring them into. Omit it for its top",
+}
 IMPORT_IMAGE = Tool(
     name="import_image",
-    description="Bring a file sent with `upload_file` into the app's directory as a new image, under the file's own "
+    description="Bring a file sent with `upload_file` into the app's workspace as a new image, under the file's own "
     "name, and return the image. The upload is cleared. Called by the view.",
     input_schema={
         "type": "object",
         "properties": {
             "upload": {"type": "string", "description": "The upload holding the image file"},
-            "folder": {
-                "type": "string",
-                "description": "The folder to put it in. Omit it for the top of the directory",
-            },
+            "folder": INTO_FOLDER,
             "numbered": NUMBERED,
+            **SHOWN,
         },
         "required": ["upload"],
     },
     _meta=APP_ONLY,
 )
+IMPORTED = (
+    "under a numbered name where its own is taken. Returns the images, the folders made, and why each file that was "
+    "refused was, all empty when the person cancels. Called by the view."
+)
 CHOOSE_IMAGES = Tool(
     name="choose_image_files",
     description="Ask the person for image files in their platform's file dialog, and bring each into the app's "
-    "directory as a new image, under a numbered name when its own is taken. Returns the images, and why each file "
-    "that was refused was. Called by the view.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "folder": {
-                "type": "string",
-                "description": "The folder to put them in. Omit it for the top of the directory",
-            }
-        },
-    },
+    f"workspace as a new image, {IMPORTED}",
+    input_schema={"type": "object", "properties": {"folder": INTO_FOLDER, **SHOWN}},
+    _meta=APP_ONLY,
+)
+CHOOSE_IMAGE_FOLDER = Tool(
+    name="choose_image_folder",
+    description="Ask the person for a folder in their platform's folder dialog, and bring it into the app's workspace "
+    "under its own name, with the folders in it and each image in them as a new image, leaving out other files and "
+    f"what is hidden, {IMPORTED}",
+    input_schema={"type": "object", "properties": {"folder": INTO_FOLDER, **SHOWN}},
     _meta=APP_ONLY,
 )
 DELETE_IMAGE = Tool(
     name="delete_image",
     description="Delete an image's file and everything kept for it, stopping a run working on it first. Called by the "
     "view.",
-    input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
+    input_schema={"type": "object", "properties": {"name": IMAGE_NAME, **SHOWN}, "required": ["name"]},
     _meta=APP_ONLY,
 )
 CREATE_FOLDER = Tool(
     name="create_folder",
-    description="Make a folder in the app's directory, and return its name. Called by the view.",
-    input_schema={"type": "object", "properties": {"name": FOLDER_NAME, "numbered": NUMBERED}, "required": ["name"]},
+    description="Make a folder in the app's workspace, and return its name. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {"name": FOLDER_NAME, "numbered": NUMBERED, **SHOWN},
+        "required": ["name"],
+    },
     _meta=APP_ONLY,
 )
 MOVE_FOLDER = Tool(
@@ -218,8 +237,9 @@ MOVE_FOLDER = Tool(
         "type": "object",
         "properties": {
             "name": FOLDER_NAME,
-            "new_name": {"type": "string", "description": "Its new path in the directory"},
+            "new_name": {"type": "string", "description": "Its new path in .image-design"},
             "numbered": NUMBERED,
+            **SHOWN,
         },
         "required": ["name", "new_name"],
     },
@@ -229,14 +249,14 @@ DELETE_FOLDER = Tool(
     name="delete_folder",
     description="Delete every image in a folder, with everything kept for each, then the folder. Returns the files in "
     "it that are not images, which are left with the folder. Called by the view.",
-    input_schema={"type": "object", "properties": {"name": FOLDER_NAME}, "required": ["name"]},
+    input_schema={"type": "object", "properties": {"name": FOLDER_NAME, **SHOWN}, "required": ["name"]},
     _meta=APP_ONLY,
 )
 RELINK_IMAGE = Tool(
     name="relink_image",
     description="Keep an image that has no file under the name of the file that is likely its own, one of those "
     "`list_images` returns as `likely`. Called by the view.",
-    input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
+    input_schema={"type": "object", "properties": {"name": IMAGE_NAME, **SHOWN}, "required": ["name"]},
     _meta=APP_ONLY,
 )
 RESTORE_VERSION = Tool(
@@ -247,6 +267,7 @@ RESTORE_VERSION = Tool(
         "properties": {
             "name": IMAGE_NAME,
             "version": {"type": "string", "description": "The version's id, such as v2"},
+            **SHOWN,
         },
         "required": ["name", "version"],
     },
@@ -261,6 +282,7 @@ READ_ACTIVITY = Tool(
         "properties": {
             "name": IMAGE_NAME,
             "after": {"type": "string", "description": "The cursor of an earlier call, for only what happened since"},
+            **SHOWN,
         },
         "required": ["name"],
     },
@@ -278,7 +300,7 @@ REQUEST = {
     "prompt": {"type": "string", "description": "What to make, or what to change, sent as written"},
     "name": {
         "type": "string",
-        "description": "The image's path in the directory. A new name creates the image, and the name of one that "
+        "description": "The image's path in .image-design. A new name creates the image, and the name of one that "
         "exists edits it",
     },
     "version": {"type": "string", "description": "The version to edit, such as v2. Omit it for the image's file"},
@@ -338,6 +360,7 @@ OPENAI_REQUEST = {
             "description": "For a .gif, how long each frame shows. Omit it on an edit to keep its own",
         },
         "previews": {"type": "integer", "description": "In-progress images to ask for"},
+        **SHOWN,
     },
     "required": ["prompt", "name"],
 }
@@ -350,6 +373,7 @@ CHATGPT_REQUEST = {
         "transparent": {"type": "boolean", "description": "Ask for a transparent background"},
         "model": {"type": "string", "description": "The Codex model that carries the request. Omit it for the default"},
         "reasoning_effort": {"type": "string", "description": "That model's reasoning effort"},
+        **SHOWN,
     },
     "required": ["prompt", "name"],
 }
@@ -361,7 +385,7 @@ SVG_REQUEST = {
         "prompt": {"type": "string", "description": "What to draw, or what to change, sent as written"},
         "name": {
             "type": "string",
-            "description": "The drawing's path in the directory, ending in .svg. A new name draws it, and the name of "
+            "description": "The drawing's path in .image-design, ending in .svg. A new name draws it, and the name of "
             "one that exists changes it",
         },
         "references": REFERENCES,
@@ -383,19 +407,20 @@ SVG_REQUEST = {
         "model": {"type": "string", "description": "The agent's model. Omit it for the agent provider's default"},
         "reasoning_effort": {"type": "string", "description": "That model's reasoning effort"},
         "timeout_seconds": {**SVG_LIMIT, "description": "How long the run may take; null for no limit"},
+        **SHOWN,
     },
     "required": ["prompt", "name"],
 }
 GENERATE_OPENAI = Tool(
     name="generate_openai_image",
-    description="Start creating or editing an image in the app's directory with an OpenAI image model, in a process "
+    description="Start creating or editing an image in the app's workspace with an OpenAI image model, in a process "
     "of its own, and return the image's name and the run's id. Called by the view.",
     input_schema=OPENAI_REQUEST,
     _meta=APP_ONLY,
 )
 GENERATE_CHATGPT = Tool(
     name="generate_chatgpt_image",
-    description="Start creating or editing an image in the app's directory with the image generation built into "
+    description="Start creating or editing an image in the app's workspace with the image generation built into "
     "Codex, in a process of its own, and return the image's name and the run's id. Called by the view.",
     input_schema=CHATGPT_REQUEST,
     _meta=APP_ONLY,
@@ -416,14 +441,14 @@ PREVIEW_CHATGPT = Tool(
 )
 DRAW_SVG = Tool(
     name="draw_svg_image",
-    description="Start drawing or changing an SVG in the app's directory with an agent that draws it in code, in a "
+    description="Start drawing or changing an SVG in the app's workspace with an agent that draws it in code, in a "
     "process of its own, and return the drawing's name and the run's id. Called by the view.",
     input_schema=SVG_REQUEST,
     _meta=APP_ONLY,
 )
 STEER_SVG = Tool(
     name="steer_svg_image",
-    description="Send a message to the agent drawing an SVG in the app's directory while it works, with references "
+    description="Send a message to the agent drawing an SVG in the app's workspace while it works, with references "
     "and marks on its latest render. Called by the view.",
     input_schema={
         "type": "object",
@@ -432,6 +457,7 @@ STEER_SVG = Tool(
             "message": {"type": "string", "description": "What the agent should change, sent as written"},
             "references": REFERENCES,
             "marks": MARKS,
+            **SHOWN,
         },
         "required": ["name", "message"],
     },
@@ -468,19 +494,20 @@ DESIGN_REQUEST = {
         "model": {"type": "string", "description": "The agent's model. Omit it for the agent provider's default"},
         "reasoning_effort": {"type": "string", "description": "That model's reasoning effort"},
         "timeout_seconds": {**SVG_LIMIT, "description": "How long the agent may work; null for no limit"},
+        **SHOWN,
     },
     "required": ["prompt", "name"],
 }
 DESIGN_IMAGE = Tool(
     name="design_image",
-    description="Start the image's agent on a request in the app's directory, in a process of its own: it writes the "
+    description="Start the image's agent on a request in the app's workspace, in a process of its own: it writes the "
     "image calls and makes them. Returns the image's name and the run's id. Called by the view.",
     input_schema=DESIGN_REQUEST,
     _meta=APP_ONLY,
 )
 STEER_IMAGE = Tool(
     name="steer_image",
-    description="Send a message to the agent working on an image in the app's directory while it works, with "
+    description="Send a message to the agent working on an image in the app's workspace while it works, with "
     "references and marks on the image. Called by the view.",
     input_schema={
         "type": "object",
@@ -489,6 +516,7 @@ STEER_IMAGE = Tool(
             "message": {"type": "string", "description": "What the agent should do, sent as written"},
             "references": REFERENCES,
             "marks": MARKS,
+            **SHOWN,
         },
         "required": ["name", "message"],
     },
@@ -505,6 +533,7 @@ EXPORT_SVG = Tool(
             "version": {"type": "string", "description": "The version to render, such as v2. Omit it for the file"},
             "format": {"type": "string", "description": "The extension to render to: .png, .jpg, or .webp"},
             "scale": {"type": "number", "exclusiveMinimum": 0, "description": "Times the drawing's size"},
+            **SHOWN,
         },
         "required": ["name", "format"],
     },
@@ -513,7 +542,7 @@ EXPORT_SVG = Tool(
 CANCEL_IMAGE = Tool(
     name="cancel_image",
     description="Stop the run working on an image, whichever process started it. Called by the view.",
-    input_schema={"type": "object", "properties": {"name": IMAGE_NAME}, "required": ["name"]},
+    input_schema={"type": "object", "properties": {"name": IMAGE_NAME, **SHOWN}, "required": ["name"]},
     _meta=APP_ONLY,
 )
 UPLOAD_FILE = Tool(
@@ -535,9 +564,9 @@ UPLOAD_FILE = Tool(
 )
 READ_LIBRARY = Tool(
     name="read_reference_library",
-    description="The references the app offers besides the images in its directory: what the person pinned, and what "
+    description="The references the app offers besides the images in its workspace: what the person pinned, and what "
     "requests sent from the app were given before. Called by the view.",
-    input_schema={"type": "object", "properties": {}},
+    input_schema={"type": "object", "properties": {**SHOWN}},
     _meta=APP_ONLY,
 )
 LIST_FOLDER = Tool(
@@ -553,6 +582,7 @@ LIST_FOLDER = Tool(
                 "type": "string",
                 "description": "The `after` an earlier page returned, to list what follows it. Omit it for the first",
             },
+            **SHOWN,
         },
         "required": ["path"],
     },
@@ -568,7 +598,8 @@ CHOOSE_FILES = Tool(
             "folder": {
                 "type": "string",
                 "description": "Where the dialog opens. Omit it for where files were last chosen from",
-            }
+            },
+            **SHOWN,
         },
     },
     _meta=APP_ONLY,
@@ -577,29 +608,97 @@ CHOOSE_FOLDER = Tool(
     name="choose_reference_folder",
     description="Ask the person for a folder to pin in their platform's folder dialog, and return its path, or none "
     "when they cancel. Called by the view.",
-    input_schema={"type": "object", "properties": {}},
+    input_schema={"type": "object", "properties": {**SHOWN}},
     _meta=APP_ONLY,
 )
 SHOW_IN_FILE_MANAGER = Tool(
     name="show_in_file_manager",
-    description="Show an image or a folder of the app's directory in the platform's file manager: a folder opened, "
+    description="Show an image or a folder of the app's workspace in the platform's file manager: a folder opened, "
     "and an image selected in its folder. Called by the view.",
     input_schema={
         "type": "object",
         "properties": {
             "name": {
                 "type": "string",
-                "description": "The image's or folder's path in the directory. Omit it for the directory itself",
-            }
+                "description": "The image's or folder's path in .image-design. Omit it for .image-design itself",
+            },
+            **SHOWN,
         },
     },
     _meta=APP_ONLY,
 )
 KEEP_REFERENCE = Tool(
     name="keep_reference",
-    description="Keep an uploaded image with the app's state for its directory, so it can be pinned, and return it "
+    description="Keep an uploaded image with the app's state for its workspace, so it can be pinned, and return it "
     "as the app offers it. It is cleared once the app's state is saved without it among the pins. Called by the view.",
-    input_schema={"type": "object", "properties": {"upload": UPLOAD}, "required": ["upload"]},
+    input_schema={"type": "object", "properties": {"upload": UPLOAD, **SHOWN}, "required": ["upload"]},
+    _meta=APP_ONLY,
+)
+READ_WORKSPACES = Tool(
+    name="read_app_workspaces",
+    description="The workspace the app shows, null before one is picked or once its folder is gone, and the workspaces "
+    "opened in the app, newest first, each with whether it is still a folder. Called by the view.",
+    input_schema={"type": "object", "properties": {}},
+    _meta=APP_ONLY,
+)
+OPEN_WORKSPACE = Tool(
+    name="open_app_workspace",
+    description="Show the images in another workspace, keep it as the one opened last, and return what "
+    "`read_app_workspaces` does. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "The project's top-level directory; its .image-design opens the project too",
+            }
+        },
+        "required": ["path"],
+    },
+    _meta=APP_ONLY,
+)
+CHOOSE_WORKSPACE = Tool(
+    name="choose_app_workspace",
+    description="Ask the person in their platform's folder dialog for a workspace, or for the folder to make a new "
+    "one in, opened where `read_app_workspaces` makes one by default, and return its path, or null when they "
+    "cancel. Called by the view, to open it or make one there.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "parent": {
+                "type": "boolean",
+                "description": "True to ask for the folder a new workspace is made in, rather than a workspace",
+            }
+        },
+    },
+    _meta=APP_ONLY,
+)
+CREATE_WORKSPACE = Tool(
+    name="create_app_workspace",
+    description="Make a new folder for a workspace, `name` in `parent`, show it, keep it as the one opened last, and "
+    "return what `read_app_workspaces` does. A name already taken in `parent` fails. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "The new folder's name"},
+            "parent": {
+                "type": "string",
+                "description": "The folder to make it in, such as `new_in` from `read_app_workspaces`",
+            },
+        },
+        "required": ["name", "parent"],
+    },
+    _meta=APP_ONLY,
+)
+FORGET_WORKSPACE = Tool(
+    name="forget_app_workspace",
+    description="Drop a workspace from those the app offers to switch to, leaving its folder as it is, and return "
+    "what `read_app_workspaces` does. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "As `read_app_workspaces` returns it"}},
+        "required": ["path"],
+    },
     _meta=APP_ONLY,
 )
 READ_OPENAI_KEY = Tool(
@@ -632,6 +731,7 @@ VIEW_TOOLS = [
     COPY_IMAGE,
     IMPORT_IMAGE,
     CHOOSE_IMAGES,
+    CHOOSE_IMAGE_FOLDER,
     DELETE_IMAGE,
     CREATE_FOLDER,
     MOVE_FOLDER,
@@ -666,6 +766,11 @@ VIEW_TOOLS = [
     UPDATE_CONFIG,
     READ_STATE,
     SAVE_STATE,
+    READ_WORKSPACES,
+    OPEN_WORKSPACE,
+    CHOOSE_WORKSPACE,
+    CREATE_WORKSPACE,
+    FORGET_WORKSPACE,
 ]
 VIEW = Resource(uri=VIEW_URI, name="Image Design app", mime_type=APP_MIME_TYPE)
 IMAGE_FILE = ResourceTemplate(
@@ -705,7 +810,7 @@ REFERENCE = ResourceTemplate(
     name="Reference",
     uri_template=f"{REFERENCE_PREFIX}{{+path}}",
     description="A small WebP of an image the app offers as a reference, by its path on this machine: an image in "
-    "the app's directory, one that is pinned, in a folder pinned to show its files, used before, chosen in the file "
+    "the app's workspace, one that is pinned, in a folder pinned to show its files, used before, chosen in the file "
     "dialog, or kept for an image: a version, or a copy of what a run was given. As base64, for the app's view.",
 )
 REFERENCE_FILE = ResourceTemplate(

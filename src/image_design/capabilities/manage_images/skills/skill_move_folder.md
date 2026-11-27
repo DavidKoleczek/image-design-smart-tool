@@ -14,16 +14,16 @@ name = move_folder(name="drafts", new_name="concepts/drafts")
 
 ## Arguments
 
-- `--name`: The folder's path in the directory.
+- `--name`: The folder's path in `.image-design`.
 - `--new-name`: The path to give it.
-- `--directory`: Where images are kept. Defaults to `.image-design` in the working directory.
-- `--data-directory`: Where the tool keeps versions and runs. Defaults to `.agents` in the directory.
+- `--workspace`: The top-level directory of the user's project, whose `.image-design` holds the images. Defaults
+  to the working directory.
 - `--numbered`: When the new name is taken, take the next free name like it, such as `drafts (2)`, instead of failing.
   Two folders are never merged.
 
 ## Result
 
-The folder's new path in the directory.
+The folder's new path in `.image-design`.
 
 ```
 concepts/drafts

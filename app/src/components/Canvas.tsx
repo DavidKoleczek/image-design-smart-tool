@@ -4,12 +4,14 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
 import { Notice } from "@/components/ui/notice";
 import { Timeline } from "@/components/Timeline";
+import { Button } from "@/components/ui/button";
 import { ToolStrip } from "@/components/ToolStrip";
 import { Versions } from "@/components/Versions";
 import { Viewport } from "@/components/Viewport";
 import type { ImageListing, ImageSummary, ImageVersion } from "@/lib/api";
 import { useGuides, type CanvasMode } from "@/lib/canvas";
 import { useDurations, usePlayback } from "@/lib/frames";
+import { bringInChosen, type Chosen } from "@/lib/organize";
 import { previewPicture } from "@/lib/pictures";
 import type { Runs } from "@/lib/runs";
 import type { Shown } from "@/lib/viewed";
@@ -28,7 +30,7 @@ function askedSize(request: Record<string, unknown>): [number, number] | null {
     : null;
 }
 
-/** The middle of the workspace: the image in view, over the versions kept for it. */
+/** The middle of the view: the image in view, over the versions kept for it. */
 export function Canvas({
   listing,
   image,
@@ -40,6 +42,7 @@ export function Canvas({
   blocked,
   steering,
   error,
+  folder,
   onView,
   onChanged,
 }: {
@@ -57,6 +60,8 @@ export function Canvas({
   /** Whether marks can be drawn while a run works, for the next message to the agent drawing the image. */
   steering: boolean;
   error: string | null;
+  /** Where images added while there are none go, "" for the top. */
+  folder: string;
   /** Show the version with this id; null for what the image's file holds. */
   onView: (version: string | null) => void;
   /** Called once the image was changed from here, so it is listed again. */
@@ -65,6 +70,8 @@ export function Canvas({
   const [height, setHeight] = useState(0);
   // Whether the versions show, once the person has said; until then it goes by the room there is.
   const [versionsOpen, setVersionsOpen] = useState<boolean | null>(null);
+  // What could not be added from here, and why.
+  const [left, setLeft] = useState<{ what: string; why: string }[]>([]);
   const section = useCallback((element: HTMLElement | null) => {
     if (!element) {
       return;
@@ -175,6 +182,44 @@ export function Canvas({
               tileClassName="bg-pastel-peach"
               title={
                 listing.images.length === 0 ? "No images yet" : "New image"
+              }
+              action={
+                listing.images.length === 0 && (
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {(["images", "folder"] as Chosen[]).map((chosen) => (
+                        <Button
+                          key={chosen}
+                          variant="secondary"
+                          onClick={() => {
+                            setLeft([]);
+                            void bringInChosen(chosen, folder)
+                              .then(setLeft)
+                              .then(onChanged);
+                          }}
+                        >
+                          <Icon
+                            name={chosen === "folder" ? "folder" : "import"}
+                          />
+                          {chosen === "folder" ? "Add a folder" : "Add images"}
+                        </Button>
+                      ))}
+                    </div>
+                    {left.length > 0 && (
+                      <Notice
+                        onDismiss={() => setLeft([])}
+                        className="max-h-32 w-full overflow-y-auto text-left"
+                      >
+                        {left.map(({ what, why }, index) => (
+                          <p key={index}>
+                            <b className="font-medium text-danger">{what}</b>{" "}
+                            {why}
+                          </p>
+                        ))}
+                      </Notice>
+                    )}
+                  </div>
+                )
               }
               className="w-full max-w-90"
             />
