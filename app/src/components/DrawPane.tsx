@@ -58,6 +58,7 @@ import { describe } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
 import { useSourceFrame } from "@/lib/frames";
 import { sentMark } from "@/lib/marks";
+import { typedProblem } from "@/lib/paths";
 import { earlierPrompts } from "@/lib/prompts";
 import {
   addFiles,
@@ -437,6 +438,10 @@ function problemOf(
     if (target.name === "") {
       return { text: "Give the drawing a name.", quiet: true };
     }
+    const typed = target.from === null && typedProblem(target.name, DRAWING);
+    if (typed) {
+      return { text: typed, quiet: false };
+    }
     const wanted = `${target.name}${DRAWING}`.toLowerCase();
     if (listing?.images.some((image) => image.name.toLowerCase() === wanted)) {
       return { text: "Another image already has that name.", quiet: false };
@@ -526,7 +531,7 @@ export function DrawPane({
             name: freeName(listing, DRAWING, stem(from.image.name)),
             from,
           }
-        : { image: null, name: typedName(typed, [], folder), from: null };
+        : { image: null, name: typedName(typed, folder), from: null };
   const agent = agentOf(options, methods.svg);
   const session = sessionOf(
     editing ? (conversationOf(image)?.provider ?? null) : null,

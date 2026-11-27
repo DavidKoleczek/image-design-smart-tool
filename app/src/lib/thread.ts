@@ -15,7 +15,9 @@ const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const BUILD = /svg_image\.build/;
 const REFERENCE = /(?:^|\/)reference-(\d+)\.\w+$/;
 // The tool's own commands that send an image call, which show as the call and not as a line of shell.
-const GENERATE = /image-design\s+generate-(?:openai|chatgpt)-image/;
+const GENERATE = /image-design\s+generate-(?:openai|chatgpt)-image\b/;
+// Asking one of them for its help sends no image call.
+const HELP = /(?:^|\s)(?:--help|-h)(?=$|[\s"'|;&)])/;
 const NAMED = /--name\s+("[^"]+"|\S+)/;
 const APP = "app";
 const DESIGN = "design";
@@ -99,6 +101,8 @@ export type ImageCall = {
   name: string;
   /** Whether the agent wrote it; a person otherwise, from the app or the command line. */
   agent: boolean;
+  /** The id of the image whose agent wrote it, when an agent did. */
+  parentImage: string | null;
   /** Who sent it, when the agent did not. */
   sender: string;
   method: "openai" | "chatgpt";
@@ -119,6 +123,8 @@ export type ImageCall = {
   error: string | null;
   /** The versions it made. */
   versions: string[];
+  /** The in-progress image it sent last, by its index, while it is still sending. */
+  preview: number | null;
 };
 
 /** What one part of a run shows as, in order. */
@@ -154,7 +160,13 @@ export type Block =
       error: string | null;
       usage: ImageUsage | null;
     }
-  | { kind: "result"; key: string; version: string }
+  | {
+      kind: "result";
+      key: string;
+      version: string;
+      /** The image the version is of, when it is not the one whose conversation this is. */
+      name: string | null;
+    }
   | { kind: "call"; key: string; call: ImageCall }
   | { kind: "note"; key: string; text: string };
 
@@ -276,6 +288,14 @@ function targetOf(name: string, input: Record<string, unknown>): string {
   return "";
 }
 
+/** Whether a command sends an image call with one of the tool's own commands. */
+function generates(command: string): boolean {
+  const found = GENERATE.exec(command);
+  return (
+    found !== null && !HELP.test(command.slice(found.index + found[0].length))
+  );
+}
+
 function wordsOf(
   name: string,
   target: string,
@@ -284,7 +304,7 @@ function wordsOf(
   if (TOOLS[name]?.icon === "terminal" && BUILD.test(command)) {
     return BUILT;
   }
-  if (TOOLS[name]?.icon === "terminal" && GENERATE.test(command)) {
+  if (TOOLS[name]?.icon === "terminal" && generates(command)) {
     return GENERATED;
   }
   if ((name === "Read" && IMAGE.test(target)) || name === "imageView") {
@@ -391,6 +411,7 @@ function runOf(
   };
   const byKey = new Map<string, Call>();
   const results: Block[] = [];
+  const childTimes = children.map((child) => Date.parse(child.time));
   const every: Call[] = [];
   const waiting = [...children].sort(
     (a, b) => Date.parse(a.time) - Date.parse(b.time),
@@ -439,10 +460,7 @@ function runOf(
         const call = toolCall(run.id, event);
         byKey.set(call.key, call);
         every.push(call);
-        // An image call shows as its card, which a child of the run is.
-        if (call.verb !== GENERATED.done || children.length === 0) {
-          stepsIn(event.time).calls.push(call);
-        }
+        stepsIn(event.time).calls.push(call);
       } else if (kind === "tool_result") {
         const call = byKey.get(`${run.id}:${text(data.tool_call_id) ?? ""}`);
         if (call) {
@@ -470,7 +488,12 @@ function runOf(
     } else if (event.kind === "version") {
       const id = text(event.data.id);
       if (id !== null) {
-        results.push({ kind: "result", key: `${run.id}:${id}`, version: id });
+        results.push({
+          kind: "result",
+          key: `${run.id}:${id}`,
+          version: id,
+          name: null,
+        });
       }
     } else if (event.kind === "finished" || event.kind === "failed") {
       const status = facts.status ?? "failed";
@@ -502,6 +525,23 @@ function runOf(
   }
   placeUntil(null);
   run.blocks.push(...results);
+  // A step that sent an image call shows as the call's card, which a child of the run started while it ran is. One
+  // that started none, as one refused before it was sent, stays a step.
+  const sent = (call: Call) =>
+    call.verb === GENERATED.done &&
+    childTimes.some(
+      (time) =>
+        time >= Date.parse(call.started) &&
+        (call.finished === null || time <= Date.parse(call.finished)),
+    );
+  for (const block of run.blocks) {
+    if (block.kind === "steps") {
+      block.calls = block.calls.filter((call) => !sent(call));
+    }
+  }
+  run.blocks = run.blocks.filter(
+    (block) => block.kind !== "steps" || block.calls.length > 0,
+  );
   const lastBlock = run.blocks
     .filter((block) => block.kind !== "result")
     .at(-1);
@@ -619,6 +659,7 @@ function callOf(
     id: facts.id,
     name: text(request.name) ?? image.name,
     agent: text(request.parent) !== null,
+    parentImage: text(request.parent_image),
     sender: sender(request.origin),
     method: chatgpt ? "chatgpt" : "openai",
     model: chatgpt ? CHATGPT_MODEL : (text(request.model) ?? ""),
@@ -646,20 +687,20 @@ function callOf(
               ? "It ran out of time."
               : "It stopped before it finished.")),
     versions: versionsOf(facts),
+    preview: state === "sending" ? (facts.previews.at(-1) ?? null) : null,
   };
 }
 
-/** A call's card, then each version it made of the image whose conversation this is. */
+/** A call's card, then each version it made, of this image or of the other one it was for. */
 function callBlocks(call: ImageCall, image: ImageSummary): Block[] {
   return [
     { kind: "call", key: `${call.id}:call`, call },
-    ...(call.name === image.name
-      ? call.versions.map((version) => ({
-          kind: "result" as const,
-          key: `${call.id}:${version}`,
-          version,
-        }))
-      : []),
+    ...call.versions.map((version) => ({
+      kind: "result" as const,
+      key: `${call.id}:${version}`,
+      version,
+      name: call.name === image.name ? null : call.name,
+    })),
   ];
 }
 

@@ -128,6 +128,12 @@ CAPABILITIES = (
         skill="capabilities/manage_images/skills/skill_list_image_methods.md",
     ),
     Capability(
+        "config",
+        "Show or change your defaults for the tool, such as the order design-image picks an image model in.",
+        model_backed=False,
+        skill="capabilities/config/skills/skill_config.md",
+    ),
+    Capability(
         "restore-image-version",
         "Put an earlier version of an image back in its file.",
         model_backed=False,

@@ -44,6 +44,8 @@ const ENTER_KEY_TOOL = "enter_openai_key";
 const CLEAR_KEY_TOOL = "clear_openai_key";
 const READ_SETTINGS_TOOL = "read_app_settings";
 const SAVE_SETTINGS_TOOL = "save_app_settings";
+const READ_CONFIG_TOOL = "read_config";
+const UPDATE_CONFIG_TOOL = "update_config";
 const READ_STATE_TOOL = "read_app_state";
 const SAVE_STATE_TOOL = "save_app_state";
 const IMAGE_FILE_PREFIX = "image-design://images/";
@@ -287,7 +289,9 @@ export type DesignImageMethod = MethodSetup & {
   /** Those of the agent providers that are installed. */
   models: IntelligenceModel[];
   default: IntelligenceChoice;
-  /** What the agent makes its images with when none is picked: an OpenAI image model's id, or `chatgpt`. */
+  /** Every image model the agent can be given, in the order one is picked when none is. */
+  image_models: string[];
+  /** What the agent makes its images with when none is picked: the first of `image_models` that is set up. */
   default_image_model: string;
 };
 
@@ -1022,6 +1026,27 @@ export async function saveAppSettings(
   return (await structuredFrom(SAVE_SETTINGS_TOOL, {
     settings,
   })) as AppSettings;
+}
+
+/** `ImageDesignConfig` in schemas.py: the person's defaults for the tool, the same in every directory. */
+export type ImageDesignConfig = {
+  /** The image models the image's agent picks from, in order, when it is given none. Those left out follow. */
+  design_image_models: string[];
+};
+
+/** The person's defaults for the tool. */
+export async function readConfig(): Promise<ImageDesignConfig> {
+  return (await structuredFrom(READ_CONFIG_TOOL, {})) as ImageDesignConfig;
+}
+
+/** Change the person's defaults for the tool, and get them all back as kept. */
+export async function updateConfig(
+  config: ImageDesignConfig,
+): Promise<ImageDesignConfig> {
+  return (await structuredFrom(
+    UPDATE_CONFIG_TOOL,
+    config,
+  )) as ImageDesignConfig;
 }
 
 /** What the person last picked in the app for the images in its directory. */

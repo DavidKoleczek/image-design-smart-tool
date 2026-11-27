@@ -16,7 +16,7 @@ from image_design.capabilities.design_image import method as design_method
 from image_design.cli import app
 from image_design.intelligence import interface
 from image_design.schemas import ImageDesignError
-from image_design.shared.images.store import IMAGES, RECORD
+from image_design.shared.images.store import IMAGES, RECORD, new_image
 
 runner = CliRunner()
 ROOT = Path(".image-design")
@@ -141,6 +141,27 @@ async def test_a_moved_image_keeps_its_versions_and_the_next_edit_adds_to_them(i
     by_hand("concepts/cactus (2).png")
     numbered = lib.move_image("Fern.png", "concepts/cactus.png", numbered=True)
     assert (numbered.name, numbered.current) == ("concepts/cactus (3).png", "v1")
+
+
+async def test_a_name_a_listing_hides_or_windows_cuts_short_is_refused_unless_an_image_already_has_it(
+    images_api: FakeImagesAPI,
+) -> None:
+    await made("A cactus.", "cactus.png")
+    # Kept under such a name before the tool refused one.
+    new_image(ROOT.resolve(), DATA.resolve(), ".cactus.png")
+    by_hand(".cactus.png")
+
+    with pytest.raises(ImageDesignError, match="starts with a dot") as hidden:
+        lib.move_image("cactus.png", ".drafts/cactus.png")
+    with pytest.raises(ImageDesignError, match="ends in a dot or a space") as cut:
+        lib.move_image("cactus.png", "drafts./cactus.png")
+    with pytest.raises(ImageDesignError, match="ends in a dot or a space") as folder:
+        lib.create_folder("drafts ")
+    renamed = lib.move_image(".cactus.png", "old-cactus.png")
+
+    assert [error.value.reason for error in (hidden, cut, folder)] == ["invalid-name"] * 3
+    assert renamed.name == "old-cactus.png"
+    assert [summary.name for summary in lib.list_images().images] == ["cactus.png", "old-cactus.png"]
 
 
 async def test_a_deleted_image_is_gone_with_everything_kept_for_it(images_api: FakeImagesAPI) -> None:
@@ -494,6 +515,7 @@ def test_the_methods_say_what_each_takes_and_what_is_left_to_set_up(monkeypatch:
     assert not missing.design.ready
     assert "none is installed" in (missing.design.problem or "")
     assert ready.design.default_image_model == "gpt-image-2.6-sunburst"
+    assert ready.design.image_models == ["gpt-image-2.6-sunburst", "gpt-image-2.6-flare", "chatgpt"]
 
 
 def test_the_agent_is_not_ready_without_a_method_to_make_its_images(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -501,15 +523,17 @@ def test_the_agent_is_not_ready_without_a_method_to_make_its_images(monkeypatch:
     methods = lib.list_image_methods()
     unset = {"ready": False, "problem": "Set it up."}
 
-    design = design_method.describe(methods.openai.model_copy(update=unset), methods.chatgpt.model_copy(update=unset))
-    only_chatgpt = design_method.describe(methods.openai.model_copy(update=unset), methods.chatgpt)
+    design = design_method.describe(
+        methods.openai.model_copy(update=unset), methods.chatgpt.model_copy(update=unset), []
+    )
+    only_chatgpt = design_method.describe(methods.openai.model_copy(update=unset), methods.chatgpt, [])
 
     assert not design.ready
     assert "neither is set up" in (design.problem or "")
     assert only_chatgpt.default_image_model == "chatgpt"
     with pytest.raises(ImageDesignError, match=r"which is not set up\. Set it up\."):
         design_method.image_model(
-            "gpt-image-2.6-flare", "cactus.png", methods.openai.model_copy(update=unset), methods.chatgpt
+            "gpt-image-2.6-flare", "cactus.png", methods.openai.model_copy(update=unset), methods.chatgpt, []
         )
 
 

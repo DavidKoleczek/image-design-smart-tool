@@ -47,7 +47,7 @@ result = await run.result()
 - `references`, `marks`, `mask`: What goes with the request. The agent is shown the references and the image with the marks drawn on it, and is given each as a file it can pass on to a call.
 - `version`, `frame`: The version, and for an animation the frame, the request is about.
 - `resume_session`: Pass `True` to continue the image's agent's last session, or a session ID to continue that one. A new session is told the image's history: each call made on it, written as the command that would make it again, with what it made. A session that goes on is told only what happened since its last turn, such as a call the person made themselves.
-- `image_model`: What the agent makes its images with: an OpenAI image model's ID, through `generate_openai_image`, or `chatgpt`, through `generate_chatgpt_image`. The agent's calls to any other are refused before anything is sent, and a call to `generate_openai_image` that names no model goes to this one. When it is None, the default OpenAI image model when that method is set up, else `chatgpt`. Its method must be set up, and `chatgpt` makes only a `.png`.
+- `image_model`: What the agent makes its images with: an OpenAI image model's ID, through `generate_openai_image`, or `chatgpt`, through `generate_chatgpt_image`. The agent's calls to any other are refused before anything is sent, and a call to `generate_openai_image` that names no model goes to this one. When it is None, the first of the [config's](#config) `design_image_models` whose method is set up and that makes the image's format, then the rest in the tool's own order: the default OpenAI image model first, `chatgpt` last. Its method must be set up, and `chatgpt` makes only a `.png`.
 - `size`, `quality`: What the person wants the image's calls to pass. The agent is told them with the flags that pass them, and chooses its own when they are None. Only with an OpenAI image model, since ChatGPT chooses its own.
 - `agent_provider`, `model`, `reasoning_effort`: The agent. See [Agent providers](#agent-providers).
 - `timeout_seconds`: How long the agent may work. None, the default, sets no limit.
@@ -203,6 +203,25 @@ A request is sent with the key in `OPENAI_API_KEY` when the environment has one,
 `save_openai_api_key` keeps a key in the platform's credential store: Windows Credential Manager, the macOS Keychain, or the Secret Service on Linux. It is written to no file of the tool. On a machine with no such store it raises `ImageDesignError`, and the environment variable is the way.
 `openai_api_key_status` says which key is used and whether one is saved. Nothing returns the key itself.
 `clear_openai_api_key` forgets the saved key.
+
+### Config
+
+```python
+def read_config() -> ImageDesignConfig
+def update_config(design_image_models: list[str] | None = None) -> ImageDesignConfig
+def config_path() -> Path
+```
+
+```python
+class ImageDesignConfig(BaseModel):
+    design_image_models: list[str] = []
+```
+
+The config holds the person's defaults for the tool. It is the same for every directory, kept in `config.json` beside `app-settings.json`, and the app's Settings change it too.
+`update_config` changes what it is given and leaves the rest as it is. It refuses a model the agent cannot be given, and a model kept in the file that the tool no longer offers is passed over.
+`read_config` raises `ImageDesignError` for a file that is there but not valid, rather than going by defaults the person did not set.
+
+- `design_image_models`: The image models `design_image` picks from, in order, when it is given none: each an OpenAI image model's ID, or `chatgpt`. The first whose method is set up and that makes the image's format is picked, so a `.gif` passes over `chatgpt`. Those left out follow in the tool's own order, so an empty list is that order. `list_image_methods` returns the whole order as the design method's `image_models`, and the model it picks now as `default_image_model`.
 
 ## Generate an image with ChatGPT
 
@@ -571,6 +590,7 @@ The other tools are for the view. They are listed only to hosts that render MCP 
 - `keep_reference` copies an upload into `app/pins` in the data directory, so a dropped image can be pinned. The copy is cleared once the state is saved without it among the pins.
 - `read_openai_key`, `enter_openai_key`, and `clear_openai_key` are over `openai_api_key_status`, `save_openai_api_key`, and `clear_openai_api_key`. None takes or returns the key. `enter_openai_key` has the user type it into a window on the machine the server runs on, so the key is in no message between the view, its host, and the server.
 - `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, whether a request's advanced options show, and the pane sizes.
+- `read_config` and `update_config` are over the library's, for the order the image's agent picks an image model in.
 - `read_app_state` and `save_app_state` keep what was last picked for the images in the app's directory, such as the image model and its output options, whether a new image is a still image or an animation, the agent and budgets for a new drawing, the image's agent and its image model, the pinned references and folders, and the images open in tabs, each with whether it is a preview that the next image opened takes.
 
 The view reads images as resources, each as base64. A read is refused unless the listing has that image or version, the version has that frame, or the image's activity has that preview.

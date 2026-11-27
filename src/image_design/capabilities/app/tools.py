@@ -72,6 +72,30 @@ SAVE_SETTINGS = Tool(
     },
     _meta=APP_ONLY,
 )
+READ_CONFIG = Tool(
+    name="read_config",
+    description="The person's defaults for the tool, the same in every directory, such as the order the image's "
+    "agent picks an image model in when it is given none. Called by the view.",
+    input_schema={"type": "object", "properties": {}},
+    _meta=APP_ONLY,
+)
+UPDATE_CONFIG = Tool(
+    name="update_config",
+    description="Change the person's defaults for the tool, leaving those not given as they are, and return them all "
+    "as kept. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "design_image_models": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "The image models the image's agent picks from, in order, when it is given none: each "
+                "an OpenAI image model's ID, or `chatgpt`. Those left out follow in the tool's own order",
+            }
+        },
+    },
+    _meta=APP_ONLY,
+)
 READ_STATE = Tool(
     name="read_app_state",
     description="What the person last picked in the app for the images in its directory. Called by the view.",
@@ -637,6 +661,8 @@ VIEW_TOOLS = [
     CLEAR_OPENAI_KEY,
     READ_SETTINGS,
     SAVE_SETTINGS,
+    READ_CONFIG,
+    UPDATE_CONFIG,
     READ_STATE,
     SAVE_STATE,
 ]

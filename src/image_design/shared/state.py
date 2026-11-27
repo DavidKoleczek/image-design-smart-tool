@@ -1,4 +1,5 @@
-"""The platform's per-user state location for the tool: what its runs keep apart from any image directory."""
+"""The platform's per-user locations for the tool: the state its runs keep apart from any image directory, and the
+person's config."""
 
 import os
 from pathlib import Path
@@ -15,4 +16,15 @@ def state_directory() -> Path:
         base = Path.home() / "Library" / "Application Support"
     else:
         base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    return base / DISTRIBUTION
+
+
+def config_directory() -> Path:
+    """Where the person's config for the tool is kept, where tools like VS Code and uv keep theirs."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     return base / DISTRIBUTION

@@ -641,9 +641,14 @@ class DesignImageMethod(ImageMethodSetup):
 
     models: list[IntelligenceModel] = Field(description="Those of the agent providers that are installed")
     default: IntelligenceChoice
+    image_models: list[str] = Field(
+        description="Every image model the agent can be given, in the order one is picked when none is: the config's "
+        "`design_image_models`, then the rest in the tool's own order"
+    )
     default_image_model: str = Field(
-        description="What the agent makes its images with when none is picked: the default OpenAI image model, or "
-        "`chatgpt` when only ChatGPT is set up"
+        description="What the agent makes its images with when none is picked: the first of `image_models` whose "
+        "method is set up, or the first when none is. For an image whose format that one cannot make, the first that "
+        "can is picked"
     )
 
 
@@ -712,6 +717,10 @@ class ImageMethods(BaseModel):
                         f"Image model: --image-model {design.default_image_model} by default, or another of "
                         f"generate-openai-image's models, or {CHATGPT_IMAGE_MODEL} for generate-chatgpt-image"
                     ),
+                    (
+                        "Image models, the first set up picked when none is: " + ", ".join(design.image_models) + "; "
+                        "`image-design config` changes the order"
+                    ),
                 ],
             ),
         ]
@@ -727,6 +736,23 @@ def _method_lines(command: str, method: ImageMethodSetup, facts: list[str]) -> s
 
 def _with_default(values: list[str], default: str) -> str:
     return ", ".join(f"{value} (default)" if value == default else value for value in values) or "none installed"
+
+
+# endregion
+
+
+# region: Config
+
+
+class ImageDesignConfig(BaseModel):
+    """config.json in the user's config directory: the person's defaults for the tool, the same in every directory."""
+
+    design_image_models: list[str] = Field(
+        default_factory=list,
+        description="The image models `design_image` picks from, in order, when it is given none: each an OpenAI image "
+        "model's ID, or `chatgpt`. The first whose method is set up and that makes the image's format is picked. Those "
+        "left out follow in the tool's own order, so an empty list is that order",
+    )
 
 
 # endregion

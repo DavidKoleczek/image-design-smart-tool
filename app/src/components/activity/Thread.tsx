@@ -26,17 +26,20 @@ const PINNED_PX = 48;
 // How long after the person touched the thread a scroll still counts as theirs.
 const TOUCHED_MS = 1000;
 
-/** A version a run made, as a card that shows it when clicked. */
+/** A version a run made, as a card that shows it when clicked: here, or for another image, in that image's tab. */
 function Result({
   image,
   version,
   viewing,
+  elsewhere,
   onView,
 }: {
   image: ImageSummary;
   version: string;
   /** Whether that version is the one that shows. */
   viewing: boolean;
+  /** Whether it is of another image than the one whose conversation this is. */
+  elsewhere: boolean;
   onView: (version: string) => void;
 }) {
   const kept = image.versions.find((each) => each.id === version);
@@ -47,7 +50,7 @@ function Result({
     <li className="shrink-0">
       <button
         type="button"
-        aria-label={`Show ${image.name} ${kept.id}`}
+        aria-label={`${elsewhere ? "Open" : "Show"} ${image.name} ${kept.id}`}
         aria-current={viewing || undefined}
         onClick={() => onView(kept.id)}
         className={cn(
@@ -71,6 +74,7 @@ function Result({
             {dimensions(kept.width, kept.height)}
           </span>
         </span>
+        {elsewhere && <Icon name="link-out" className="text-ink-muted" />}
       </button>
     </li>
   );
@@ -85,6 +89,8 @@ function RunBlock({
   viewing,
   onView,
   renderCall,
+  images,
+  onOpenVersion,
 }: {
   image: ImageSummary;
   run: Run;
@@ -93,6 +99,8 @@ function RunBlock({
   viewing: string | null;
   onView: (version: string) => void;
   renderCall?: (call: ImageCall) => ReactNode;
+  images: ImageSummary[];
+  onOpenVersion?: (name: string, version: string) => void;
 }) {
   switch (block.kind) {
     case "message":
@@ -127,15 +135,30 @@ function RunBlock({
           usage={block.usage}
         />
       );
-    case "result":
-      return (
+    case "result": {
+      const other = block.name;
+      if (other === null) {
+        return (
+          <Result
+            image={image}
+            version={block.version}
+            viewing={viewing === block.version}
+            elsewhere={false}
+            onView={onView}
+          />
+        );
+      }
+      const owner = images.find((each) => each.name === other);
+      return owner ? (
         <Result
-          image={image}
+          image={owner}
           version={block.version}
-          viewing={viewing === block.version}
-          onView={onView}
+          viewing={false}
+          elsewhere
+          onView={(version) => onOpenVersion?.(other, version)}
         />
-      );
+      ) : null;
+    }
     case "call":
       return <li className="shrink-0">{renderCall?.(block.call)}</li>;
     case "note":
@@ -147,16 +170,27 @@ function RunBlock({
   }
 }
 
-/** Where an image call nobody's agent made starts: its number, when, and who wrote it. */
-function CallDivider({ run }: { run: Run }) {
+/** Where an image call this image's agent did not make starts: its number, when, and who wrote it. */
+function CallDivider({ run, images }: { run: Run; images: ImageSummary[] }) {
   const call = run.blocks.find((block) => block.kind === "call")?.call;
+  const keeper =
+    call?.parentImage &&
+    images.find((each) => each.id === call.parentImage)?.name;
   return (
     <li className="shrink-0">
       <Dimension tone="control">
         <span className="flex gap-2">
           <span>Run {run.number}</span>
           <span>{timeOfDay(run.started)}</span>
-          {call && <span>{call.sender} wrote the call</span>}
+          {call && (
+            <span>
+              {keeper
+                ? `The agent of ${keeper} wrote the call`
+                : call.agent
+                  ? "An agent wrote the call"
+                  : `${call.sender} wrote the call`}
+            </span>
+          )}
         </span>
       </Dimension>
     </li>
@@ -174,6 +208,8 @@ export function Thread({
   viewing,
   onView,
   renderCall,
+  images = [],
+  onOpenVersion,
 }: {
   image: ImageSummary | null;
   runs: Run[];
@@ -184,6 +220,10 @@ export function Thread({
   onView: (version: string) => void;
   /** An image call as a card; a thread of runs that make none leaves it out. */
   renderCall?: (call: ImageCall) => ReactNode;
+  /** Every image, for the other images a call in the thread was for or was made from. */
+  images?: ImageSummary[];
+  /** Bring up a version of another image, in that image's tab. */
+  onOpenVersion?: (name: string, version: string) => void;
 }) {
   const opened = useOpened();
   const list = useRef<HTMLOListElement>(null);
@@ -254,7 +294,7 @@ export function Thread({
           runs.map((run) => (
             <Fragment key={run.id}>
               {run.kind === "call" ? (
-                <CallDivider run={run} />
+                <CallDivider run={run} images={images} />
               ) : (
                 <RunDivider run={run} label={label} />
               )}
@@ -268,6 +308,8 @@ export function Thread({
                   viewing={viewing}
                   onView={onView}
                   renderCall={renderCall}
+                  images={images}
+                  onOpenVersion={onOpenVersion}
                 />
               ))}
             </Fragment>

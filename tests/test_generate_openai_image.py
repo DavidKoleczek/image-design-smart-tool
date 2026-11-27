@@ -181,6 +181,8 @@ async def test_a_sketch_of_several_strokes_is_drawn_as_one_mark_with_a_stroke_th
     [
         ({"name": "cactus.svg"}, "does not end in an image format"),
         ({"name": "../cactus.png"}, "cannot name an image"),
+        ({"name": ".drafts/cactus.png"}, "starts with a dot, which hides the image"),
+        ({"name": "drafts./cactus.png"}, "ends in a dot or a space"),
         ({"name": "sway.gif", "previews": 1}, "A .gif has no previews"),
         ({"frames": 4}, "frames and frame_ms are for a .gif"),
         ({"compression": 50}, "compression is for a .jpg or .webp"),

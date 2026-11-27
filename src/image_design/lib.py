@@ -9,6 +9,7 @@ from image_design.capabilities.app import settings as app_settings
 from image_design.capabilities.app.mcp_server import AppServer
 from image_design.capabilities.chatgpt_image import generate as chatgpt_image
 from image_design.capabilities.chatgpt_image import method as chatgpt_method
+from image_design.capabilities.config import config as config_module
 from image_design.capabilities.design_image import design
 from image_design.capabilities.design_image import method as design_method
 from image_design.capabilities.design_image import steering as design_steering
@@ -36,6 +37,7 @@ from image_design.schemas import (
     NOT_GIVEN,
     AgentProvider,
     ImageActivity,
+    ImageDesignConfig,
     ImageListing,
     ImageMethods,
     ImageRelinking,
@@ -252,8 +254,9 @@ async def design_image(
         resume_session: True to go on in the image's agent's last session, or the ID of an earlier one. A new session
             is told the image's history; one that goes on is told what happened since its last turn.
         image_model: What the agent makes its images with: an OpenAI image model, through `generate_openai_image`,
-            or `chatgpt`, through `generate_chatgpt_image`; its calls to any other are refused. The default OpenAI image
-            model when that method is set up, else `chatgpt`, when None. See `list_image_methods`.
+            or `chatgpt`, through `generate_chatgpt_image`; its calls to any other are refused. When None, the first
+            of the config's `design_image_models` whose method is set up and that makes the image, then the rest in the
+            tool's own order: the default OpenAI image model first, `chatgpt` last. See `list_image_methods`.
         size, quality: What the person wants the image's calls to pass, which the agent is told; its own choice when
             None. Only with an OpenAI image model, since ChatGPT chooses its own.
         agent_provider: `codex` or `claude`; the resumed session's, else the first installed, when None.
@@ -269,7 +272,9 @@ async def design_image(
         `steer()` sends it a message, and `result()` waits for the `ImageResult`. The calls it makes are runs of their
         own, which name it as their `parent`, and `read_image_activity` has them with it.
     """
-    image_model = design_method.image_model(image_model, name, openai_method.describe(), chatgpt_method.describe())
+    image_model = design_method.image_model(
+        image_model, name, openai_method.describe(), chatgpt_method.describe(), read_config().design_image_models
+    )
     return await design.design_image(
         prompt=prompt,
         name=name,
@@ -678,9 +683,35 @@ def list_image_methods() -> ImageMethods:
     Claude is signed in is checked when a request is sent.
     """
     openai, chatgpt = openai_method.describe(), chatgpt_method.describe()
-    return ImageMethods(
-        openai=openai, chatgpt=chatgpt, svg=svg_method.describe(), design=design_method.describe(openai, chatgpt)
-    )
+    design = design_method.describe(openai, chatgpt, read_config().design_image_models)
+    return ImageMethods(openai=openai, chatgpt=chatgpt, svg=svg_method.describe(), design=design)
+
+
+def read_config() -> ImageDesignConfig:
+    """The person's defaults for the tool, the same in every directory: what `config_path` keeps, and the tool's own
+    defaults for anything it does not.
+
+    Raises `ImageDesignError` when the file is there but cannot be read or is not valid, rather than going by defaults
+    the person did not set.
+    """
+    return config_module.read_config(config_module.config_path())
+
+
+def update_config(design_image_models: list[str] | None = None) -> ImageDesignConfig:
+    """Change the person's defaults for the tool, leaving those not given as they are, and return them all as kept.
+
+    Args:
+        design_image_models: The image models `design_image` picks from, in order, when it is given none: each an
+            OpenAI image model's ID, or `chatgpt`. The first whose method is set up and that makes the image's format
+            is picked. Those left out follow in the tool's own order, so an empty list goes back to that order.
+    """
+    return config_module.update_config(config_module.config_path(), design_image_models)
+
+
+def config_path() -> Path:
+    """Where the config is kept: `config.json` in `image-design` in the user's config folder. That is `%APPDATA%` on
+    Windows, `~/Library/Application Support` on macOS, and `$XDG_CONFIG_HOME` or `~/.config` on Linux."""
+    return config_module.config_path()
 
 
 def openai_api_key_status() -> OpenAIKeyStatus:
@@ -805,6 +836,8 @@ def app_server(directory: Path | None = None, data_directory: Path | None = None
         save_openai_api_key,
         clear_openai_api_key,
         app_folders.ask_secret,
+        read_config,
+        update_config,
         app_settings.settings_path(),
     )
 

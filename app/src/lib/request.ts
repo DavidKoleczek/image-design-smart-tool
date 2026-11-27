@@ -9,7 +9,7 @@ import type {
   SentReference,
 } from "@/lib/api";
 import type { CanvasMode } from "@/lib/canvas";
-import { baseName, joined } from "@/lib/paths";
+import { baseName, joined, typedProblem } from "@/lib/paths";
 import { framePicture, type Picture } from "@/lib/pictures";
 import type { Reference } from "@/lib/references";
 import type { Shown } from "@/lib/viewed";
@@ -185,6 +185,34 @@ export function pickedModel(
   return openai.ready || !chatgpt.ready ? openai.default_model : CHATGPT;
 }
 
+/**
+ * The image model the image's agent is given, as `design_image` picks it: the one picked last when it is still
+ * offered, else the first of the person's order that is set up and makes the image named, any image for a new one.
+ */
+export function designModel(
+  picked: string | null,
+  methods: ImageMethods,
+  name: string | null,
+): string {
+  const { openai, chatgpt, design } = methods;
+  if (
+    picked === CHATGPT ||
+    openai.models.some((model) => model.id === picked)
+  ) {
+    return picked as string;
+  }
+  const extension = name === null ? null : extensionOf(name);
+  const methodOf = (model: string) => (model === CHATGPT ? chatgpt : openai);
+  const ready = design.image_models.filter((model) => methodOf(model).ready);
+  const makes = ready.filter(
+    (model) =>
+      extension === null ||
+      !design.formats.includes(extension) ||
+      methodOf(model).formats.includes(extension),
+  );
+  return makes[0] ?? ready[0] ?? design.default_image_model;
+}
+
 /** What the picked options come to for this request: the options the model and the image's format do not take fall back. */
 export type Resolved = {
   method: "openai" | "chatgpt";
@@ -353,22 +381,10 @@ export function stem(name: string): string {
   return extension ? name.slice(0, -extension.length) : name;
 }
 
-/**
- * A new image's name in `folder` as typed, without an extension typed after it, since the format sets that; "" while
- * none is typed.
- */
-export function typedName(
-  typed: string,
-  formats: string[],
-  folder: string,
-): string {
+/** A new image's name in `folder` as typed, before the extension its format sets; "" while none is typed. */
+export function typedName(typed: string, folder: string): string {
   const name = typed.trim().replaceAll("\\", "/");
-  const extension = extensionOf(name);
-  const bare =
-    formats.includes(extension) || extension === DRAWING
-      ? name.slice(0, -extension.length)
-      : name;
-  return bare && joined(folder, bare);
+  return name && joined(folder, name);
 }
 
 /**
@@ -465,6 +481,11 @@ export function problemOf(
   if (!target.image) {
     if (target.name === "") {
       return { text: "Give the image a name.", quiet: true };
+    }
+    const typed =
+      target.from === null && typedProblem(target.name, resolved.format);
+    if (typed) {
+      return loud(typed);
     }
     const wanted = `${target.name}${resolved.format}`.toLowerCase();
     if (listing?.images.some((image) => image.name.toLowerCase() === wanted)) {

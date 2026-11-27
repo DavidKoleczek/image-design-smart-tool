@@ -45,6 +45,7 @@ import { describe } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
 import { useSourceFrame } from "@/lib/frames";
 import { sentMark } from "@/lib/marks";
+import { typedProblem } from "@/lib/paths";
 import { earlierPrompts } from "@/lib/prompts";
 import {
   addFiles,
@@ -60,10 +61,11 @@ import {
   extensionOf,
   folderIn,
   freeNewName,
+  designModel,
   imageModelLabel,
-  pickedModel,
   qualityLabel,
   SIZES,
+  stem,
   typedName,
   type Problem,
 } from "@/lib/request";
@@ -85,7 +87,7 @@ function updateDesign(change: Partial<AppDesignRequest>) {
   }));
 }
 
-function pickImageModel(image_model: string) {
+function pickImageModel(image_model: string | null) {
   updateDesign({ image_model });
 }
 
@@ -222,6 +224,10 @@ function problemOf(
     if (name === null) {
       return { text: "Give the image a name.", quiet: true };
     }
+    const typed = typedProblem(stem(name), extensionOf(name));
+    if (typed) {
+      return { text: typed, quiet: false };
+    }
     const wanted = name.toLowerCase();
     if (listing?.images.some((image) => image.name.toLowerCase() === wanted)) {
       return { text: "Another image already has that name.", quiet: false };
@@ -294,7 +300,16 @@ export function ImagePane({
   const [open, setOpen] = useState({ prompt: true, references: true });
 
   const agent = agentOf(state.design, methods.design);
-  const imageModel = pickedModel(state.design.image_model, methods);
+  const imageModel = designModel(
+    state.design.image_model,
+    methods,
+    image?.name ?? null,
+  );
+  // Left to the order in Settings until the person picks a model, and again once they pick Default.
+  const byDefault = {
+    picked: state.design.image_model === null,
+    onPick: () => pickImageModel(null),
+  };
   const conversation = useMemo(
     () => (image ? conversationOf(image, runs) : []),
     [image, runs],
@@ -317,7 +332,7 @@ export function ImagePane({
     imageModel === CHATGPT ? methods.chatgpt.formats[0] : state.request.format;
   const folder = folderIn(listing, draft.folder);
   const typed = draft.name ?? freeNewName(listing, format, folder);
-  const bare = typedName(typed, methods.openai.formats, folder);
+  const bare = typedName(typed, folder);
   const name = image ? image.name : bare === "" ? null : `${bare}${format}`;
   const marks = image && mode === "markup" ? guides.marks : [];
   const edited = shown && !shown.file ? (shown.version?.id ?? null) : null;
@@ -475,6 +490,7 @@ export function ImagePane({
                 value={imageModel}
                 onChange={pickImageModel}
                 methods={methods}
+                byDefault={byDefault}
               />
             </FormRow>
             <OutputRows methods={methods} imageModel={imageModel} />
@@ -564,6 +580,8 @@ export function ImagePane({
             onOpenImage={() => openImage(call.name, "keep")}
           />
         )}
+        images={listing?.images}
+        onOpenVersion={(name, version) => openImage(name, "keep", version)}
       />
       {working && lastRun && (
         <LiveStrip
@@ -600,6 +618,7 @@ export function ImagePane({
             value={imageModel}
             onChange={pickImageModel}
             methods={methods}
+            byDefault={byDefault}
           />
           <Switch
             checked={session.continuing}

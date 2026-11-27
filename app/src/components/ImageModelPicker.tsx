@@ -17,6 +17,8 @@ import { CHATGPT, CHATGPT_LABEL, imageModelLabel } from "@/lib/request";
 
 // In the model list, opens the dialog about the key rather than picking a model.
 const SET_KEY = "set-openai-key";
+// In the agent's model list, leaves the pick to the order in Settings.
+const DEFAULT = "default";
 const OPENAI_GROUP = "OpenAI API";
 const CHATGPT_GROUP = "ChatGPT";
 
@@ -39,25 +41,46 @@ function modelItems(methods: ImageMethods): SelectItem<string>[] {
   ];
 }
 
+/**
+ * What leaving the image model to the order in Settings comes to, for a picker that offers it: whether it is left to
+ * the order, and a way to leave it.
+ */
+export type ByDefault = { picked: boolean; onPick: () => void };
+
 /** The image model a request goes to, as a field of a form. */
 export function ImageModelSelect({
   value,
   onChange,
   methods,
+  byDefault,
 }: {
   value: string;
   onChange: (model: string) => void;
   methods: ImageMethods;
+  byDefault?: ByDefault;
 }) {
   const key = useKey();
   return (
     <Select
       label="Image model"
-      value={value}
+      value={byDefault?.picked ? DEFAULT : value}
       onChange={(model) =>
-        model === SET_KEY ? openKeyDialog() : onChange(model)
+        model === SET_KEY
+          ? openKeyDialog()
+          : model === DEFAULT
+            ? byDefault?.onPick()
+            : onChange(model)
       }
       items={[
+        ...(byDefault
+          ? [
+              {
+                value: DEFAULT,
+                label: "Default",
+                aside: imageModelLabel(value, methods),
+              },
+            ]
+          : []),
         ...modelItems(methods).filter((item) => item.group === OPENAI_GROUP),
         // Where the person looks when the models are greyed out for want of a key.
         ...(key.status?.source === null
@@ -74,10 +97,12 @@ export function ImageModelPicker({
   value,
   onChange,
   methods,
+  byDefault,
 }: {
   value: string;
   onChange: (model: string) => void;
   methods: ImageMethods;
+  byDefault?: ByDefault;
 }) {
   const key = useKey();
   const items = modelItems(methods);
@@ -91,7 +116,22 @@ export function ImageModelPicker({
         <span className="truncate">{imageModelLabel(value, methods)}</span>
       </MenuTrigger>
       <MenuContent side="top" align="start" className="w-60">
-        <MenuRadioGroup value={value} onValueChange={onChange}>
+        <MenuRadioGroup
+          value={byDefault?.picked ? DEFAULT : value}
+          onValueChange={(model: string) =>
+            model === DEFAULT ? byDefault?.onPick() : onChange(model)
+          }
+        >
+          {byDefault && (
+            <MenuRadioItem value={DEFAULT} closeOnClick>
+              <span className="flex min-w-0 gap-2">
+                <span className="flex-1">Default</span>
+                <span className="truncate text-ink-muted">
+                  {imageModelLabel(value, methods)}
+                </span>
+              </span>
+            </MenuRadioItem>
+          )}
           {[OPENAI_GROUP, CHATGPT_GROUP].map((group) => (
             <MenuGroup key={group}>
               <MenuGroupLabel>{group}</MenuGroupLabel>

@@ -33,6 +33,7 @@ from image_design.schemas import (
     AppState,
     AppTab,
     ImageActivity,
+    ImageDesignConfig,
     ImageDesignError,
     ImageListing,
     ImageMethods,
@@ -223,6 +224,24 @@ async def test_the_view_keeps_the_person_s_settings_in_their_config_directory_fo
     assert bad.structured_content == {"reason": "bad-settings", "image": None}
     assert "The app setting wide.images.size is not valid" in text_of(bad)
     assert AppSettings.model_validate(unreadable.structured_content) == AppSettings()
+
+
+async def test_the_view_changes_the_order_the_agent_picks_an_image_model_in(
+    open_app: Callable[..., lib.AppServer], tmp_path: Path
+) -> None:
+    app_server = open_app(directory=tmp_path)
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        before = await client.call_tool("read_config", {})
+        changed = await client.call_tool("update_config", {"design_image_models": ["chatgpt"]})
+        methods = await client.call_tool("list_image_methods", {})
+        refused = await client.call_tool("update_config", {"design_image_models": ["gpt-image-1"]})
+
+    assert ImageDesignConfig.model_validate(before.structured_content) == ImageDesignConfig()
+    assert ImageDesignConfig.model_validate(changed.structured_content).design_image_models == ["chatgpt"]
+    assert ImageMethods.model_validate(methods.structured_content).design.image_models[0] == "chatgpt"
+    assert refused.structured_content == {"reason": "bad-config", "image": None}
+    assert lib.read_config().design_image_models == ["chatgpt"]
     assert not list(tmp_path.rglob("app-settings.json"))
 
 

@@ -68,7 +68,7 @@ v2 has no buds or spines, and the shading and background match v1.
 
 What the agent says and the tools it calls are printed to stderr. `--json`, `--detach`, the exit codes, and Ctrl+C work as for the generate commands. `steer-image` sends the agent a message, and `cancel-image` stops it and the calls it has going.
 
-The agent runs this installation's `image-design` on its PATH, so each call it makes is a command like those above. `--image-model` picks what it makes its images with: an OpenAI image model, or `chatgpt`. Its calls to any other are refused, and it chooses every other setting of a call itself. Each call is a run of its own that names the agent's run as its `parent`.
+The agent runs this installation's `image-design` on its PATH, so each call it makes is a command like those above. `--image-model` picks what it makes its images with: an OpenAI image model, or `chatgpt`. Without it, the first of `config`'s `design_image_models` that is set up and makes the image is picked. Its calls to any other are refused, and it chooses every other setting of a call itself. Each call is a run of its own that names the agent's run as its `parent`.
 
 ## Other commands
 
@@ -93,6 +93,7 @@ image-design check-svg-image --name <name>                       measure a drawi
 image-design export-svg-image --name <name> --output <path>      render a drawing to a file
 image-design list-image-methods                                  the ways to make an image
 image-design list-intelligence-models                            the models an agent can use
+image-design config [--design-image-models <m,m>]                your defaults, such as the agent's image models
 image-design manifest                                            the tool's manifest
 image-design app [--port <n>]                                    serve the app in a browser page
 image-design mcp                                                 serve the app over stdio as an MCP App

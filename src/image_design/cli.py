@@ -822,6 +822,31 @@ def mcp(
 
 
 @app.command()
+def config(
+    design_image_models: Annotated[
+        str | None,
+        typer.Option(
+            "--design-image-models",
+            metavar="MODEL,MODEL",
+            help="The image models design-image picks from, in order, when given none; '' for the tool's own order.",
+        ),
+    ] = None,
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """Show your defaults for the tool, the same in every directory, or change those given. Deterministic."""
+    if design_image_models is None:
+        kept = lib.read_config()
+    else:
+        models = [model.strip() for model in design_image_models.split(",") if model.strip()]
+        kept = lib.update_config(design_image_models=models)
+    if json:
+        typer.echo(kept.model_dump_json(indent=2))
+        return
+    typer.echo(f"Kept in {lib.config_path()}")
+    typer.echo(f"- design_image_models: {', '.join(kept.design_image_models) or "none, so the tool's own order"}")
+
+
+@app.command()
 def manifest() -> None:
     """Print the tool's manifest as JSON."""
     typer.echo(lib.load_manifest().model_dump_json(indent=2))

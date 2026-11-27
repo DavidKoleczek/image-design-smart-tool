@@ -1,15 +1,13 @@
 """What the app remembers: the person's settings, the same in every directory, and what they picked in each one."""
 
-import os
 from pathlib import Path
-import sys
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from image_design.core.skill import DISTRIBUTION
 from image_design.schemas import AppSettings, AppState, ImageDesignError
 from image_design.shared.images.store import make_data_directory, within, write_atomically
+from image_design.shared.state import config_directory
 
 SETTINGS = "app-settings.json"
 STATE_FOLDER = "app"
@@ -17,14 +15,8 @@ STATE = "app.json"
 
 
 def settings_path() -> Path:
-    """The platform's per-user config location for the app's settings, where tools like VS Code and uv keep theirs."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
-    elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    else:
-        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    return base / DISTRIBUTION / SETTINGS
+    """Where the app's settings are kept: beside the tool's config, in the platform's per-user config location."""
+    return config_directory() / SETTINGS
 
 
 def state_path(data: Path) -> Path:

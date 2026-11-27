@@ -4,8 +4,10 @@ import { ExpandableThumb, ImageViewer } from "@/components/ImageViewer";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { LoadingMark } from "@/components/ui/loading-mark";
+import { Thumb } from "@/components/ui/thumb";
 import { BESIDE, numbered, ROLE_ICONS, ROLE_LABELS } from "@/lib/calls";
 import { usageLabel } from "@/lib/format";
+import { previewPicture } from "@/lib/pictures";
 import { fileName } from "@/lib/references";
 import type { ImageCall } from "@/lib/thread";
 import { between, useElapsed } from "@/lib/time";
@@ -129,6 +131,16 @@ export function CallCard({
               </ExpandableThumb>
             );
           })}
+        </div>
+      )}
+      {/* The canvas shows what a call for this image has made so far, so only one for another image shows it here. */}
+      {!here && call.preview !== null && (
+        <div className="pointer-events-none relative flex items-end gap-2">
+          <Thumb
+            picture={previewPicture({ name: call.name }, call.id, call.preview)}
+            className="size-24"
+          />
+          <span className="mono-annotation text-ink-muted">So far</span>
         </div>
       )}
       <ImageViewer

@@ -123,6 +123,16 @@ async def test_the_image_model_is_the_default_openai_one_when_none_is_picked(age
     assert "generate-openai-image --model gpt-image-2.6-sunburst" in agent.runs[0].request.prompt
 
 
+async def test_the_image_model_is_the_config_s_first_when_none_is_picked(agent: FakeDesignAgent) -> None:
+    await made()
+    lib.update_config(design_image_models=["gpt-image-2.6-flare"])
+
+    run = await designed(agent)
+
+    assert "generate-openai-image --model gpt-image-2.6-flare" in agent.runs[0].request.prompt
+    assert started(lib.read_image_activity("cactus.png").events)[run.run_id]["image_model"] == "gpt-image-2.6-flare"
+
+
 @pytest.mark.parametrize(
     ("given", "called"),
     [("gpt-image-2.6-flare", {"model": "gpt-image-2.6-sunburst"}), ("chatgpt", {})],

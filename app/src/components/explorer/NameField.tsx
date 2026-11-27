@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { nameProblem } from "@/lib/paths";
+import { extensionProblem, nameProblem } from "@/lib/paths";
 import { cn } from "@/lib/utils";
 
 /**
@@ -27,8 +27,12 @@ export function NameField({
   const input = useRef<HTMLInputElement>(null);
   // Keeping or dropping the name takes the field away, which a browser may report as the field being left.
   const settled = useRef(false);
+  // A name left empty stands for the one shown, which is kept as it is.
   const problem =
-    value.trim() === "" ? null : nameProblem(value.trim() + extension);
+    value.trim() === "" || value.trim() === name
+      ? null
+      : (extension && extensionProblem(value, extension)) ||
+        nameProblem(value.trim() + extension);
 
   useEffect(() => {
     input.current?.focus();

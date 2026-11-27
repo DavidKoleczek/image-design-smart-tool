@@ -86,6 +86,38 @@ export function nameProblem(name: string): string | null {
   return null;
 }
 
+// The extensions an image's name can end in, as `KEPT_SUFFIXES` in the library, and `.jpeg`, which is typed for one.
+const IMAGE_EXTENSION = /\.(png|jpe?g|webp|gif|svg)$/i;
+
+/**
+ * Why a name typed beside the extension it ends in cannot be given, when it ends in an image's extension itself, which
+ * would then come before that one; null when it can.
+ */
+export function extensionProblem(
+  typed: string,
+  extension: string,
+): string | null {
+  const ending = IMAGE_EXTENSION.exec(typed.trim())?.[0];
+  return ending === undefined
+    ? null
+    : `Leave out ${ending}. The name already ends in ${extension}.`;
+}
+
+/**
+ * Why a new image cannot be given the path typed for it, which may name folders, before the extension it ends in;
+ * null when it can.
+ */
+export function typedProblem(typed: string, extension: string): string | null {
+  return (
+    extensionProblem(typed, extension) ??
+    `${typed.trim()}${extension}`
+      .split("/")
+      .map((part) => nameProblem(part))
+      .find((problem) => problem !== null) ??
+    null
+  );
+}
+
 /** The name a copy has beside what it is a copy of, as in `cactus - Copy.png`. */
 export function copyName(name: string, folder: boolean): string {
   const [stem, extension] = folder ? [name, ""] : splitName(name);

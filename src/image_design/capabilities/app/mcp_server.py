@@ -89,6 +89,7 @@ from image_design.capabilities.app.tools import (
     PREVIEW_CHATGPT,
     PREVIEW_OPENAI,
     READ_ACTIVITY,
+    READ_CONFIG,
     READ_LIBRARY,
     READ_OPENAI_KEY,
     READ_SETTINGS,
@@ -104,6 +105,7 @@ from image_design.capabilities.app.tools import (
     SHOW_IN_FILE_MANAGER,
     STEER_IMAGE,
     STEER_SVG,
+    UPDATE_CONFIG,
     UPLOAD_FILE,
     VIEW,
     VIEW_IMAGE,
@@ -113,6 +115,7 @@ from image_design.capabilities.app.tools import (
 from image_design.schemas import (
     AppImages,
     ImageActivity,
+    ImageDesignConfig,
     ImageDesignError,
     ImageListing,
     ImageMethods,
@@ -204,6 +207,8 @@ class AppServer:
         save_openai_api_key: Callable[[str], None],
         clear_openai_api_key: Callable[[], None],
         ask_secret: Callable[[str, str], str | None],
+        read_config: Callable[[], ImageDesignConfig],
+        update_config: Callable[[list[str] | None], ImageDesignConfig],
         settings_path: Path,
     ) -> None:
         self.directory, self.data_directory = directories(directory, data_directory)
@@ -242,6 +247,8 @@ class AppServer:
         self._save_openai_api_key = save_openai_api_key
         self._clear_openai_api_key = clear_openai_api_key
         self._ask_secret = ask_secret
+        self._read_config = read_config
+        self._update_config = update_config
         # Whether a file or folder dialog is showing, so a second click does not show another.
         self._asking = False
         # Where the file dialogs open: where files were last chosen from, and until then the app's directory.
@@ -770,6 +777,12 @@ class AppServer:
         if params.name == SAVE_SETTINGS.name:
             settings = await asyncio.to_thread(save_app_settings, arguments["settings"], self.settings_path)
             return _structured(settings.model_dump(mode="json"))
+        if params.name == READ_CONFIG.name:
+            config = await asyncio.to_thread(self._read_config)
+            return _structured(config.model_dump(mode="json"))
+        if params.name == UPDATE_CONFIG.name:
+            config = await asyncio.to_thread(self._update_config, arguments.get("design_image_models"))
+            return _structured(config.model_dump(mode="json"))
         if params.name == READ_STATE.name:
             state = await asyncio.to_thread(read_app_state, self.data_directory)
             return _structured(state.model_dump(mode="json"))

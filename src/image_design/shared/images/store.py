@@ -108,6 +108,10 @@ def image_name(name: str, root: Path, data: Path) -> str:
             "invalid-name",
             name,
         )
+    problem = _unlisted(posix, "the image")
+    # An image that already has such a name still answers to it, so it can be renamed to one that works.
+    if problem is not None and not _known(posix.as_posix(), [*image_names(data), *found_names(root, data)]):
+        raise ImageDesignError(f"{name!r} {problem}. Choose another name.", "invalid-name", name)
     return posix.as_posix()
 
 
@@ -119,12 +123,9 @@ def folder_name(name: str, root: Path, data: Path) -> str:
             f"{name!r} cannot name a folder. Use a path inside the directory, such as 'concepts' or 'concepts/drafts'.",
             "invalid-name",
         )
-    if any(part.startswith(".") for part in posix.parts):
-        raise ImageDesignError(
-            f"{name!r} has a part that starts with a dot, which hides a folder and the images in it from every "
-            "listing. Choose another name.",
-            "invalid-name",
-        )
+    problem = _unlisted(posix, "a folder and the images in it")
+    if problem is not None and not _known(posix.as_posix(), found(root, data).folders):
+        raise ImageDesignError(f"{name!r} {problem}. Choose another name.", "invalid-name")
     folder = (root / posix).resolve()
     if folder.is_relative_to(data) or data.is_relative_to(folder):
         raise ImageDesignError(
@@ -133,6 +134,19 @@ def folder_name(name: str, root: Path, data: Path) -> str:
             "invalid-name",
         )
     return posix.as_posix()
+
+
+def _unlisted(posix: PurePosixPath, what: str) -> str | None:
+    """Why a path with these parts, naming `what`, would not be listed under that name; None when it would."""
+    if any(part.startswith(".") for part in posix.parts):
+        return f"has a part that starts with a dot, which hides {what} from every listing"
+    if any(part.endswith((".", " ")) for part in posix.parts):
+        return "has a part that ends in a dot or a space, which Windows drops from a name"
+    return None
+
+
+def _known(name: str, names: list[str]) -> bool:
+    return name.casefold() in {each.casefold() for each in names}
 
 
 def free_name(name: str, taken: Callable[[str], bool]) -> str:

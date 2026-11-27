@@ -170,23 +170,38 @@ export function openTabs(listing: ImageListing) {
 
 /**
  * Bring an image into view in its tab. One not open yet takes the preview tab, or a tab of its own after the one in
- * view when `how` is `keep` or there is no preview tab. Opening one already open with `keep` keeps its tab.
+ * view when `how` is `keep` or there is no preview tab. Opening one already open with `keep` keeps its tab. With a
+ * `version`, the tab shows that version.
  */
-export function openImage(name: string, how: Opening = "preview") {
+export function openImage(
+  name: string,
+  how: Opening = "preview",
+  version?: string,
+) {
   const open = tabs.tabs.find((tab) => tab.image === name);
   if (open) {
+    const kept = how === "keep" && open.preview;
     set({
       tabs:
-        how === "keep" && open.preview
+        kept || version !== undefined
           ? tabs.tabs.map((tab) =>
-              tab === open ? { ...tab, preview: false } : tab,
+              tab === open
+                ? {
+                    ...tab,
+                    preview: kept ? false : tab.preview,
+                    version: version ?? tab.version,
+                  }
+                : tab,
             )
           : tabs.tabs,
       active: open.id,
     });
     return;
   }
-  const tab = imageTab(name, how === "preview");
+  const tab = {
+    ...imageTab(name, how === "preview"),
+    version: version ?? null,
+  };
   const preview =
     how === "preview" ? tabs.tabs.find((each) => each.preview) : undefined;
   set(

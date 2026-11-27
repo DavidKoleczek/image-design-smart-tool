@@ -59,7 +59,7 @@ export function versionPicture(
 
 /** An in-progress image a run on the image sent before its final one. */
 export function previewPicture(
-  image: ImageSummary,
+  image: Pick<ImageSummary, "name">,
   run: string,
   index: number,
 ): Picture {

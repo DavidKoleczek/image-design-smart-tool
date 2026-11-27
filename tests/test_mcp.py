@@ -63,6 +63,8 @@ VIEW_TOOLS = (
     "clear_openai_key",
     "read_app_settings",
     "save_app_settings",
+    "read_config",
+    "update_config",
     "read_app_state",
     "save_app_state",
 )

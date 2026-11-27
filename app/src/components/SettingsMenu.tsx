@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { ImageModelOrder } from "@/components/ImageModelOrder";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Kbd } from "@/components/ui/kbd";
@@ -15,6 +16,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { APP_NAME, DOCUMENTATION, VERSION } from "@/lib/brand";
 import { app } from "@/lib/host";
 import { openKeyDialog } from "@/lib/key";
+import { useMethods } from "@/lib/methods";
 import { resetLayout, updateSettings, useSettings } from "@/lib/settings";
 
 const ROW =
@@ -29,9 +31,10 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** What is about the app itself: its theme, its keys, its layout, and its docs. */
+/** What is about the app itself: its theme, its keys, its layout, and its docs; and the person's defaults for the tool. */
 export function SettingsMenu({ onShortcuts }: { onShortcuts: () => void }) {
   const { settings, error } = useSettings();
+  const { methods } = useMethods();
   const documentation = DOCUMENTATION;
 
   return (
@@ -61,6 +64,18 @@ export function SettingsMenu({ onShortcuts }: { onShortcuts: () => void }) {
           />
         </Section>
         {error && <Notice className="mx-1 mb-1">{error}</Notice>}
+        {methods && (
+          <>
+            <hr className="-mx-1 my-1 border-line" />
+            <Section label="Agent's Default Image Method">
+              <p className="mb-1.5 text-caption text-ink-muted">
+                The priority order the design-image agent picks an image
+                generation method
+              </p>
+              <ImageModelOrder methods={methods} />
+            </Section>
+          </>
+        )}
         <hr className="-mx-1 my-1 border-line" />
         <PopoverClose className={ROW} onClick={onShortcuts}>
           <span className="flex-1">Keyboard shortcuts</span>

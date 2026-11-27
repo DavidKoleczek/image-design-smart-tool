@@ -657,7 +657,7 @@ function RequestForm({
         : source
       : {
           image: null,
-          name: typedName(typed, methods.openai.formats, folder),
+          name: typedName(typed, folder),
           from: null,
         };
   // Only the guide of the mode the canvas is in goes out, since a request takes marks or a mask and not both.

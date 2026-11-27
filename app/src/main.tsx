@@ -6,6 +6,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Notice } from "@/components/ui/notice";
 import { describe } from "@/lib/errors";
+import { loadConfig } from "@/lib/config";
 import { connect } from "@/lib/host";
 import { loadKey } from "@/lib/key";
 import { loadMethods } from "@/lib/methods";
@@ -16,7 +17,13 @@ const root = createRoot(document.getElementById("root")!);
 
 try {
   await connect();
-  await Promise.all([loadSettings(), loadAppState(), loadMethods(), loadKey()]);
+  await Promise.all([
+    loadSettings(),
+    loadAppState(),
+    loadMethods(),
+    loadKey(),
+    loadConfig(),
+  ]);
   root.render(
     <StrictMode>
       <TooltipProvider>

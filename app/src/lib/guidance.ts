@@ -8,6 +8,7 @@ import {
   kindOf,
   makesNew,
   pickedModel,
+  designModel,
 } from "@/lib/request";
 import { useSheet } from "@/lib/sheets";
 import { useAppState } from "@/lib/state";
@@ -38,10 +39,9 @@ export function useGuidance(
   const picked = tab?.mode ?? "markup";
   const model =
     methods && method === "model"
-      ? pickedModel(
-          sheet ? state.request.model : state.design.image_model,
-          methods,
-        )
+      ? sheet
+        ? pickedModel(state.request.model, methods)
+        : designModel(state.design.image_model, methods, image?.name ?? null)
       : null;
   const designing =
     method === "model" && !sheet && image?.design?.status === "running";

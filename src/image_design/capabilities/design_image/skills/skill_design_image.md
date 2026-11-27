@@ -43,8 +43,9 @@ and gets them as a file it can pass on with `--marks`.
   session ID. `false` by default. A new session is told the image's history, and one that goes on is told what
   happened since its last turn, such as a call you made yourself.
 - `--image-model`: What the agent makes its images with: an OpenAI image model, through `generate-openai-image`, or
-  `chatgpt`, through `generate-chatgpt-image`. Its calls to any other are refused. Defaults to the default OpenAI image
-  model when that method is set up, else `chatgpt`.
+  `chatgpt`, through `generate-chatgpt-image`. Its calls to any other are refused. Defaults to the first of
+  `image-design config`'s `design_image_models` that is set up and makes the image, then the rest in the tool's own
+  order, which starts with the default OpenAI image model and ends with `chatgpt`.
 - `--size`, `--quality`: The size, as `WIDTHxHEIGHT`, and the quality the agent is told to pass to its calls. Its own
   choice when omitted. Only with an OpenAI image model, since ChatGPT chooses its own.
 - `--agent-provider`: `codex` or `claude`. Defaults to the resumed session's, else the first installed.
