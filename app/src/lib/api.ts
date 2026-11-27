@@ -37,6 +37,7 @@ const LIBRARY_TOOL = "read_reference_library";
 const FOLDER_TOOL = "list_reference_folder";
 const CHOOSE_FILES_TOOL = "choose_reference_files";
 const CHOOSE_FOLDER_TOOL = "choose_reference_folder";
+const FILE_MANAGER_TOOL = "show_in_file_manager";
 const KEEP_TOOL = "keep_reference";
 const READ_KEY_TOOL = "read_openai_key";
 const ENTER_KEY_TOOL = "enter_openai_key";
@@ -963,6 +964,14 @@ export async function chooseReferenceFolder(): Promise<string | null> {
     DIALOG_TIMEOUT_MS,
   );
   return structured.path as string | null;
+}
+
+/**
+ * Show an image or a folder of the directory in the platform's file manager: a folder opened, and an image selected in
+ * its folder. Null shows the directory.
+ */
+export async function showInFileManager(name: string | null): Promise<void> {
+  await call(FILE_MANAGER_TOOL, name === null ? {} : { name });
 }
 
 /** Keep an uploaded image with the app's state, so it can be pinned. */

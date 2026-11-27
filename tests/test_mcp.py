@@ -56,6 +56,7 @@ VIEW_TOOLS = (
     "list_reference_folder",
     "choose_reference_files",
     "choose_reference_folder",
+    "show_in_file_manager",
     "keep_reference",
     "read_openai_key",
     "enter_openai_key",

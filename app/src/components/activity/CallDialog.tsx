@@ -1,4 +1,6 @@
-import { ReferenceThumb } from "@/components/ReferenceThumb";
+import { useState } from "react";
+
+import { ExpandableThumb, ImageViewer } from "@/components/ImageViewer";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
@@ -10,7 +12,7 @@ import { between, timeOfDay } from "@/lib/time";
 
 /**
  * An image call in full, as it was recorded: the images in the order they were sent, what each was sent as, the
- * parameters, and the whole prompt.
+ * parameters, and the whole prompt. An image shows large once clicked.
  */
 export function CallDialog({
   call,
@@ -28,6 +30,7 @@ export function CallDialog({
 }) {
   const images = call ? numbered(call.images) : [];
   const used = call ? usageLabel(call.usage) : null;
+  const [shown, setShown] = useState<string | null>(null);
   return (
     <Dialog open={call !== null} onOpenChange={(next) => !next && onClose()}>
       <DialogContent
@@ -58,8 +61,10 @@ export function CallDialog({
                       <Icon name={ROLE_ICONS[image.role]} size={20} />
                     </span>
                   ) : (
-                    <ReferenceThumb
-                      reference={{ path: image.path }}
+                    <ExpandableThumb
+                      path={image.path}
+                      label={fileName(image.path)}
+                      onExpand={() => setShown(image.path)}
                       className="size-10"
                     />
                   )}
@@ -76,6 +81,16 @@ export function CallDialog({
                   </div>
                 </div>
               ))}
+              <ImageViewer
+                items={images
+                  .filter((image) => !BESIDE.includes(image.role))
+                  .map((image) => ({
+                    path: image.path,
+                    name: fileName(image.path),
+                  }))}
+                path={shown}
+                onShow={setShown}
+              />
               <h3 className="mt-3 text-label">Parameters</h3>
               <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-1">
                 {[

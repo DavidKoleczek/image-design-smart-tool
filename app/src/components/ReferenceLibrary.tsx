@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 
 import { ReferencePreview } from "@/components/ReferencePreview";
 import { ReferenceThumb } from "@/components/ReferenceThumb";
@@ -34,6 +34,7 @@ import {
   versionEntry,
   type Reference,
 } from "@/lib/references";
+import { moved, useReorder } from "@/lib/reorder";
 import { flushAppState, updateAppState, useAppState } from "@/lib/state";
 import { folderTree, foldersOf, rowsOf } from "@/lib/tree";
 import { cn } from "@/lib/utils";
@@ -53,26 +54,32 @@ function RailItem({
   label,
   title,
   active = false,
+  dragging = false,
   onClick,
   onRemove,
+  onDragStart,
 }: {
   icon: IconName;
   label: string;
   title?: string;
   active?: boolean;
+  /** Whether it is being dragged to another place in its list. */
+  dragging?: boolean;
   onClick: () => void;
   onRemove?: () => void;
+  onDragStart?: (event: PointerEvent) => void;
 }) {
   return (
-    <li className="group relative">
+    <li className="group relative" onPointerDown={onDragStart}>
       <button
         type="button"
         title={title}
         aria-current={active || undefined}
         onClick={onClick}
         className={cn(
-          "flex h-7 w-full cursor-default items-center gap-2 rounded-sm pr-1.5 pl-2 text-left text-label outline-none hover:bg-hover focus-visible:bg-hover",
+          "flex h-7 w-full cursor-default items-center gap-2 rounded-sm pr-1.5 pl-2 text-left text-label outline-none select-none hover:bg-hover focus-visible:bg-hover",
           active && "bg-accent-soft hover:bg-accent-soft",
+          dragging && "bg-hover",
         )}
       >
         <Icon name={icon} className="text-ink-muted" />
@@ -620,6 +627,18 @@ export function ReferenceLibrary({
       folders: current.folders.filter((folder) => folder.path !== path),
     }));
 
+  const pinnedFolders = useRef<HTMLUListElement>(null);
+  const reorder = useReorder(pinnedFolders, false, (path, index) =>
+    updateAppState((current) => ({
+      ...current,
+      folders: moved(
+        current.folders,
+        current.folders.findIndex((folder) => folder.path === path),
+        index,
+      ),
+    })),
+  );
+
   const tiles = (list: { entry: ReferenceEntry; at?: string }[]) => (
     <ul className="grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2.5">
       {list.map(({ entry, at }) => (
@@ -684,7 +703,7 @@ export function ReferenceLibrary({
                 </MenuContent>
               </Menu>
             </div>
-            <ul className="flex flex-col gap-px">
+            <ul ref={pinnedFolders} className="flex flex-col gap-px">
               {state.folders.map((folder) => (
                 <RailItem
                   key={folder.path}
@@ -696,12 +715,21 @@ export function ReferenceLibrary({
                       : folder.path
                   }
                   active={shows === `${FOLDER}${folder.path}`}
-                  onClick={() =>
-                    folder.shows === "dialog"
-                      ? void choose(folder.path)
-                      : setShowing(`${FOLDER}${folder.path}`)
+                  dragging={reorder.dragging === folder.path}
+                  onClick={() => {
+                    if (reorder.dragged()) {
+                      return;
+                    }
+                    if (folder.shows === "dialog") {
+                      void choose(folder.path);
+                    } else {
+                      setShowing(`${FOLDER}${folder.path}`);
+                    }
+                  }}
+                  onRemove={() =>
+                    !reorder.dragged() && unpinFolder(folder.path)
                   }
-                  onRemove={() => unpinFolder(folder.path)}
+                  onDragStart={(event) => reorder.start(folder.path, event)}
                 />
               ))}
             </ul>

@@ -1,9 +1,12 @@
-import { ReferenceThumb } from "@/components/ReferenceThumb";
+import { useState } from "react";
+
+import { ExpandableThumb, ImageViewer } from "@/components/ImageViewer";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { LoadingMark } from "@/components/ui/loading-mark";
 import { BESIDE, numbered, ROLE_ICONS, ROLE_LABELS } from "@/lib/calls";
 import { usageLabel } from "@/lib/format";
+import { fileName } from "@/lib/references";
 import type { ImageCall } from "@/lib/thread";
 import { between, useElapsed } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -46,7 +49,7 @@ function State({ call }: { call: ImageCall }) {
 
 /**
  * One request to an image model, where it was made in the conversation: what it sends at a glance, and how it went.
- * The whole card opens the call in full.
+ * The whole card opens the call in full, and an image it sends shows large once clicked.
  */
 export function CallCard({
   call,
@@ -66,6 +69,7 @@ export function CallCard({
 }) {
   const images = numbered(call.images);
   const used = call.state === "sent" ? usageLabel(call.usage) : null;
+  const [shown, setShown] = useState<string | null>(null);
   return (
     <div className="relative flex flex-col gap-1.5 rounded-md border border-line bg-panel p-2 hover:bg-hover">
       {/* Under the card's content, so the whole card opens the call. */}
@@ -89,38 +93,51 @@ export function CallCard({
       </div>
       {images.length > 0 && (
         <div className="pointer-events-none relative flex flex-wrap gap-1.5">
-          {images.map((image, index) => (
-            <span
-              key={index}
-              title={ROLE_LABELS[image.role]}
-              className="relative"
-            >
-              {BESIDE.includes(image.role) ? (
+          {images.map((image, index) => {
+            const number = image.number !== null && (
+              <span
+                className={cn(
+                  "absolute bottom-0 left-0 rounded-tr-sm rounded-bl-sm px-1 mono-annotation",
+                  image.role === "source"
+                    ? "bg-accent text-on-accent"
+                    : "bg-panel/90 text-ink",
+                )}
+              >
+                {image.number}
+              </span>
+            );
+            return BESIDE.includes(image.role) ? (
+              <span
+                key={index}
+                title={ROLE_LABELS[image.role]}
+                className="relative"
+              >
                 <span className="grid size-10 place-items-center rounded-sm border border-line bg-field text-ink-muted">
                   <Icon name={ROLE_ICONS[image.role]} size={20} />
                 </span>
-              ) : (
-                <ReferenceThumb
-                  reference={{ path: image.path }}
-                  className="size-10"
-                />
-              )}
-              {image.number !== null && (
-                <span
-                  className={cn(
-                    "absolute bottom-0 left-0 rounded-tr-sm rounded-bl-sm px-1 mono-annotation",
-                    image.role === "source"
-                      ? "bg-accent text-on-accent"
-                      : "bg-panel/90 text-ink",
-                  )}
-                >
-                  {image.number}
-                </span>
-              )}
-            </span>
-          ))}
+                {number}
+              </span>
+            ) : (
+              <ExpandableThumb
+                key={index}
+                path={image.path}
+                label={ROLE_LABELS[image.role]}
+                onExpand={() => setShown(image.path)}
+                className="size-10"
+              >
+                {number}
+              </ExpandableThumb>
+            );
+          })}
         </div>
       )}
+      <ImageViewer
+        items={images
+          .filter((image) => !BESIDE.includes(image.role))
+          .map((image) => ({ path: image.path, name: fileName(image.path) }))}
+        path={shown}
+        onShow={setShown}
+      />
       <p className="pointer-events-none relative line-clamp-3 wrap-break-word whitespace-pre-wrap">
         {call.prompt}
       </p>

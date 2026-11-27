@@ -7,6 +7,7 @@ import { dropDrawing } from "@/lib/drawing";
 import { recordShown, type Brought } from "@/lib/images";
 import { folderOf, movedPath } from "@/lib/paths";
 import { clearReferences } from "@/lib/references";
+import { moved } from "@/lib/reorder";
 import { onGone, onRenamed } from "@/lib/renames";
 import { isDrawing } from "@/lib/request";
 import { appStateNow, updateAppState } from "@/lib/state";
@@ -227,6 +228,18 @@ export function keepTab(id: string) {
         tab.id === id ? { ...tab, preview: false } : tab,
       ),
     });
+  }
+}
+
+/** Put a tab at `index` among the tabs, as when it is dragged along the strip. */
+export function moveTab(id: string, index: number) {
+  const list = moved(
+    tabs.tabs,
+    tabs.tabs.findIndex((tab) => tab.id === id),
+    index,
+  );
+  if (list !== tabs.tabs) {
+    set({ ...tabs, tabs: list });
   }
 }
 

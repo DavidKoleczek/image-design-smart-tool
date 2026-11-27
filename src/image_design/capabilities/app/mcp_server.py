@@ -101,6 +101,7 @@ from image_design.capabilities.app.tools import (
     SAVE_SETTINGS,
     SAVE_STATE,
     SHOW_IMAGE,
+    SHOW_IN_FILE_MANAGER,
     STEER_IMAGE,
     STEER_SVG,
     UPLOAD_FILE,
@@ -198,6 +199,7 @@ class AppServer:
         choose_files: Callable[[Path, str], list[Path]],
         choose_folder: Callable[[Path, str], Path | None],
         choose_save_path: Callable[[Path, str, str], Path | None],
+        show_in_file_manager: Callable[[Path], None],
         openai_api_key_status: Callable[[], OpenAIKeyStatus],
         save_openai_api_key: Callable[[str], None],
         clear_openai_api_key: Callable[[], None],
@@ -235,6 +237,7 @@ class AppServer:
         self._choose_files = choose_files
         self._choose_folder = choose_folder
         self._choose_save_path = choose_save_path
+        self._show_in_file_manager = show_in_file_manager
         self._openai_api_key_status = openai_api_key_status
         self._save_openai_api_key = save_openai_api_key
         self._clear_openai_api_key = clear_openai_api_key
@@ -383,6 +386,20 @@ class AppServer:
             "the file dialog.",
             "not-a-reference",
         )
+
+    def _in_directory(self, name: str | None) -> Path:
+        """The image or folder at `name` in the app's directory, once it is there, or the directory for no name."""
+        if not name:
+            return self.directory
+        posix = PurePosixPath(name.replace("\\", "/"))
+        path = (self.directory / posix).resolve()
+        if Path(name).anchor or ".." in posix.parts or not path.is_relative_to(self.directory) or not path.exists():
+            raise ImageDesignError(
+                f"{name!r} is not an image or folder in {self.directory}. Name one by its path there, such as "
+                "'concepts/cactus.png'.",
+                "no-such-file",
+            )
+        return path
 
     def _kept_for_images(self, path: Path) -> bool:
         """Whether `path` is an image the tool keeps for the app's images: a version, or a copy of what a run was
@@ -726,6 +743,10 @@ class AppServer:
         if params.name == CHOOSE_FOLDER.name:
             picked = await self._in_dialog(self._choose_folder, self._dialog_folder(), CHOOSE_FOLDER_TITLE)
             return _structured({"path": str(picked) if picked else None})
+        if params.name == SHOW_IN_FILE_MANAGER.name:
+            shown = self._in_directory(arguments.get("name"))
+            await asyncio.to_thread(self._show_in_file_manager, shown)
+            return _text(f"Showed {shown} in the file manager.")
         if params.name == KEEP_REFERENCE.name:
             kept = await asyncio.to_thread(self._keep, arguments["upload"])
             return _structured(kept.model_dump(mode="json"))

@@ -1,8 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-import { LargeImage } from "@/components/ReferencePreview";
-import { ReferenceThumb } from "@/components/ReferenceThumb";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { ExpandableThumb, ImageViewer } from "@/components/ImageViewer";
 import { Markdown } from "@/components/ui/markdown";
 import { fileName } from "@/lib/references";
 import type { Call } from "@/lib/thread";
@@ -133,30 +131,17 @@ function Expandable({
 
 /** The image a step looked at, small, and large once it is clicked. */
 function LookedAt({ path }: { path: string }) {
-  const [open, setOpen] = useState(false);
+  const [shown, setShown] = useState<string | null>(null);
   const name = fileName(path);
   return (
     <>
-      <button
-        type="button"
-        aria-label={`Show ${name} large`}
-        title={path}
-        onClick={() => setOpen(true)}
-        className="block cursor-zoom-in rounded-sm focus-visible:focus-ring focus-visible:outline-none"
-      >
-        <ReferenceThumb reference={{ path }} className="size-24" />
-      </button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent
-          title={name}
-          subtitle={path}
-          className="sm:h-full sm:max-w-400"
-        >
-          <div className="relative min-h-64 flex-1 bg-field">
-            {open && <LargeImage path={path} name={name} />}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <ExpandableThumb
+        path={path}
+        label={name}
+        onExpand={() => setShown(path)}
+        className="size-24"
+      />
+      <ImageViewer items={[{ path, name }]} path={shown} onShow={setShown} />
     </>
   );
 }

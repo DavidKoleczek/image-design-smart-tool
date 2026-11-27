@@ -34,6 +34,7 @@ import {
   closeTabsAfter,
   keepTab,
   keyOf,
+  moveTab,
   openImage,
   openNew,
   openTabs,
@@ -229,6 +230,7 @@ function App() {
         onClose={closeTab}
         onCloseOthers={closeOtherTabs}
         onCloseAfter={closeTabsAfter}
+        onMove={moveTab}
         onNew={() => startNew()}
       />
       {tabs.map((each) => (

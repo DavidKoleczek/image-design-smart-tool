@@ -1,4 +1,9 @@
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
@@ -15,6 +20,7 @@ import type { ImageSummary } from "@/lib/api";
 import { useDraft } from "@/lib/drafts";
 import { baseName } from "@/lib/paths";
 import { filePicture } from "@/lib/pictures";
+import { useReorder } from "@/lib/reorder";
 import { keyOf, tabPanelId, type Tab } from "@/lib/tabs";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +30,8 @@ function TabItem({
   current,
   others,
   after,
+  dragging,
+  onDragStart,
   onActivate,
   onKeep,
   onClose,
@@ -37,6 +45,9 @@ function TabItem({
   /** Whether there are other tabs, and whether any of them are after this one. */
   others: boolean;
   after: boolean;
+  /** Whether it is being dragged along the strip. */
+  dragging: boolean;
+  onDragStart: (event: PointerEvent) => void;
   onActivate: () => void;
   onKeep: () => void;
   onClose: () => void;
@@ -58,11 +69,13 @@ function TabItem({
       <ContextMenuTrigger
         ref={item}
         role="presentation"
+        onPointerDown={onDragStart}
         className={cn(
-          "group relative flex h-full max-w-56 min-w-24 shrink-0 items-center border-r border-line",
+          "group relative flex h-full max-w-56 min-w-24 shrink-0 items-center border-r border-line select-none",
           current
             ? "-mb-px bg-canvas text-ink"
             : "text-ink-muted hover:bg-hover",
+          dragging && "z-10 shadow-popover",
         )}
       >
         {current && (
@@ -79,6 +92,8 @@ function TabItem({
           aria-controls={tabPanelId(tab)}
           tabIndex={current ? 0 : -1}
           title={where}
+          // A press brings the tab into view, as in a browser, so one dragged is the one that shows.
+          onPointerDown={(event) => event.button === 0 && onActivate()}
           onClick={onActivate}
           onDoubleClick={onKeep}
           // The middle button closes a tab, as in a browser, rather than starting to scroll.
@@ -130,9 +145,10 @@ function TabItem({
 }
 
 /**
- * The tabs open over the canvas and the request, one for each image being worked on, in the order they opened. A tab
- * opened by a click in Your images is a preview, in italics, which the next image opened takes until something is
- * done in it or it is double-clicked. A right click on a tab closes it, the others, or those after it.
+ * The tabs open over the canvas and the request, one for each image being worked on, in the order they opened or were
+ * dragged into. A tab opened by a click in Your images is a preview, in italics, which the next image opened takes
+ * until something is done in it or it is double-clicked. A right click on a tab closes it, the others, or those after
+ * it.
  */
 export function TabStrip({
   tabs,
@@ -143,6 +159,7 @@ export function TabStrip({
   onClose,
   onCloseOthers,
   onCloseAfter,
+  onMove,
   onNew,
 }: {
   tabs: Tab[];
@@ -154,9 +171,12 @@ export function TabStrip({
   onClose: (id: string) => void;
   onCloseOthers: (id: string) => void;
   onCloseAfter: (id: string) => void;
+  /** Put a tab at an index among the tabs. */
+  onMove: (id: string, index: number) => void;
   onNew: () => void;
 }) {
   const list = useRef<HTMLDivElement>(null);
+  const reorder = useReorder(list, true, onMove);
 
   // The arrows go to the tab beside, which comes into view, as in any list of tabs.
   const keys = (event: KeyboardEvent) => {
@@ -200,9 +220,11 @@ export function TabStrip({
             current={tab.id === active}
             others={tabs.length > 1}
             after={index < tabs.length - 1}
+            dragging={reorder.dragging === tab.id}
+            onDragStart={(event) => reorder.start(tab.id, event)}
             onActivate={() => onActivate(tab.id)}
             onKeep={() => onKeep(tab.id)}
-            onClose={() => onClose(tab.id)}
+            onClose={() => !reorder.dragged() && onClose(tab.id)}
             onCloseOthers={() => onCloseOthers(tab.id)}
             onCloseAfter={() => onCloseAfter(tab.id)}
           />

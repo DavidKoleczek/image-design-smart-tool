@@ -50,7 +50,7 @@ function separatorOf(directory: string): string {
 }
 
 /** The path of the image or folder named `name` on the machine the app runs on, as the listing gives an image's. */
-function pathIn(directory: string, name: string): string {
+export function pathIn(directory: string, name: string): string {
   const separator = separatorOf(directory);
   return (
     directory.replace(/[\\/]+$/, "") +
@@ -305,6 +305,14 @@ export function movedFile(path: string, from: string, to: string): string {
 /** The file of the image named `name` on the machine the app runs on; null before the directory is known. */
 export function fileOf(name: string): string | null {
   return read === null ? null : pathIn(read.listing.directory, name);
+}
+
+/** What the file manager is called on the machine the app runs on, whose directory is `directory`. */
+export function fileManager(directory: string): string {
+  if (separatorOf(directory) === "\\") {
+    return "File Explorer";
+  }
+  return navigator.userAgent.includes("Mac") ? "Finder" : "file manager";
 }
 
 /** A directory as the app shows it, by its last two folders, such as `my-project\.image-design`. */

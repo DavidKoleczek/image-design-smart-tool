@@ -1,5 +1,5 @@
 """Asking the person for files, a folder, where to save, or a secret, in a window of their own machine apart from the
-app's view."""
+app's view, and showing them a file in their file manager."""
 
 import json
 from pathlib import Path
@@ -116,6 +116,22 @@ def choose_save_path(directory: Path, title: str, name: str) -> Path | None:
     answer = _run(CHOOSE_SCRIPT, [str(directory), title, "save", name], "export it with the CLI instead")
     chosen = json.loads(answer or "[]")
     return Path(chosen[0]) if chosen else None
+
+
+def show_in_file_manager(path: Path) -> None:
+    """Show `path` in the platform's file manager: a folder opened, and a file selected in the folder it is in, where
+    the file manager can select one."""
+    folder = path.is_dir()
+    try:
+        if sys.platform == "win32":
+            # Explorer takes `/select,` and the path as one argument, which a list of arguments would quote apart.
+            subprocess.Popen(f'explorer "{path}"' if folder else f'explorer /select,"{path}"')
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)] if folder else ["open", "-R", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path if folder else path.parent)])
+    except OSError as error:
+        raise ImageDesignError(f"Could not open the file manager: {error}. Open {path} in it yourself.") from None
 
 
 def _ask(directory: Path, title: str, kind: str) -> list[Path]:

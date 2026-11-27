@@ -202,39 +202,21 @@ function counted(count: number, one: string): string {
   return `${count} ${one}${count === 1 ? "" : "s"}`;
 }
 
-const KEPT =
-  "every version, every run, any conversation with its agent, and for a drawing its script";
-
 /** What a delete of the entries is asked as: by name for one, and by how many of each for several. */
-function asked(entries: Entry[]): {
-  title: string;
-  subtitle: string | null;
-  text: string;
-} {
+function asked(entries: Entry[]): { title: string; subtitle: string | null } {
   const folders = entries.filter((entry) => entry.folder).length;
   const images = entries.length - folders;
   if (entries.length === 1) {
-    return folders === 1
-      ? {
-          title: "Delete this folder?",
-          subtitle: entries[0].path,
-          text: `Every image in it is deleted, with everything kept for each: ${KEPT}.`,
-        }
-      : {
-          title: "Delete this image?",
-          subtitle: entries[0].path,
-          text: `Its file and everything kept for it are deleted: ${KEPT}.`,
-        };
+    return {
+      title: folders === 1 ? "Delete this folder?" : "Delete this image?",
+      subtitle: entries[0].path,
+    };
   }
   const what = [
     ...(images > 0 ? [counted(images, "image")] : []),
     ...(folders > 0 ? [counted(folders, "folder")] : []),
   ].join(" and ");
-  return {
-    title: `Delete ${what}?`,
-    subtitle: null,
-    text: `Every image${folders > 0 ? ", and every image in a folder," : ""} is deleted, with everything kept for each: ${KEPT}.`,
-  };
+  return { title: `Delete ${what}?`, subtitle: null };
 }
 
 /**
@@ -251,7 +233,7 @@ export function DeleteDialog({
 }) {
   const shown = useLast(entries);
   const cancel = useRef<HTMLButtonElement>(null);
-  const { title, subtitle, text } = asked(shown ?? []);
+  const { title, subtitle } = asked(shown ?? []);
 
   return (
     <Dialog open={entries !== null} onOpenChange={(open) => !open && onClose()}>
@@ -261,11 +243,7 @@ export function DeleteDialog({
         initialFocus={cancel}
         className="sm:max-w-110"
       >
-        <p className="px-5 pt-4 pb-5">{text} This cannot be undone.</p>
-        <DialogFooter className="justify-end">
-          <Button ref={cancel} variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
+        <DialogFooter className="border-t-0">
           <Button
             variant="danger"
             onClick={() => {
@@ -276,6 +254,9 @@ export function DeleteDialog({
             }}
           >
             Delete
+          </Button>
+          <Button ref={cancel} variant="secondary" onClick={onClose}>
+            Cancel
           </Button>
         </DialogFooter>
       </DialogContent>

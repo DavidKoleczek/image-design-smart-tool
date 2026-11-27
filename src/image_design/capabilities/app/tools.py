@@ -555,6 +555,21 @@ CHOOSE_FOLDER = Tool(
     input_schema={"type": "object", "properties": {}},
     _meta=APP_ONLY,
 )
+SHOW_IN_FILE_MANAGER = Tool(
+    name="show_in_file_manager",
+    description="Show an image or a folder of the app's directory in the platform's file manager: a folder opened, "
+    "and an image selected in its folder. Called by the view.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "The image's or folder's path in the directory. Omit it for the directory itself",
+            }
+        },
+    },
+    _meta=APP_ONLY,
+)
 KEEP_REFERENCE = Tool(
     name="keep_reference",
     description="Keep an uploaded image with the app's state for its directory, so it can be pinned, and return it "
@@ -615,6 +630,7 @@ VIEW_TOOLS = [
     LIST_FOLDER,
     CHOOSE_FILES,
     CHOOSE_FOLDER,
+    SHOW_IN_FILE_MANAGER,
     KEEP_REFERENCE,
     READ_OPENAI_KEY,
     ENTER_OPENAI_KEY,

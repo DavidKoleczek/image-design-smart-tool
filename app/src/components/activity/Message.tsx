@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
-import { ReferenceThumb } from "@/components/ReferenceThumb";
+import { ExpandableThumb, ImageViewer } from "@/components/ImageViewer";
 import { markColor } from "@/lib/marks";
+import { fileName } from "@/lib/references";
 import type { Block, Chip } from "@/lib/thread";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +30,10 @@ export function MarkChip({
   );
 }
 
-/** What someone asked of the drawing, or told its agent while it worked, with the marks and references it carried. */
+/**
+ * What someone asked of the drawing, or told its agent while it worked, with the marks and references it carried. A
+ * reference shows large once clicked.
+ */
 export function Message({
   block,
 }: {
@@ -37,6 +41,7 @@ export function Message({
 }) {
   const marks = block.chips.filter((chip) => chip.kind === "mark");
   const references = block.chips.filter((chip) => chip.kind === "reference");
+  const [shown, setShown] = useState<string | null>(null);
   return (
     <li className="flex max-w-[86%] shrink-0 flex-col items-end gap-1 self-end">
       <span className="text-caption text-ink-muted">{block.sender}</span>
@@ -54,15 +59,24 @@ export function Message({
             <MarkChip key={index} chip={chip} />
           ))}
           {references.map((chip) => (
-            <span key={chip.path} title={chip.label}>
-              <ReferenceThumb
-                reference={{ path: chip.path }}
-                className="size-10"
-              />
-            </span>
+            <ExpandableThumb
+              key={chip.path}
+              path={chip.path}
+              label={chip.label}
+              onExpand={() => setShown(chip.path)}
+              className="size-10"
+            />
           ))}
         </div>
       )}
+      <ImageViewer
+        items={references.map((chip) => ({
+          path: chip.path,
+          name: fileName(chip.path),
+        }))}
+        path={shown}
+        onShow={setShown}
+      />
       {block.failed && (
         <span className="text-caption text-danger">
           Not delivered. {block.failed}

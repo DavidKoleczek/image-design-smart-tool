@@ -413,6 +413,29 @@ async def test_the_view_files_images_in_folders_copies_and_imports_them_and_foll
     )
 
 
+async def test_the_view_shows_an_image_a_folder_or_the_directory_in_the_file_manager_and_nothing_outside_it(
+    open_app: Callable[..., lib.AppServer], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "images"
+    (root / "plants").mkdir(parents=True)
+    (root / "plants" / "fern.png").write_bytes(picture(64, 64, "#008000"))
+    (tmp_path / "elsewhere.png").write_bytes(picture(64, 64, "#00ff00"))
+    shown: list[Path] = []
+    app_server = open_app(root)
+    monkeypatch.setattr(app_server, "_show_in_file_manager", shown.append)
+
+    async with Client(f"{app_server.open().url}/mcp") as client:
+        for named in ({"name": "plants/fern.png"}, {"name": "plants"}, {}):
+            await client.call_tool("show_in_file_manager", named)
+        refused = [
+            await client.call_tool("show_in_file_manager", {"name": name})
+            for name in ("plants/cactus.png", "../elsewhere.png", str(tmp_path / "elsewhere.png"))
+        ]
+
+    assert shown == [root / "plants" / "fern.png", root / "plants", root]
+    assert [result.structured_content for result in refused] == [{"reason": "no-such-file", "image": None}] * 3
+
+
 async def test_the_view_reads_an_image_s_file_its_versions_and_small_copies_of_them_and_no_other_file(
     open_app: Callable[..., lib.AppServer], images_api: FakeImagesAPI
 ) -> None:

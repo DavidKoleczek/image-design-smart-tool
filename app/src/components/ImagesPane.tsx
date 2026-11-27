@@ -15,12 +15,13 @@ import {
   chooseImageFiles,
   relinkImage,
   restoreImageVersion,
+  showInFileManager,
   type ImageListing,
   type ImageSummary,
 } from "@/lib/api";
 import { AppError, describe } from "@/lib/errors";
 import { dimensions } from "@/lib/format";
-import { shortDirectory, useArriving } from "@/lib/images";
+import { fileManager, pathIn, shortDirectory, useArriving } from "@/lib/images";
 import type { Change } from "@/lib/operations";
 import {
   bringIn,
@@ -41,7 +42,7 @@ import { appStateNow, updateAppState, useAppState } from "@/lib/state";
 import { failed } from "@/lib/status";
 import { ago, useElapsed } from "@/lib/time";
 import { matching, type Entry } from "@/lib/tree";
-import { cn } from "@/lib/utils";
+import { cn, copyText } from "@/lib/utils";
 
 // The detail columns, each showing once the pane is wide enough to leave the name room.
 const COLUMNS = {
@@ -335,6 +336,54 @@ export function ImagesPane({
       </MenuItem>
     </>
   );
+  // Where an entry is on this machine: its full path to copy, and the file manager to show it in. "" is the directory.
+  const locating = (paths: string[]) => {
+    const directory = listing?.directory;
+    if (directory === undefined) {
+      return null;
+    }
+    const full = paths.map((path) =>
+      path ? pathIn(directory, path) : directory,
+    );
+    const [only] = paths.length === 1 ? paths : [];
+    return (
+      <>
+        <MenuSeparator />
+        <MenuItem
+          onClick={() =>
+            void copyText(full.join("\n")).then(
+              (copied) =>
+                copied ||
+                reportFailure(
+                  full.length === 1
+                    ? "The path was not copied."
+                    : "The paths were not copied.",
+                  "The app could not write to the clipboard.",
+                ),
+            )
+          }
+        >
+          <Icon name="copy" />
+          Copy as path
+        </MenuItem>
+        {only !== undefined && (
+          <MenuItem
+            onClick={() =>
+              void showInFileManager(only || null).catch((cause: unknown) =>
+                reportFailure(
+                  `${only ? baseName(only) : shortDirectory(directory)} was not shown in ${fileManager(directory)}.`,
+                  describe(cause),
+                ),
+              )
+            }
+          >
+            <Icon name="folder" />
+            Open in {fileManager(directory)}
+          </MenuItem>
+        )}
+      </>
+    );
+  };
   const deleting = (
     <>
       <MenuSeparator />
@@ -355,6 +404,7 @@ export function ImagesPane({
           </MenuItem>
           {making("")}
           {adding("")}
+          {locating([""])}
         </>
       );
     }
@@ -381,6 +431,7 @@ export function ImagesPane({
           </MenuItem>
           <MenuSeparator />
           {organizing(path)}
+          {locating(picked)}
           {deleting}
         </>
       );
@@ -397,6 +448,7 @@ export function ImagesPane({
           <MenuSeparator />
           {organizing(path)}
           {renaming(path)}
+          {locating([path])}
           {deleting}
         </>
       );
@@ -433,6 +485,7 @@ export function ImagesPane({
         {organizing(path)}
         {renaming(path)}
         {making(path)}
+        {locating([path])}
         {deleting}
       </>
     );

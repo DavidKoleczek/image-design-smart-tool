@@ -800,6 +800,7 @@ def app_server(directory: Path | None = None, data_directory: Path | None = None
         app_folders.choose_files,
         app_folders.choose_folder,
         app_folders.choose_save_path,
+        app_folders.show_in_file_manager,
         openai_api_key_status,
         save_openai_api_key,
         clear_openai_api_key,
