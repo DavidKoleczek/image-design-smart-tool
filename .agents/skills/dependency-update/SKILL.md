@@ -8,7 +8,7 @@ metadata:
 
 # Dependency update
 
-All dependencies have a cooldown time. `exclude-newer = "5 days"` under `[tool.uv]` in `pyproject.toml`, and `minimumReleaseAge: 7200` (minutes) in `app/pnpm-workspace.yaml`.
+All dependencies have a cooldown time. `exclude-newer = "5 days"` under `[tool.uv]` in `pyproject.toml`, and `minimumReleaseAge: 7200` (minutes) in `app/pnpm-workspace.yaml`. `exclude-newer-package` exempts the OpenAI packages it lists, so take their newest release.
 Report every major version upgrade, such as `1.x` to `2.x` or `2.x` to `3.x`, and check whether dependency and peer ranges allow it. Keep the dependency on its current major unless the user approves the upgrade.
 
 ## Python
@@ -26,13 +26,23 @@ Report every major version upgrade, such as `1.x` to `2.x` or `2.x` to `3.x`, an
    ```
 
    Then prefix the checks below with the same variable and delete `temp/.venv-verify` when done.
+1. A minimum is only worth keeping low if it works. After changing one, or the code that uses a dependency, check the minimums in a throwaway environment. Name each range from `[project.dependencies]` and `[project.optional-dependencies]` beside the wheel with its `all` extra, since `lowest-direct` only lowers what the command names:
+
+   ```bash
+   uv build --wheel -o temp/dist
+   uv venv temp/.venv-floor
+   uv pip install --python temp/.venv-floor --resolution lowest-direct "<each range>" "$(ls temp/dist/*.whl)[all]"
+   ```
+
+   Then check that `image-design --version`, `image-design -h`, and `image-design app` work from `temp/.venv-floor`, with the app opened in a browser. Delete `temp/.venv-floor` after.
 1. Run `uv build --wheel -o temp/dist` and confirm the wheel still holds `SMART_TOOL.md`, every capability's `skill_*.md`, and `capabilities/app/static/`. Delete `temp/dist` after.
 1. `.pre-commit-config.yaml` only has local hooks that run through `uv run` and `build-app.py`, so it has no hook versions to bump. If a remote hook repository is ever added, bump its `rev` to its latest release the same way.
 
 ## App
 
+1. `packageManager` in `app/package.json` pins pnpm, which pnpm switches to inside `app/`. Find its newest release that is at least 5 days old with `npm view pnpm time --json`, and read the release notes since the pinned one, especially a new major's breaking changes. Set that version, then run `pnpm --dir app install`, which pins the same pnpm under `packageManagerDependencies` at the top of `app/pnpm-lock.yaml`.
 1. Run `pnpm --dir app outdated`. Its Latest column already respects the cooldown.
-1. Note every row whose Latest is a new major (for example `typescript` 6 to 7). For each, check its peers with `pnpm view <package>@<version> peerDependencies`, and the peer ranges of the packages that depend on it, so the report can say whether it is possible today. A common blocker is `typescript-eslint` capping `typescript`.
+1. Note every row whose Latest is a new major (for example `typescript` 6 to 7), or a new minor of a `0.x` package, which its caret range also holds back. For each, check its peers with `pnpm view <package>@<version> peerDependencies`, and the peer ranges of the packages that depend on it, so the report can say whether it is possible today. A common blocker is `typescript-eslint` capping `typescript`. Take a `0.x` minor the same way as on the Python side: when its changelog and the peer ranges allow it, leave it out of the exclusions below.
 1. Update everything else, excluding each major by name:
 
    ```bash
@@ -41,10 +51,11 @@ Report every major version upgrade, such as `1.x` to `2.x` or `2.x` to `3.x`, an
 
    Read the output for peer dependency warnings, especially across the React, Vite, and ESLint packages.
 1. Run `pnpm --dir app update <package>` for each excluded major, so it still moves to the newest release within its current range.
-1. If `app/package.json` has a `pnpm.overrides` section, make sure each override still matches the updated versions, then run `pnpm --dir app install`.
+1. If `app/pnpm-workspace.yaml` has an `overrides` section, make sure each override still matches the updated versions, then run `pnpm --dir app install`. pnpm no longer reads the `pnpm` field of `app/package.json`, so overrides there do nothing.
 1. Run `uv run build-app.py`. It installs, lints, formats, type checks, and compiles both the host page and the view into `src/image_design/capabilities/app/static/`. Those compiled files are committed, so they are part of the change.
 
 ## Finish
 
+1. Run `uv run setup-for-dev.py`. It moves each clone in `reference/` to the latest commit of its branch, so what is read matches the versions just taken.
 1. Run `prek run --all-files` and `uv run pytest`; both must pass.
 1. Report what moved on each side, any caps widened, every upgrade held back and why, and whether the user still needs to run `uv sync`.

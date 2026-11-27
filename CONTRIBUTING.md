@@ -130,11 +130,11 @@ uv run build-app.py
 
 #### Dependencies
 
-`.agents/skills/dependency-update/SKILL.md` updates the Python dependencies within their cooldown and caps. Ask an agent to run the dependency-update skill. It is marked internal, so `npx skills add` leaves it out for people installing the tool's skill.
+`.agents/skills/dependency-update/SKILL.md` updates the Python and app dependencies, and the pnpm the app pins, within their cooldown and caps. Ask an agent to run the dependency-update skill. It is marked internal, so `npx skills add` leaves it out for people installing the tool's skill.
 
 #### References
 
-`reference/` holds gitignored clones of the repositories worth reading while developing this tool. `uv run setup-for-dev.py` clones any that are missing.
+`reference/` holds gitignored clones of the repositories worth reading while developing this tool. `uv run setup-for-dev.py` clones any that are missing and moves the rest to the latest commit of their branch, keeping local edits.
 
 #### Conformance
 

@@ -5,8 +5,6 @@ What each argument means and what a capability returns or raises is documented t
 
 `image-design --version` (or `-V`) prints the distribution name and its installed version.
 
-Commands print readable text by default. Where a command also offers structured output, it takes `--json`.
-
 ## Help
 
 ```
