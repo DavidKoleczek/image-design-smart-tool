@@ -2,6 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/client";
 
 import { AppError } from "@/lib/errors";
 import { app } from "@/lib/host";
+import { gotNoAnswer } from "@/lib/restart";
 
 const LIST_TOOL = "list_images";
 const SHOW_TOOL = "show_image";
@@ -54,6 +55,17 @@ const OPEN_WORKSPACE_TOOL = "open_app_workspace";
 const CHOOSE_WORKSPACE_TOOL = "choose_app_workspace";
 const CREATE_WORKSPACE_TOOL = "create_app_workspace";
 const FORGET_WORKSPACE_TOOL = "forget_app_workspace";
+const READ_FOLDERS_TOOL = "read_app_folders";
+const OPEN_FOLDER_TOOL = "open_app_folder";
+const LIST_AGENT_PROVIDERS_TOOL = "list_agent_providers";
+const READ_WINDOWS_APP_TOOL = "read_windows_app";
+const CHANGE_WINDOWS_APP_TOOL = "change_windows_app";
+const CHECK_FOR_UPDATE_TOOL = "check_for_update";
+const INSTALL_UPDATE_TOOL = "install_update";
+const INSTALL_AGENT_PROVIDER_TOOL = "install_agent_provider";
+const LIST_SKILL_AGENTS_TOOL = "list_skill_agents";
+const INSTALL_SKILL_TOOL = "install_skill";
+const REMOVE_SKILL_TOOL = "remove_skill";
 const IMAGE_FILE_PREFIX = "image-design://images/";
 const IMAGE_VERSION_PREFIX = "image-design://versions/";
 const IMAGE_THUMBNAIL_PREFIX = "image-design://thumbnails/";
@@ -534,6 +546,8 @@ const DELETE_TIMEOUT_MS = 30_000;
 const START_TIMEOUT_MS = 120_000;
 // A window that asks the person for something stays open for as long as they take to answer it.
 const DIALOG_TIMEOUT_MS = 3_600_000;
+// Longer than the Windows app gives the skills CLI to get ready, which can mean downloading Node.js first.
+const SKILL_TIMEOUT_MS = 6 * 60_000;
 
 // What a call fails with when the app no longer shows the workspace the view does.
 const WORKSPACE_LOST: ReadonlySet<string | null> = new Set([
@@ -599,10 +613,19 @@ async function call(
   if (moving !== null && !UNHELD.has(name)) {
     await moving;
   }
-  const result = await app.callServerTool(
-    { name, arguments: shown === null ? args : { ...args, workspace: shown } },
-    timeout ? { timeout } : undefined,
-  );
+  let result: CallToolResult;
+  try {
+    result = await app.callServerTool(
+      {
+        name,
+        arguments: shown === null ? args : { ...args, workspace: shown },
+      },
+      timeout ? { timeout } : undefined,
+    );
+  } catch (cause) {
+    gotNoAnswer();
+    throw cause;
+  }
   if (result.isError) {
     const failure = result.structuredContent as
       { reason?: string | null; image?: string | null } | undefined;
@@ -1173,4 +1196,143 @@ export async function forgetAppWorkspace(path: string): Promise<AppWorkspaces> {
   return (await structuredFrom(FORGET_WORKSPACE_TOOL, {
     path,
   })) as AppWorkspaces;
+}
+
+/** `AppFolders` in schemas.py: where the app keeps what it remembers. */
+export type AppFolders = {
+  /** The person's settings and the workspaces they opened, the same everywhere. */
+  settings: string;
+};
+
+/** Where the app keeps what it remembers. */
+export async function readAppFolders(): Promise<AppFolders> {
+  return (await structuredFrom(READ_FOLDERS_TOOL, {})) as AppFolders;
+}
+
+/** Open the folder of the person's settings in their file manager. */
+export async function openAppFolder(folder: "settings"): Promise<void> {
+  await call(OPEN_FOLDER_TOOL, { folder });
+}
+
+/** `AgentProviderStatus` in schemas.py. */
+export type AgentProviderStatus = {
+  agent_provider: string;
+  installed: boolean;
+  signed_in: boolean;
+  /** How, in the runtime's own words; null when not signed in. */
+  signed_in_with: string | null;
+  /** What keeps it from running and how to fix that, worded for an agent; null when it can run. */
+  problem: string | null;
+};
+
+/** Each agent provider, whether it is installed, and whether and how it is signed in. */
+export async function listAgentProviders(): Promise<AgentProviderStatus[]> {
+  const structured = await structuredFrom(LIST_AGENT_PROVIDERS_TOOL, {});
+  if (!Array.isArray(structured.agent_providers)) {
+    throw new AppError(
+      `\`${LIST_AGENT_PROVIDERS_TOOL}\` returned no agent providers. Check that the server is this version of Image Design.`,
+    );
+  }
+  return structured.agent_providers as AgentProviderStatus[];
+}
+
+/** `SkillMode` in schemas.py: how an agent with a folder of its own gets the skill, a link or a copy of its own. */
+export type SkillMode = "symlink" | "copy";
+
+/** `WindowsApp` in schemas.py: the Windows app by the clock, when it is what started the server. */
+export type WindowsApp = {
+  version: string;
+  /** The newer version there is to update to. */
+  update: string | null;
+  updating: boolean;
+  start_at_sign_in: boolean;
+  /** Its Agent Skill, when it is installed. */
+  skill: {
+    /** The agents it is for, as the skills CLI names them. */
+    agents: string[];
+    mode: SkillMode;
+  } | null;
+};
+
+/** `SkillAgent` in schemas.py: an agent the skills CLI knows, which the Agent Skill can be installed for. */
+export type SkillAgent = {
+  id: string;
+  name: string;
+  /** Where it reads its skills from. */
+  folder: string;
+  /** Whether it reads the shared folder, which always has the skill. */
+  shares: boolean;
+  /** Whether it is on this computer. */
+  detected: boolean;
+};
+
+/** `SkillAgents` in schemas.py. */
+export type SkillAgents = {
+  /** The person's folder, which the agents' folders are in. */
+  home: string;
+  shared: string;
+  agents: SkillAgent[];
+  /** The ids of the agents on this computer that have the skill. */
+  installed: string[];
+};
+
+/** The Windows app, or null when the server was started any other way. */
+export async function readWindowsApp(): Promise<WindowsApp | null> {
+  const structured = await structuredFrom(READ_WINDOWS_APP_TOOL, {});
+  return (structured.windows_app as WindowsApp | null) ?? null;
+}
+
+/** Change the Windows app's settings that are given, leaving the others. */
+export async function changeWindowsApp(changes: {
+  start_at_sign_in?: boolean;
+}): Promise<WindowsApp> {
+  return (await structuredFrom(CHANGE_WINDOWS_APP_TOOL, changes)) as WindowsApp;
+}
+
+/** Have the Windows app look for a newer version now. */
+export async function checkForUpdate(): Promise<WindowsApp> {
+  return (await structuredFrom(CHECK_FOR_UPDATE_TOOL, {})) as WindowsApp;
+}
+
+/** Ends the server once the newer version is downloaded, and starts the new one on the same port. */
+export async function installUpdate(): Promise<WindowsApp> {
+  return (await structuredFrom(INSTALL_UPDATE_TOOL, {})) as WindowsApp;
+}
+
+/** Ends the server, installs the tool again with the agent provider in a window of its own, and starts it again. */
+export async function installAgentProvider(
+  agentProvider: string,
+): Promise<WindowsApp> {
+  return (await structuredFrom(INSTALL_AGENT_PROVIDER_TOOL, {
+    agent_provider: agentProvider,
+  })) as WindowsApp;
+}
+
+/** The first time, the Windows app gets the skills CLI ready first, which can take minutes. */
+export async function listSkillAgents(): Promise<SkillAgents> {
+  return (await structuredFrom(
+    LIST_SKILL_AGENTS_TOOL,
+    {},
+    SKILL_TIMEOUT_MS,
+  )) as SkillAgents;
+}
+
+/** Install the skill in the shared folder and for these agents, and take it from the others. */
+export async function installSkill(
+  agents: string[],
+  mode: SkillMode,
+): Promise<WindowsApp> {
+  return (await structuredFrom(
+    INSTALL_SKILL_TOOL,
+    { agents, mode },
+    SKILL_TIMEOUT_MS,
+  )) as WindowsApp;
+}
+
+export async function removeSkill(): Promise<WindowsApp> {
+  return (await structuredFrom(
+    REMOVE_SKILL_TOOL,
+    {},
+    SKILL_TIMEOUT_MS,
+  )) as WindowsApp;
 }

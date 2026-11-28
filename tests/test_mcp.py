@@ -73,6 +73,17 @@ VIEW_TOOLS = (
     "choose_app_workspace",
     "create_app_workspace",
     "forget_app_workspace",
+    "read_app_folders",
+    "open_app_folder",
+    "list_agent_providers",
+    "read_windows_app",
+    "change_windows_app",
+    "check_for_update",
+    "install_update",
+    "install_agent_provider",
+    "list_skill_agents",
+    "install_skill",
+    "remove_skill",
 )
 IMAGE_RESOURCES = (
     "image-design://images/{+name}",

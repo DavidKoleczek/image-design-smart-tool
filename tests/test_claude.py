@@ -27,7 +27,7 @@ from claude_agent_sdk import (
 )
 
 from image_design.intelligence import claude as adapter
-from image_design.intelligence.claude import ClaudeIntelligence, FolderSessionStore, signed_in, skills_plugin
+from image_design.intelligence.claude import ClaudeIntelligence, FolderSessionStore, account_sign_in, skills_plugin
 from image_design.intelligence.schemas import AgentEvent, AgentRequest, HostWorkspace
 from image_design.schemas import DEFAULT_REASONING_EFFORT, ImageDesignError
 
@@ -177,6 +177,8 @@ class FakeWorld:
 @pytest.fixture
 def world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., FakeWorld]:
     monkeypatch.setattr(adapter, "state_directory", lambda agent_provider: tmp_path / "state" / agent_provider)
+    # Whether this machine has Git Bash would otherwise decide the shell a run gets on Windows.
+    monkeypatch.setattr(adapter, "git_bash", lambda: Path("C:/Program Files/Git/bin/bash.exe"))
 
     def install(*scripts: Script) -> FakeWorld:
         fake = FakeWorld(*scripts)
@@ -657,18 +659,84 @@ def test_preflight_names_what_to_configure(
 
 
 @pytest.mark.parametrize(
-    ("account", "expected"),
+    ("account", "how"),
     [
-        ({"apiKeySource": "ANTHROPIC_API_KEY", "tokenSource": "none", "apiProvider": "firstParty"}, True),
-        ({"tokenSource": "claude.ai"}, True),
-        ({"subscriptionType": "max"}, True),
-        ({"apiProvider": "bedrock"}, True),
-        ({"tokenSource": "none", "apiProvider": "firstParty"}, False),
-        ({}, False),
+        (
+            {"apiKeySource": "ANTHROPIC_API_KEY", "tokenSource": "none", "apiProvider": "firstParty"},
+            "API key from ANTHROPIC_API_KEY",
+        ),
+        (
+            {"apiKeySource": "/login managed key", "tokenSource": "none", "apiProvider": "firstParty"},
+            "Anthropic Console account",
+        ),
+        ({"tokenSource": "claude.ai"}, "Token from claude.ai"),
+        ({"email": "user@example.com", "subscriptionType": "max", "apiProvider": "firstParty"}, "max"),
+        ({"apiProvider": "bedrock"}, "Cloud provider bedrock"),
+        ({"tokenSource": "none", "apiProvider": "firstParty"}, None),
+        ({}, None),
     ],
+    ids=["api-key", "console", "token", "subscription", "cloud-provider", "none", "nothing"],
 )
-def test_signed_in(account: dict[str, Any], expected: bool) -> None:
-    assert signed_in(account) is expected
+def test_how_the_account_is_signed_in_leaves_its_email_out(account: dict[str, Any], how: str | None) -> None:
+    assert account_sign_in(account) == how
+
+
+def test_signed_in_with_says_how(world: Callable[..., FakeWorld]) -> None:
+    world().account = {"subscriptionType": "max", "apiProvider": "firstParty"}
+
+    assert adapter.signed_in_with() == "max"
+
+
+@pytest.mark.parametrize(
+    ("git_bash", "shell"),
+    [(Path("C:/Program Files/Git/bin/bash.exe"), "Bash"), (None, adapter.POWERSHELL_TOOL)],
+    ids=["git-bash", "no-git-bash"],
+)
+async def test_on_windows_the_agent_runs_commands_in_git_bash_or_else_in_powershell(
+    world: Callable[..., FakeWorld],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    git_bash: Path | None,
+    shell: str,
+) -> None:
+    fake = world(answers("done"))
+    monkeypatch.setattr(adapter.sys, "platform", "win32")
+    monkeypatch.setattr(adapter, "git_bash", lambda: git_bash)
+
+    await (await ClaudeIntelligence().start(request(tmp_path, writable=True))).result()
+
+    [options] = fake.options
+    assert options.tools == ["Read", "Glob", "Grep", shell, "WebSearch", "WebFetch", "Edit", "Write"]
+    assert options.env.get("CLAUDE_CODE_USE_POWERSHELL_TOOL") == (None if shell == "Bash" else "1")
+    assert options.env["DISABLE_TELEMETRY"] == "1"
+
+
+def test_git_bash_is_found_where_claude_code_looks_for_it_in_its_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    named, installed, beside = (
+        tmp_path / "named" / "bash.exe",
+        tmp_path / "Git/bin/bash.exe",
+        tmp_path / "Git2/bin/bash.exe",
+    )
+    for path in (named, installed, beside):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"")
+    git = tmp_path / "Git2" / "cmd" / "git.exe"
+    monkeypatch.setattr(adapter, "GIT_BASH_INSTALLS", (tmp_path / "missing" / "bash.exe", installed))
+    monkeypatch.setattr(adapter.shutil, "which", lambda name: str(git) if name == "git" else None)
+    found = []
+
+    monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", str(named))
+    found.append(adapter.git_bash())
+    monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", str(tmp_path / "named" / "git.exe"))
+    found.append(adapter.git_bash())
+    installed.unlink()
+    found.append(adapter.git_bash())
+    beside.unlink()
+    found.append(adapter.git_bash())
+
+    assert found == [named, installed, beside, None]
 
 
 async def test_a_folder_session_store_keeps_transcripts_it_can_load_list_and_delete(tmp_path: Path) -> None:

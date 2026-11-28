@@ -10,6 +10,7 @@ Install:
 - [uv](https://docs.astral.sh/uv/getting-started/installation/): Manages Python environments
 - [prek](https://github.com/j178/prek): Used for precommit hooks. Recommended to install through PyPI/uv with `uv tool install prek`. Use `uv tool upgrade prek` to update it.
 - [Node.js](https://nodejs.org/) 22+ and [pnpm](https://pnpm.io/installation)
+- [Rust](https://rustup.rs/), optional for the Windows app.
 - [Codex CLI](https://github.com/openai/codex) [signed in](https://developers.openai.com/codex/auth) with ChatGPT or an API key, for intelligent features through the `codex` agent provider.
 - [`ANTHROPIC_API_KEY` or a cloud provider's credentials](https://code.claude.com/docs/en/agent-sdk/quickstart), for intelligent features through the `claude` agent provider.
 - An [`OPENAI_API_KEY`](https://platform.openai.com/api-keys), only to try `generate-openai-image` for real. The tests fake the Images API. Put it in a `.env` at the repository root, which is gitignored, and load it with `uv run --env-file .env image-design ...`.
@@ -18,7 +19,7 @@ Install:
 
 1. Clone this repository and change into it.
 
-1. Run the development installation script (sets up the uv env, precommit hooks, and the `reference/` clones):
+1. Run the development installation script (sets up the uv env, precommit hooks, the app's dependencies, the Windows app's crates, and the `reference/` clones):
 
    ```bash
    uv run setup-for-dev.py
@@ -128,9 +129,48 @@ Check and compile both into the package, then commit them:
 uv run build-app.py
 ```
 
+#### Windows App
+
+`windows/` holds the Windows installer and app described in [docs/03-windows-app.md](docs/03-windows-app.md).
+
+Format, lint, test, and build `windows/target/release/ImageDesignSetup.exe`:
+
+```bash
+uv run build-windows.py
+```
+
+To try the exe without installing anything for real, use `--sandbox` and everything will be installed into that folder instead. The registry entries go to `HKCU\Software\ImageDesignSandbox`, which Windows ignores. uv's cache and Pythons are shared with the machine, so the tool isn't downloaded again. In a sandbox the tool keeps no OpenAI API key, since the platform's credential store is the machine's; `OPENAI_API_KEY` in the environment is still used.
+
+```powershell
+# Open setup
+windows\target\release\ImageDesignSetup.exe --sandbox temp\windows-sandbox
+# Or install without the window. `| Out-Host` makes PowerShell wait for the exe and show what it prints
+windows\target\release\ImageDesignSetup.exe --sandbox temp\windows-sandbox --install --workspace temp\windows-sandbox\workspace --desktop-shortcut | Out-Host
+# Open the app, which stays in the tray until Quit
+temp\windows-sandbox\install\ImageDesign.exe --sandbox temp\windows-sandbox
+# Uninstall
+windows\target\release\ImageDesignSetup.exe --sandbox temp\windows-sandbox --uninstall --quiet | Out-Host
+```
+
+Without `--sandbox`, the same commands install and uninstall for real.
+
+The app looks for a newer version on GitHub. To try an update in the sandbox, set `IMAGE_DESIGN_SANDBOX_RELEASE` to an address that answers as GitHub's API does for a repository's latest release. It is read only in a sandbox.
+
+In VS Code, the `Windows app (sandbox)` launch configuration debugs setup in the sandbox, and `Windows app tray (sandbox)` debugs the app once it is installed there.
+
+#### Releases
+
+A release is made when the version changes on main. Bump it, set the same version in `src/image_design/SMART_TOOL.md` and in `metadata.version` of `skills/image-design/SKILL.md`, commit those with `pyproject.toml` and `uv.lock`, and push:
+
+```bash
+uv version --bump patch
+```
+
+The Release workflow checks that `uv.lock` and the app's committed build are current, builds `ImageDesignSetup.exe`, and publishes it as the release `v<version>`. It doesn't run the tests or the other checks, so run those before pushing. Installed apps offer the update within a day.
+
 #### Dependencies
 
-`.agents/skills/dependency-update/SKILL.md` updates the Python and app dependencies, and the pnpm the app pins, within their cooldown and caps. Ask an agent to run the dependency-update skill. It is marked internal, so `npx skills add` leaves it out for people installing the tool's skill.
+`.agents/skills/dependency-update/SKILL.md` updates the Python, app, and Windows app dependencies, the pnpm the app pins, and the release workflow's actions, within their cooldown and caps. Ask an agent to run the dependency-update skill. It is marked internal, so `npx skills add` leaves it out for people installing the tool's skill.
 
 #### References
 

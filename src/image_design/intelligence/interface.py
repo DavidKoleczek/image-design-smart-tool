@@ -108,6 +108,20 @@ def resolve_intelligence(agent_provider: AgentProvider | None = None, model: str
             return ClaudeIntelligence()
 
 
+def agent_signed_in_with(agent_provider: AgentProvider) -> str:
+    """How the installed agent provider's runtime is signed in, in its own words; raises `ImageDesignError` naming
+    what to configure when it is not, or why the runtime did not start."""
+    match agent_provider:
+        case "codex":
+            from image_design.intelligence import codex
+
+            return codex.signed_in_with()
+        case "claude":
+            from image_design.intelligence import claude
+
+            return claude.signed_in_with()
+
+
 def select_intelligence(
     intelligence: Intelligence | None,
     agent_provider: AgentProvider | None,

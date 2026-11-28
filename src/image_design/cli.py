@@ -896,6 +896,16 @@ def list_intelligence_models(
         typer.echo(lib.list_intelligence_models())
 
 
+@app.command()
+def list_agent_providers(
+    json: Annotated[bool, typer.Option("--json", help=JSON_HELP)] = False,
+) -> None:
+    """The agent providers agentic capabilities run through, whether each is installed and signed in, and how.
+    Deterministic."""
+    providers = lib.list_agent_providers()
+    typer.echo(providers.model_dump_json(indent=2) if json else providers.describe())
+
+
 async def _follow(starting: Coroutine[Any, Any, lib.ImageRun], detach: bool, as_json: bool) -> int:
     """Follow a run to its end, and the exit code its end calls for."""
     run = await starting

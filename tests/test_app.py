@@ -469,6 +469,24 @@ async def test_the_view_shows_an_image_a_folder_or_the_image_directory_in_the_fi
     assert [result.structured_content for result in refused] == [{"reason": "no-such-file", "image": None}] * 3
 
 
+async def test_the_view_names_the_settings_folder_and_opens_it_even_before_anything_is_kept_there(
+    monkeypatch: pytest.MonkeyPatch, config_directory: Path, tmp_path: Path
+) -> None:
+    shown: list[Path] = []
+    app_server = lib.app_server(tmp_path)
+    monkeypatch.setattr(app_server, "_show_in_file_manager", shown.append)
+    settings = config_directory / "image-design"
+
+    async with Client(app_server.server) as client:
+        folders = await client.call_tool("read_app_folders", {})
+        opened = await client.call_tool("open_app_folder", {"folder": "settings"})
+
+    assert folders.structured_content == {"settings": str(settings)}
+    assert opened.structured_content == {"opened": str(settings)}
+    assert shown == [settings]
+    assert settings.is_dir()
+
+
 async def test_the_view_reads_an_image_s_file_its_versions_and_small_copies_of_them_and_no_other_file(
     open_app: Callable[..., lib.AppServer], images_api: FakeImagesAPI
 ) -> None:

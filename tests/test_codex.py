@@ -643,6 +643,33 @@ def test_preflight_passes_when_signed_in(world: Callable[..., FakeWorld]) -> Non
     assert CodexIntelligence().implementation.startswith("openai-codex ")
 
 
+@pytest.mark.parametrize(
+    ("account", "how"),
+    [
+        (
+            {
+                "account": {"type": "chatgpt", "email": "user@example.com", "planType": "plus"},
+                "requiresOpenaiAuth": True,
+            },
+            "ChatGPT",
+        ),
+        ({"account": {"type": "apiKey"}, "requiresOpenaiAuth": True}, "API key"),
+        ({"account": {"type": "amazonBedrock"}, "requiresOpenaiAuth": False}, "Amazon Bedrock"),
+        ({"account": None, "requiresOpenaiAuth": False}, "Model provider in config.toml"),
+    ],
+    ids=["chatgpt", "api-key", "bedrock", "custom-provider"],
+)
+def test_preflight_passes_with_any_sign_in_and_says_how_without_the_account_s_email(
+    world: Callable[..., FakeWorld], account: dict[str, Any], how: str
+) -> None:
+    fake = world()
+    fake.account = GetAccountResponse.model_validate(account)
+
+    CodexIntelligence().preflight()
+
+    assert adapter.signed_in_with() == how
+
+
 def account(**signed_in: Any) -> GetAccountResponse:
     return GetAccountResponse.model_validate({"account": signed_in or None, "requiresOpenaiAuth": True})
 

@@ -96,6 +96,7 @@ image-design check-svg-image --name <name>                       measure a drawi
 image-design export-svg-image --name <name> --output <path>      render a drawing to a file
 image-design list-image-methods                                  the ways to make an image
 image-design list-intelligence-models                            the models an agent can use
+image-design list-agent-providers                                which agent providers are installed and signed in
 image-design config [--design-image-models <m,m>]                your defaults, such as the agent's image models
 image-design manifest                                            the tool's manifest
 image-design app [--port <n>]                                    serve the app in a browser page

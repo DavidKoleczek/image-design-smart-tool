@@ -184,6 +184,12 @@ CAPABILITIES = (
         model_backed=False,
         skill="capabilities/intelligence_models/skills/skill_list_intelligence_models.md",
     ),
+    Capability(
+        "list-agent-providers",
+        "List the agent providers agentic capabilities run through: installed, signed in, and how.",
+        model_backed=False,
+        skill="capabilities/agent_providers/skills/skill_list_agent_providers.md",
+    ),
 )
 
 # Paths relative to the skill directory. Both ship inside the package, so both resolve after installation.

@@ -396,7 +396,7 @@ None of the three calls a model.
 The agent runs on one of two agent providers. Each is installed through the extra of the same name:
 
 - `codex`: Built on the [OpenAI Codex SDK](https://github.com/openai/codex/tree/main/sdk/python). It uses the user's Codex sign-in and `~/.codex/config.toml`.
-- `claude`: Built on the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). It uses the user's Claude Code settings and credentials: `ANTHROPIC_API_KEY`, or a cloud provider's.
+- `claude`: Built on the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). It uses the user's Claude Code settings and credentials: `ANTHROPIC_API_KEY`, or a cloud provider's. Its shell is Bash, which Claude Code runs through Git Bash on Windows; on Windows without Git Bash, found where Claude Code looks for it, the agent gets Claude Code's PowerShell tool in its place.
 
 `list_intelligence_models` returns the models to choose from and the reasoning efforts each one accepts. Both agents run at `high` effort by default:
 
@@ -405,6 +405,15 @@ def list_intelligence_models(structured: bool = False) -> str | IntelligenceMode
 ```
 
 A continued session must use the agent provider it started with.
+
+`list_agent_providers` says which agent providers can run on this machine, so a person or a setup can tell before a run whether one is ready:
+
+```python
+def list_agent_providers() -> AgentProviders
+```
+
+It starts each installed agent provider's runtime and asks how it is signed in, as a run's `preflight` does, so it takes a second or two. `AgentProviders.agent_providers` has one `AgentProviderStatus` for each, in `AGENT_PROVIDERS` order: `agent_provider`, whether it is `installed`, whether it is `signed_in` and `signed_in_with` what, in the runtime's own words, such as `ChatGPT`, `API key`, `Anthropic Console account`, `API key from ANTHROPIC_API_KEY`, or a cloud provider, never the account's email; and `problem`, what keeps it from running and how to fix that, `None` when it can run. `describe()` gives one line for each.
+`interface.agent_signed_in_with(agent_provider)` is what `preflight` asks of either shipped implementation's runtime: how it is signed in, or an `ImageDesignError` naming what to configure.
 
 Both agent providers implement the `Intelligence` protocol in `image_design.intelligence.interface`. To run a different agent, pass your own implementation as `intelligence`.
 
@@ -589,7 +598,7 @@ class AppServer:
 The server has one tool for an agent, `open_app`. It opens the browser page and returns its URL. It also takes `workspace`, and switches the app to it when it can be listed, and `name`, an image to bring up as `show` does. Its result names the workspace shown, or says the app shows none yet, and gives the `--workspace` to pass to commands when that is not the server's working directory.
 The other tools are for the view. They are listed only to hosts that render MCP Apps, and marked for the app alone. The view and the resource templates are listed to the same hosts.
 
-A view tool that works in the app's workspace takes `workspace`, the one the view shows. The call works in the workspace shown when it arrives, to its end, so a switch partway through does not move it to another. It is refused with reason `workspace-changed` when it was sent for a workspace the app no longer shows, with `no-workspace` before one is picked, and with `no-such-workspace` once the workspace's folder is gone, which is not made again. `upload_file`, `list_image_methods`, the OpenAI key, settings, and config tools, and the workspace tools work in no workspace and are never refused.
+A view tool that works in the app's workspace takes `workspace`, the one the view shows. The call works in the workspace shown when it arrives, to its end, so a switch partway through does not move it to another. It is refused with reason `workspace-changed` when it was sent for a workspace the app no longer shows, with `no-workspace` before one is picked, and with `no-such-workspace` once the workspace's folder is gone, which is not made again. `upload_file`, `list_image_methods`, the OpenAI key, settings, config, folder, agent provider, and Windows app tools, and the workspace tools work in no workspace and are never refused.
 
 - `read_app_workspaces` returns the workspace shown, the workspaces opened in the app, newest first, each with whether it is still a folder, and `new_in`, where a new one is made by default.
 - `open_app_workspace` switches the app to a workspace, and keeps it as the one opened last. Opening a workspace writes nothing in it.
@@ -616,6 +625,9 @@ A view tool that works in the app's workspace takes `workspace`, the one the vie
 - `read_openai_key`, `enter_openai_key`, and `clear_openai_key` are over `openai_api_key_status`, `save_openai_api_key`, and `clear_openai_api_key`. None takes or returns the key. `enter_openai_key` has the user type it into a window on the machine the server runs on, so the key is in no message between the view, its host, and the server.
 - `read_app_settings` and `save_app_settings` keep the theme, how Your images is listed, whether a request's advanced options show, and the pane sizes.
 - `read_config` and `update_config` are over the library's, for the order the image's agent picks an image model in.
+- `read_app_folders` names the folder the person's settings are kept in, and `open_app_folder` opens it in the platform's file manager.
+- `list_agent_providers` is the library's, for the settings to say how each agent provider is signed in, with a link to the tool's docs for one installed and not signed in.
+- `read_windows_app`, `change_windows_app`, `check_for_update`, `install_update`, `install_agent_provider`, `list_skill_agents`, `install_skill`, and `remove_skill` ask the [Windows app](03-windows-app.md) when it started the process, and fail with `no-windows-app` otherwise, where `read_windows_app` returns null. With them the settings show its version and any newer one to update to, Start when I sign in, the agents the Agent Skill is installed for, and Install beside an agent provider that is not installed, and the browser page loads again by itself once the app is back from an update or an install. `app_server` takes where the Windows app listens out of the environment, so nothing the server starts, such as a run's agent, can reach it.
 - `read_app_state` and `save_app_state` keep what was last picked for the images in the app's workspace, such as the image model and its output options, whether a new image is a still image or an animation, the agent and budgets for a new drawing, the image's agent and its image model, the pinned references and folders, and the images open in tabs, each with whether it is a preview that the next image opened takes.
 
 The view reads images as resources, each as base64. A read is refused unless the listing has that image or version, the version has that frame, or the image's activity has that preview.

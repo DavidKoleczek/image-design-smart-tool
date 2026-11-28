@@ -35,7 +35,7 @@ from mcp.types import (
 )
 from pydantic import ValidationError
 
-from image_design.capabilities.app import library, uploads
+from image_design.capabilities.app import library, uploads, windows_app
 from image_design.capabilities.app.resources import (
     IMAGE_TYPES,
     is_frame_resource,
@@ -59,6 +59,8 @@ from image_design.capabilities.app.settings import (
 )
 from image_design.capabilities.app.tools import (
     CANCEL_IMAGE,
+    CHANGE_WINDOWS_APP,
+    CHECK_FOR_UPDATE,
     CHOOSE_FILES,
     CHOOSE_FOLDER,
     CHOOSE_IMAGE_FOLDER,
@@ -84,26 +86,35 @@ from image_design.capabilities.app.tools import (
     IMAGE_THUMBNAIL,
     IMAGE_VERSION,
     IMPORT_IMAGE,
+    INSTALL_AGENT_PROVIDER,
+    INSTALL_SKILL,
+    INSTALL_UPDATE,
     KEEP_REFERENCE,
+    LIST_AGENT_PROVIDERS,
     LIST_FOLDER,
     LIST_IMAGES,
     LIST_METHODS,
+    LIST_SKILL_AGENTS,
     MOVE_FOLDER,
     MOVE_IMAGE,
     OPEN_APP,
+    OPEN_FOLDER,
     OPEN_WORKSPACE,
     PREVIEW_CHATGPT,
     PREVIEW_OPENAI,
     READ_ACTIVITY,
     READ_CONFIG,
+    READ_FOLDERS,
     READ_LIBRARY,
     READ_OPENAI_KEY,
     READ_SETTINGS,
     READ_STATE,
+    READ_WINDOWS_APP,
     READ_WORKSPACES,
     REFERENCE,
     REFERENCE_FILE,
     RELINK_IMAGE,
+    REMOVE_SKILL,
     RESTORE_VERSION,
     RUN_PREVIEW,
     SAVE_SETTINGS,
@@ -119,6 +130,7 @@ from image_design.capabilities.app.tools import (
     VIEW_TOOLS,
     VIEW_URI,
 )
+from image_design.capabilities.app.windows_app import WindowsAppAddress
 from image_design.capabilities.app.workspaces import (
     default_folder,
     forget_workspace,
@@ -128,6 +140,8 @@ from image_design.capabilities.app.workspaces import (
     record_workspace,
 )
 from image_design.schemas import (
+    AgentProviders,
+    AppFolders,
     AppImages,
     AppWorkspaces,
     ImageActivity,
@@ -187,6 +201,20 @@ INSTRUCTIONS = (
     "project, whose .image-design holds the images. The user can switch workspaces in the app. Call `open_app` when "
     "they ask for it."
 )
+# The tools only the Windows app that started this server can answer.
+WINDOWS_APP_TOOLS = {
+    tool.name
+    for tool in (
+        READ_WINDOWS_APP,
+        CHANGE_WINDOWS_APP,
+        CHECK_FOR_UPDATE,
+        INSTALL_UPDATE,
+        INSTALL_AGENT_PROVIDER,
+        LIST_SKILL_AGENTS,
+        INSTALL_SKILL,
+        REMOVE_SKILL,
+    )
+}
 
 
 class _Shown(NamedTuple):
@@ -243,8 +271,10 @@ class AppServer:
         ask_secret: Callable[[str, str], str | None],
         read_config: Callable[[], ImageDesignConfig],
         update_config: Callable[[list[str] | None], ImageDesignConfig],
+        list_agent_providers: Callable[[], AgentProviders],
         settings_path: Path,
         workspaces_path: Path,
+        windows_app: WindowsAppAddress | None,
     ) -> None:
         # None until one is picked, when none was given and none opened before is still a folder.
         self.workspace = resolve_workspace(workspace) if workspace is not None else last_workspace(workspaces_path)
@@ -287,6 +317,9 @@ class AppServer:
         self._ask_secret = ask_secret
         self._read_config = read_config
         self._update_config = update_config
+        self._list_agent_providers = list_agent_providers
+        # Where the Windows app that started this server listens, which only it knows; None when another started it.
+        self._windows_app = windows_app
         # Whether a file or folder dialog is showing, so a second click does not show another.
         self._asking = False
         # Where the file dialogs open: where files were last chosen from, and until then the workspace's images.
@@ -775,7 +808,44 @@ class AppServer:
         if name == FORGET_WORKSPACE.name:
             workspaces = await asyncio.to_thread(self._forget, Path(arguments["path"]))
             return _structured(workspaces.model_dump(mode="json"))
+        if name == READ_FOLDERS.name:
+            return _structured(AppFolders(settings=self.settings_path.parent).model_dump(mode="json"))
+        if name == OPEN_FOLDER.name:
+            folder = self.settings_path.parent
+            await asyncio.to_thread(folder.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(self._show_in_file_manager, folder)
+            return _structured({"opened": str(folder)})
+        if name == LIST_AGENT_PROVIDERS.name:
+            providers = await asyncio.to_thread(self._list_agent_providers)
+            return _structured(providers.model_dump(mode="json"))
+        if name in WINDOWS_APP_TOOLS:
+            return await self._ask_windows_app(name, arguments)
         return None
+
+    async def _ask_windows_app(self, name: str, arguments: dict[str, Any]) -> CallToolResult:
+        """Ask the Windows app that started this server what the view asked it, which none other can answer."""
+        address = self._windows_app
+        if name == READ_WINDOWS_APP.name:
+            found = await asyncio.to_thread(windows_app.state, address)
+            return _structured({"windows_app": found.model_dump(mode="json") if found else None})
+        if name == LIST_SKILL_AGENTS.name:
+            agents = await asyncio.to_thread(windows_app.list_agents, address)
+            return _structured(agents.model_dump(mode="json"))
+        if name == CHANGE_WINDOWS_APP.name:
+            changed = await asyncio.to_thread(windows_app.change, address, arguments.get("start_at_sign_in"))
+        elif name == CHECK_FOR_UPDATE.name:
+            changed = await asyncio.to_thread(windows_app.check_for_update, address)
+        elif name == INSTALL_UPDATE.name:
+            changed = await asyncio.to_thread(windows_app.install_update, address)
+        elif name == INSTALL_AGENT_PROVIDER.name:
+            changed = await asyncio.to_thread(windows_app.install_agent_provider, address, arguments["agent_provider"])
+        elif name == INSTALL_SKILL.name:
+            changed = await asyncio.to_thread(
+                windows_app.install_skill, address, arguments["agents"], arguments["mode"]
+            )
+        else:
+            changed = await asyncio.to_thread(windows_app.remove_skill, address)
+        return _structured(changed.model_dump(mode="json"))
 
     async def _call_in(self, name: str, arguments: dict[str, Any], shown: _Shown) -> CallToolResult:
         """The tools that work in the workspace `shown`, which the call works in to its end."""

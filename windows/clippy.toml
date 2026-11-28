@@ -1,0 +1,3 @@
+allow-unwrap-in-tests = true
+# A name, not code. ".." keeps clippy's own list.
+doc-valid-idents = ["OpenAI", ".."]

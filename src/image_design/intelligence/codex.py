@@ -44,6 +44,8 @@ from image_design.intelligence.submission import MAX_INVALID_SUBMISSIONS, resubm
 from image_design.schemas import ImageDesignError
 
 SIGN_IN_DOCUMENTATION = "https://developers.openai.com/codex/auth"
+# How each kind of account Codex reports makes requests; a ChatGPT account's email is left out.
+ACCOUNT_KINDS = {"chatgpt": "ChatGPT", "apiKey": "API key", "amazonBedrock": "Amazon Bedrock", "gcp": "Google Cloud"}
 TELEMETRY_OFF = ("analytics.enabled=false", 'otel.metrics_exporter="none"', "feedback.enabled=false")
 # A run that may make images signs in only with ChatGPT, so its images count against the ChatGPT plan and are never
 # billed to an API key. Codex reads an empty key as none.
@@ -438,17 +440,7 @@ class CodexIntelligence:
         self.steering: Steering = "mid-turn"
 
     def preflight(self) -> None:
-        try:
-            # In a thread of its own, since a caller in an event loop cannot run another in its own thread.
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                account = executor.submit(_account).result()
-        except Exception as error:  # whatever stops the runtime from starting, the remedy is the same
-            raise _unavailable(error) from None
-        if account.account is None and account.requires_openai_auth:
-            raise ImageDesignError(
-                "Codex is not signed in. Install the Codex CLI and run `codex login`, with ChatGPT or an API key as "
-                f"{SIGN_IN_DOCUMENTATION} describes."
-            )
+        signed_in_with()
 
     async def start(self, request: AgentRequest) -> CodexRun:
         require_showable(request.images)
@@ -457,6 +449,33 @@ class CodexIntelligence:
         if run.unavailable is not None:
             raise run.unavailable
         return run
+
+
+def signed_in_with() -> str:
+    """How Codex is signed in, such as with ChatGPT; raises naming how to sign in when it is not, or why it did not
+    start."""
+    try:
+        # In a thread of its own, since a caller in an event loop cannot run another in its own thread.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            account = executor.submit(_account).result()
+    except Exception as error:  # whatever stops the runtime from starting, the remedy is the same
+        raise _unavailable(error) from None
+    how = account_sign_in(account)
+    if how is None:
+        raise ImageDesignError(
+            "Codex is not signed in. Install the Codex CLI and run `codex login`, with ChatGPT or an API key as "
+            f"{SIGN_IN_DOCUMENTATION} describes."
+        )
+    return how
+
+
+def account_sign_in(account: GetAccountResponse) -> str | None:
+    """How the account Codex reports makes requests, or None when it cannot."""
+    if account.account is None:
+        # A model provider configured in config.toml in place of OpenAI's needs no sign-in.
+        return None if account.requires_openai_auth else "Model provider in config.toml"
+    kind = account.account.root.type
+    return ACCOUNT_KINDS.get(kind, kind)
 
 
 def codex_config(request: AgentRequest) -> CodexConfig:

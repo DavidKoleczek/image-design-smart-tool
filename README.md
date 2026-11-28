@@ -7,6 +7,12 @@ We support the [OpenAI Codex SDK](https://github.com/openai/codex/tree/main/sdk/
 
 ## Installation
 
+### Windows App
+
+Download the latest executable from [Releases](https://github.com/DavidKoleczek/image-design-smart-tool/releases/latest) which will install the tool, keep it updated, and give you a tray icon with useful functionality. More in [docs/03-windows-app](docs/03-windows-app.md).
+
+### Manual Install
+
 Prerequisites:
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - For the agentic capabilities, one of:
@@ -32,7 +38,7 @@ To use it as a library:
 uv add "image-design[all] @ git+https://github.com/DavidKoleczek/image-design-smart-tool"
 ```
 
-To update:
+The Windows app offers its own updates from the tray, and is uninstalled from Windows' installed apps. Otherwise, to update:
 
 ```bash
 npx skills update image-design   # add -g for global installs
@@ -83,6 +89,8 @@ image-design restore-image-version --name concepts/cactus.png --version v1
 image-design read-image-activity --name sailboat.svg
 image-design cancel-image --name concepts/cactus.png
 image-design list-intelligence-models
+# Which agent providers are installed and signed in, and how
+image-design list-agent-providers
 ```
 
 See the [CLI reference](docs/02-cli.md) for every flag and the [library reference](docs/01-library.md) for the Python surface.

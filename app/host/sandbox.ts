@@ -21,7 +21,7 @@ function hostOrigin(): string {
     !document.referrer ||
     new URL(document.referrer).origin !== expected
   ) {
-    const reason = `This page only runs inside the Image Design Smart Tool app at ${expected}.`;
+    const reason = `This page only runs inside the Image Design app at ${expected}.`;
     const notice = document.createElement("p");
     notice.textContent = reason;
     notice.style.cssText =
@@ -34,7 +34,7 @@ function hostOrigin(): string {
 
 const host = hostOrigin();
 const inner = document.createElement("iframe");
-inner.title = "Image Design Smart Tool";
+inner.title = "Image Design";
 inner.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
 document.body.append(inner);
 

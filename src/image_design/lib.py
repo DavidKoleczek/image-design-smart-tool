@@ -2,10 +2,12 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Literal, overload
 
+from image_design.capabilities.agent_providers import agent_providers
 from image_design.capabilities.app import folders as app_folders
 from image_design.capabilities.app import mcp_server as app_server_module
 from image_design.capabilities.app import server as app_module
 from image_design.capabilities.app import settings as app_settings
+from image_design.capabilities.app import windows_app as app_windows_app
 from image_design.capabilities.app import workspaces as app_workspaces
 from image_design.capabilities.app.mcp_server import AppServer
 from image_design.capabilities.chatgpt_image import generate as chatgpt_image
@@ -37,6 +39,7 @@ from image_design.schemas import (
     DEFAULT_REASONING_EFFORT,
     NOT_GIVEN,
     AgentProvider,
+    AgentProviders,
     ImageActivity,
     ImageDesignConfig,
     ImageImports,
@@ -782,7 +785,10 @@ def app_server(workspace: Path | None = None) -> AppServer:
     and `AppServer.show` or `open_app` brings an image up in it. How the person set up the app, such as its theme and
     pane sizes, is theirs in every workspace, kept in `app-settings.json` in their config directory, with the
     workspaces opened in the app, newest first, in `app-workspaces.json` beside it. What they last picked for a
-    workspace's images is kept in `app/app.json` in its data directory.
+    workspace's images is kept in `app/app.json` in its data directory. Its settings list the agent providers and how
+    each is signed in. When the Windows app started this process, the view also shows and changes what it keeps, its
+    updates, and its Agent Skill, through it; where it listens is taken out of this process's environment here, so
+    nothing the app starts, such as a run's agent, can reach it.
 
     Args:
         workspace: The top-level directory of the user's project, whose `.image-design` holds the images the app
@@ -826,8 +832,10 @@ def app_server(workspace: Path | None = None) -> AppServer:
         app_folders.ask_secret,
         read_config,
         update_config,
+        list_agent_providers,
         app_settings.settings_path(),
         app_workspaces.workspaces_path(),
+        app_windows_app.take_address(),
     )
 
 
@@ -858,3 +866,14 @@ def list_intelligence_models(structured: bool = False) -> str | IntelligenceMode
     """
     listing = intelligence_models.list_intelligence_models()
     return listing if structured else intelligence_models.describe(listing)
+
+
+def list_agent_providers() -> AgentProviders:
+    """Each agent provider the agentic capabilities run through, whether it is installed, and whether and how it is
+    signed in, in `AGENT_PROVIDERS` order.
+
+    Each installed one's runtime is started and asked, as a run's preflight asks it, so the answer is the one a run
+    gets. That takes a second or two. How it is signed in is in the runtime's own words, and never the account's
+    email. `AgentProviders.describe` gives it as text.
+    """
+    return agent_providers.list_agent_providers()

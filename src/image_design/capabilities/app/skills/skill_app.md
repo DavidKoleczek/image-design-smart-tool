@@ -1,4 +1,4 @@
-`app` serves the app, named Image Design Smart Tool, in a browser page on this machine, prints its URL, and keeps serving until interrupted. Only this machine can reach it.
+`app` serves the app, named Image Design, in a browser page on this machine, prints its URL, and keeps serving until interrupted. Only this machine can reach it.
 
 The app's view is an MCP App. The page hosts it the way Claude or VS Code would inline, for agents that cannot. `mcp`'s `open_app` tool serves the same app from inside a session.
 

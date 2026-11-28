@@ -8,9 +8,11 @@ import contextlib
 import hashlib
 from importlib.metadata import version
 import json
+import os
 from pathlib import Path
 import secrets
 import shutil
+import sys
 from typing import Any
 import uuid
 
@@ -50,9 +52,16 @@ from image_design.intelligence.submission import MAX_INVALID_SUBMISSIONS, resubm
 from image_design.schemas import ImageDesignError
 
 AUTHENTICATION_DOCUMENTATION = "https://code.claude.com/docs/en/agent-sdk/quickstart"
+# What Claude Code reports as the API key's source once signed in with an Anthropic Console account.
+CONSOLE_KEY_SOURCE = "/login managed key"
 # The only tools an agent gets, so AskUserQuestion is not among them: nobody answers a question while a run works.
 READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"]
 WRITE_TOOLS = ["Edit", "Write"]
+# Claude Code runs Bash through Git Bash on Windows, and runs commands through this one in its place without it.
+POWERSHELL_TOOL = "PowerShell"
+# Where Claude Code looks for Git Bash, in its order, before it looks beside the git on PATH.
+GIT_BASH_INSTALLS = (Path("C:/Program Files/Git/bin/bash.exe"), Path("C:/Program Files (x86)/Git/bin/bash.exe"))
+GIT_BASH_NAMES = ("bash.exe", "sh.exe", "bash", "sh")
 # Claude Code otherwise reports usage, errors, and other nonessential traffic to Anthropic.
 TELEMETRY_OFF = {
     "DISABLE_TELEMETRY": "1",
@@ -377,19 +386,7 @@ class ClaudeIntelligence:
     def preflight(self) -> None:
         if self._signed_in:
             return
-        try:
-            # Its own thread and event loop, since a caller may already be running one.
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                account = pool.submit(lambda: asyncio.run(_account())).result()
-        except Exception as error:  # whatever stops the runtime from starting, the remedy is the same
-            raise _unavailable(error) from error
-        if not signed_in(account):
-            raise ImageDesignError(
-                "The Claude Agent SDK has no credentials. Set ANTHROPIC_API_KEY to a Claude Console API key, or set "
-                "CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_ANTHROPIC_AWS, CLAUDE_CODE_USE_VERTEX, or "
-                f"CLAUDE_CODE_USE_FOUNDRY to 1 with that cloud's credentials, as {AUTHENTICATION_DOCUMENTATION} "
-                "describes."
-            )
+        signed_in_with()
         self._signed_in = True
 
     async def start(self, request: AgentRequest) -> ClaudeRun:
@@ -406,6 +403,40 @@ class ClaudeIntelligence:
         run = ClaudeRun(client, request)
         await run.running()
         return run
+
+
+def signed_in_with() -> str:
+    """How Claude Code is signed in, such as its subscription; raises naming what to configure when it has no
+    credentials, or why it did not start."""
+    try:
+        # Its own thread and event loop, since a caller may already be running one.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            account = pool.submit(lambda: asyncio.run(_account())).result()
+    except Exception as error:  # whatever stops the runtime from starting, the remedy is the same
+        raise _unavailable(error) from error
+    how = account_sign_in(account)
+    if how is None:
+        raise ImageDesignError(
+            "The Claude Agent SDK has no credentials. Set ANTHROPIC_API_KEY to a Claude Console API key, or set "
+            "CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_ANTHROPIC_AWS, CLAUDE_CODE_USE_VERTEX, or "
+            f"CLAUDE_CODE_USE_FOUNDRY to 1 with that cloud's credentials, as {AUTHENTICATION_DOCUMENTATION} "
+            "describes."
+        )
+    return how
+
+
+def git_bash() -> Path | None:
+    """The Git Bash Claude Code runs Bash with on Windows, found as it finds it, or None when it would find none."""
+    named = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH")
+    if named and Path(named).name.lower() in GIT_BASH_NAMES and Path(named).exists():
+        return Path(named)
+    for install in GIT_BASH_INSTALLS:
+        if install.exists():
+            return install
+    git = shutil.which("git")
+    if git is not None and (beside := Path(git).parents[1] / "bin" / "bash.exe").exists():
+        return beside
+    return None
 
 
 def claude_options(request: AgentRequest) -> ClaudeAgentOptions:
@@ -428,6 +459,11 @@ def claude_options(request: AgentRequest) -> ClaudeAgentOptions:
         tools = []
     if request.skill_directories:
         tools = [*tools, "Skill"]
+    environment = {**agent_environment(request), **TELEMETRY_OFF}
+    if "Bash" in tools and sys.platform == "win32" and git_bash() is None:
+        # Through the SDK, Claude Code offers PowerShell only once it is both named and switched on.
+        tools = [POWERSHELL_TOOL if tool == "Bash" else tool for tool in tools]
+        environment["CLAUDE_CODE_USE_POWERSHELL_TOOL"] = "1"
     # The shell is not sandboxed to the workspace; the caller's prompt bounds the agent and the caller
     # validates before anything the agent wrote is kept.
     options = ClaudeAgentOptions(
@@ -441,7 +477,7 @@ def claude_options(request: AgentRequest) -> ClaudeAgentOptions:
         resume=request.resume,
         extra_args={"replay-user-messages": None},
         max_buffer_size=MAX_MESSAGE_BYTES,
-        env={**agent_environment(request), **TELEMETRY_OFF},
+        env=environment,
     )
     if request.session_directory is not None:
         options.session_store = FolderSessionStore(request.session_directory)
@@ -509,15 +545,25 @@ def image_block(path: Path) -> dict[str, Any]:
     return {"type": "image", "source": source}
 
 
-def signed_in(account: dict[str, Any]) -> bool:
-    """Whether the account Claude Code resolved at startup can make requests."""
+def account_sign_in(account: dict[str, Any]) -> str | None:
+    """How the account Claude Code resolved at startup makes requests, or None when it cannot.
+
+    Only how: the account's email and organization are left out.
+    """
     # A cloud provider authenticates with that cloud's credentials and reports no Anthropic key or token.
-    if account.get("apiProvider", "firstParty") != "firstParty":
-        return True
+    provider = account.get("apiProvider", "firstParty")
+    if provider != "firstParty":
+        return f"Cloud provider {provider}"
     # A Claude subscription signed in through Claude Code reports its plan, with neither a key nor a token source.
     if account.get("subscriptionType"):
-        return True
-    return bool(account.get("apiKeySource")) or account.get("tokenSource", "none") != "none"
+        return str(account["subscriptionType"])
+    source = account.get("apiKeySource")
+    if source == CONSOLE_KEY_SOURCE:
+        return "Anthropic Console account"
+    if source:
+        return f"API key from {source}"
+    token = account.get("tokenSource", "none")
+    return None if token == "none" else f"Token from {token}"
 
 
 def scratch_directory() -> Path:

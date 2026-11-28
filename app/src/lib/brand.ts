@@ -1,5 +1,5 @@
 /** The app's name, as its windows, titles, and wordmark show it; the tool and its server keep their own. */
-export const APP_NAME = "Image Design Smart Tool";
+export const APP_NAME = "Image Design";
 
 /** The app's name as its wordmark shows it, short enough to leave the top bar to the image in view. */
 export const WORDMARK = "Image Design";

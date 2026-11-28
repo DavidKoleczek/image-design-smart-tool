@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Windows app (sandbox)",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["build", "--bin=ImageDesignSetup"],
+                "cwd": "${workspaceFolder}/windows"
+            },
+            "args": ["--sandbox", "${workspaceFolder}/temp/windows-sandbox"],
+            "cwd": "${workspaceFolder}/windows"
+        },
+        {
+            "name": "Windows app tray (sandbox)",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["build", "--bin=ImageDesignSetup"],
+                "cwd": "${workspaceFolder}/windows"
+            },
+            "args": ["--sandbox", "${workspaceFolder}/temp/windows-sandbox", "--background"],
+            "cwd": "${workspaceFolder}/windows"
+        }
+    ]
+}

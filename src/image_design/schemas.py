@@ -785,6 +785,41 @@ def _with_default(values: list[str], default: str) -> str:
 
 # endregion
 
+# region: Agent providers
+
+
+class AgentProviderStatus(BaseModel):
+    """One agent provider on this machine: whether it is installed, and whether and how it is signed in."""
+
+    agent_provider: AgentProvider
+    installed: bool = Field(description="Whether the tool was installed with it, and so with its runtime")
+    signed_in: bool = Field(description="Whether its runtime has credentials to run with")
+    signed_in_with: str | None = Field(
+        description="How, in the runtime's own words, such as its subscription, an API key, or a cloud provider; None "
+        "when not signed in"
+    )
+    problem: str | None = Field(description="What keeps it from running and how to fix that; None when it can run")
+
+
+class AgentProviders(BaseModel):
+    """Every agent provider the agentic capabilities can run through, in `AGENT_PROVIDERS` order."""
+
+    agent_providers: list[AgentProviderStatus]
+
+    def describe(self) -> str:
+        """One line for each agent provider, for a person or an agent to read."""
+        lines = []
+        for status in self.agent_providers:
+            if status.signed_in:
+                lines.append(f"- {status.agent_provider}: signed in with {status.signed_in_with}")
+            else:
+                standing = "installed, not signed in" if status.installed else "not installed"
+                lines.append(f"- {status.agent_provider}: {standing}. {status.problem}")
+        return "\n".join(lines)
+
+
+# endregion
+
 
 # region: Config
 
@@ -996,6 +1031,12 @@ class AppImages(ImageListing):
     )
 
 
+class AppFolders(BaseModel):
+    """Where the app keeps what it remembers."""
+
+    settings: Path = Field(description="The person's settings and the workspaces they opened, the same everywhere")
+
+
 class OpenedWorkspaces(BaseModel):
     """app-workspaces.json in the user's config directory: the workspaces opened in the app, for any app to offer."""
 
@@ -1018,6 +1059,51 @@ class AppWorkspaces(BaseModel):
         description="Where a new workspace is made unless another folder is picked: beside the one shown, else the "
         "one opened last, else the home folder"
     )
+
+
+# endregion
+
+# region: Windows app
+
+# How an agent with a skills folder of its own gets the Agent Skill: a link to the shared copy, or a copy of its own.
+SkillMode = Literal["symlink", "copy"]
+SKILL_MODES: tuple[SkillMode, ...] = get_args(SkillMode)
+
+
+class InstalledSkill(BaseModel):
+    """The Windows app's Agent Skill, where it is installed."""
+
+    agents: list[str] = Field(description="The agents it is for, as the skills CLI names them")
+    mode: SkillMode
+
+
+class WindowsApp(BaseModel):
+    """What the Windows app that started the app's server is like now."""
+
+    version: str
+    update: str | None = Field(description="The newer version there is to update to; None when there is none")
+    updating: bool
+    start_at_sign_in: bool = Field(description="Whether it starts when the person signs in to Windows")
+    skill: InstalledSkill | None = Field(default=None, description="None when the Agent Skill is not installed")
+
+
+class SkillAgent(BaseModel):
+    """An agent the skills CLI knows, which the Windows app's Agent Skill can be installed for."""
+
+    id: str
+    name: str
+    folder: str = Field(description="Where it reads its skills from")
+    shares: bool = Field(description="Whether it reads the shared folder, which always has the skill")
+    detected: bool = Field(description="Whether it is on this computer")
+
+
+class SkillAgents(BaseModel):
+    """The agents, as the skills CLI lists them."""
+
+    home: str = Field(description="The person's folder, which the agents' folders are in")
+    shared: str = Field(description="The shared folder")
+    agents: list[SkillAgent]
+    installed: list[str] = Field(description="The ids of the agents on this computer that have the skill")
 
 
 # endregion
